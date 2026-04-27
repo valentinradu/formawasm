@@ -10,6 +10,15 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# formawasm depends on formalang via path = "../formalang", so every
+# job that resolves the dep graph needs both repos checked out as
+# siblings under ${{ github.workspace }}. fmt is the only job that
+# doesn't need formalang. defaults.run.working-directory points cargo
+# at the formawasm checkout.
+defaults:
+  run:
+    working-directory: formawasm
+
 jobs:
   # ── Format ────────────────────────────────────────────────────────────────
   fmt:
@@ -17,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: formawasm
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -28,12 +39,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: formawasm
+      - uses: actions/checkout@v4
+        with:
+          repository: valentinradu/formalang
+          path: formalang
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
+          workspaces: formawasm
       - run: cargo clippy --all-targets -- -D warnings
 
   # ── Tests ─────────────────────────────────────────────────────────────────
@@ -43,10 +61,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: formawasm
+      - uses: actions/checkout@v4
+        with:
+          repository: valentinradu/formalang
+          path: formalang
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
+          workspaces: formawasm
       # .cargo/config.toml asks clang+mold to link x86_64-linux. The
       # ubuntu-latest runner already ships clang but not mold.
       - name: Install mold
@@ -59,10 +84,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: formawasm
+      - uses: actions/checkout@v4
+        with:
+          repository: valentinradu/formalang
+          path: formalang
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
+          workspaces: formawasm
       - run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
@@ -73,6 +105,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: formawasm
+      - uses: actions/checkout@v4
+        with:
+          repository: valentinradu/formalang
+          path: formalang
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
