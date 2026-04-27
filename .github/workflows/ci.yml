@@ -47,6 +47,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
+      # .cargo/config.toml asks clang+mold to link x86_64-linux. The
+      # ubuntu-latest runner already ships clang but not mold.
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
       - run: cargo test
 
   # ── Doc ───────────────────────────────────────────────────────────────────
