@@ -15,6 +15,11 @@ env:
 # siblings under ${{ github.workspace }}. fmt is the only job that
 # doesn't need formalang. defaults.run.working-directory points cargo
 # at the formawasm checkout.
+#
+# Every cargo job that compiles also needs mold — .cargo/config.toml
+# wires clang to use -fuse-ld=mold and the ubuntu-latest runner ships
+# clang but not mold. Only fmt and deny skip the install (fmt doesn't
+# touch object files; deny resolves metadata without compiling).
 defaults:
   run:
     working-directory: formawasm
@@ -52,6 +57,8 @@ jobs:
         with:
           shared-key: build
           workspaces: formawasm
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
       - run: cargo clippy --all-targets -- -D warnings
 
   # ── Tests ─────────────────────────────────────────────────────────────────
@@ -72,8 +79,6 @@ jobs:
         with:
           shared-key: build
           workspaces: formawasm
-      # .cargo/config.toml asks clang+mold to link x86_64-linux. The
-      # ubuntu-latest runner already ships clang but not mold.
       - name: Install mold
         run: sudo apt-get update && sudo apt-get install -y mold
       - run: cargo test
@@ -95,6 +100,8 @@ jobs:
         with:
           shared-key: build
           workspaces: formawasm
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
       - run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
