@@ -1,0 +1,9 @@
+[term]
+progress.when = "auto"
+
+# mold is significantly faster than the default linker; clang drives it.
+# Falls back gracefully if clang/mold aren't installed (cargo will error
+# with a clear message; install them or comment this block out).
+[target.x86_64-unknown-linux-gnu]
+linker    = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

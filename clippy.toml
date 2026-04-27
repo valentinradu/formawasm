@@ -1,0 +1,15 @@
+# Behavioral configuration — lint *levels* live in Cargo.toml [lints].
+
+cognitive-complexity-threshold = 15
+type-complexity-threshold      = 200
+too-many-lines-threshold       = 100
+
+# Acronyms valid in doc identifiers.
+doc-valid-idents = [
+    "API", "ABI", "AST", "CLI", "CPU", "GPU", "GC", "IDL",
+    "IO", "IR", "JIT", "MVP", "TLS", "WASM", "WIT",
+    "WebAssembly",
+]
+
+# Do not break exported API shape on pedantic suggestions.
+avoid-breaking-exported-api = true

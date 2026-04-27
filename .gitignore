@@ -1,0 +1,8 @@
+/target
+
+# LLVM source-based coverage raw profiles.
+*.profraw
+
+# Editor / OS noise
+.DS_Store
+*.swp

@@ -1,0 +1,33 @@
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "Zlib",
+    "Unlicense",
+    "0BSD",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "NCSA",
+    "BSL-1.0",
+]
+unused-allowed-license = "warn"
+
+[bans]
+multiple-versions    = "warn"
+wildcards            = "deny"
+allow-wildcard-paths = true
+
+[advisories]
+# Add ignores here only with a comment explaining why.
+
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"
+allow-registry   = ["https://github.com/rust-lang/crates.io-index"]
