@@ -13,6 +13,9 @@ categories   = ["compilers", "wasm"]
 publish      = false
 
 [dependencies]
+# Path dependency during dev — flips to a version constraint once the
+# upstream IR shape stabilises on crates.io.
+formalang = { path = "../formalang" }
 
 [dev-dependencies]
 
