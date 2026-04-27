@@ -158,6 +158,7 @@ name = "formawasm"
 version = "0.1.0"
 dependencies = [
  "formalang",
+ "thiserror",
 ]
 
 [[package]]

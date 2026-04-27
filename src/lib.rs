@@ -5,6 +5,10 @@
 //! callers do not need a separate `formalang` dependency to use the
 //! backend.
 
+mod backend;
+
+pub use backend::{WasmBackend, WasmBackendError};
+
 pub use formalang::ir::{
     EnumId, FunctionId, IrFunction, IrFunctionParam, IrFunctionSig, IrImport, IrImportItem,
     IrModule, ResolvedType, StructId, TraitId,
