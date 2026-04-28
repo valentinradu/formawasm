@@ -18,7 +18,17 @@ publish      = false
 formalang = { path = "../formalang" }
 thiserror = "2"
 
+# WebAssembly emission stack. wasm-encoder builds core module bytes;
+# wit-component wraps a core module + WIT into a Component Model
+# artifact. wasm-tools crates share a coordinated version line.
+wasm-encoder  = "0.247"
+wit-component = "0.247"
+
 [dev-dependencies]
+# wasmparser validates emitted core modules in tests; wasmtime hosts
+# the component for end-to-end smoke tests.
+wasmparser = "0.247"
+wasmtime   = "44"
 
 # ---------------------------------------------------------------------------
 # Lint configuration. Strict by default; every override carries a comment
