@@ -7,9 +7,11 @@
 
 mod backend;
 pub mod preflight;
+pub mod survey;
 
 pub use backend::{WasmBackend, WasmBackendError};
 pub use preflight::PreflightError;
+pub use survey::PublicSurface;
 
 pub use formalang::ir::{
     EnumId, FunctionId, IrFunction, IrFunctionParam, IrFunctionSig, IrImport, IrImportItem,
