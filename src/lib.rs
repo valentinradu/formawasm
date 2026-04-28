@@ -8,10 +8,12 @@
 mod backend;
 pub mod preflight;
 pub mod survey;
+pub mod types;
 
 pub use backend::{WasmBackend, WasmBackendError};
 pub use preflight::PreflightError;
 pub use survey::PublicSurface;
+pub use types::TypeMapError;
 
 pub use formalang::ir::{
     EnumId, FunctionId, IrFunction, IrFunctionParam, IrFunctionSig, IrImport, IrImportItem,

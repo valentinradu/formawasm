@@ -1,0 +1,125 @@
+//! Mapping from formalang [`ResolvedType`] / [`PrimitiveType`] to
+//! core-wasm value types.
+//!
+//! Phase 1a covers the numeric primitives, `Boolean`, and `Never`.
+//! Aggregate types (struct, enum, tuple, array, range, optional,
+//! dictionary, closure, external) and `String` / `Path` / `Regex`
+//! land in later phases and surface here as
+//! [`TypeMapError::NotYetSupported`].
+
+use formalang::ast::PrimitiveType;
+use formalang::ir::ResolvedType;
+use thiserror::Error;
+use wasm_encoder::ValType;
+
+/// Errors produced by the type-mapping helpers.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum TypeMapError {
+    /// The type is in scope for the backend but not yet implemented in
+    /// the current phase. The variant name is carried as a string so
+    /// the diagnostic still works after `ResolvedType` evolves.
+    #[error("type {kind} is not yet supported by the backend")]
+    NotYetSupported {
+        /// Short tag identifying the unsupported type kind
+        /// (`"String"`, `"Array<T>"`, `"Closure"`, …).
+        kind: String,
+    },
+}
+
+/// Map a [`PrimitiveType`] to its core-wasm value-type representation.
+///
+/// `Never` returns `Ok(None)` because it carries no value at runtime;
+/// callers handling result types should treat `None` as an empty
+/// result list and rely on `unreachable` in the function body.
+///
+/// The trailing wildcard arm is required by `#[non_exhaustive]` on
+/// `PrimitiveType`; new variants land as `NotYetSupported` until we
+/// implement them.
+pub fn primitive_value_type(p: PrimitiveType) -> Result<Option<ValType>, TypeMapError> {
+    match p {
+        // Booleans share the i32 representation; 0 is false, anything
+        // else is true. The Wasm spec leaves high bits unconstrained
+        // after comparison instructions.
+        PrimitiveType::I32 | PrimitiveType::Boolean => Ok(Some(ValType::I32)),
+        PrimitiveType::I64 => Ok(Some(ValType::I64)),
+        PrimitiveType::F32 => Ok(Some(ValType::F32)),
+        PrimitiveType::F64 => Ok(Some(ValType::F64)),
+        // Zero-sized; functions returning Never emit `unreachable` and
+        // declare an empty result list.
+        PrimitiveType::Never => Ok(None),
+        // String / Path / Regex land in Phase 2 alongside heap layouts.
+        PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
+            Err(TypeMapError::NotYetSupported {
+                kind: format!("{p:?}"),
+            })
+        }
+        // Future #[non_exhaustive] variants ride this arm.
+        _ => Err(TypeMapError::NotYetSupported {
+            kind: format!("{p:?}"),
+        }),
+    }
+}
+
+/// Map a [`ResolvedType`] to its core-wasm value type.
+///
+/// `Ok(None)` represents `Never` (no value carried). Any non-primitive
+/// `ResolvedType` is rejected as `NotYetSupported` until the
+/// corresponding lowering lands in a later phase.
+pub fn resolved_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapError> {
+    match ty {
+        ResolvedType::Primitive(p) => primitive_value_type(*p),
+
+        ResolvedType::Struct(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Struct".to_owned(),
+        }),
+        ResolvedType::Trait(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Trait".to_owned(),
+        }),
+        ResolvedType::Enum(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Enum".to_owned(),
+        }),
+        ResolvedType::Array(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Array<T>".to_owned(),
+        }),
+        ResolvedType::Range(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Range<T>".to_owned(),
+        }),
+        ResolvedType::Optional(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Optional<T>".to_owned(),
+        }),
+        ResolvedType::Tuple(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Tuple".to_owned(),
+        }),
+        ResolvedType::Generic { .. } => Err(TypeMapError::NotYetSupported {
+            kind: "Generic".to_owned(),
+        }),
+        ResolvedType::TypeParam(name) => Err(TypeMapError::NotYetSupported {
+            kind: format!("TypeParam({name})"),
+        }),
+        ResolvedType::External { name, .. } => Err(TypeMapError::NotYetSupported {
+            kind: format!("External({name})"),
+        }),
+        ResolvedType::Dictionary { .. } => Err(TypeMapError::NotYetSupported {
+            kind: "Dictionary<K, V>".to_owned(),
+        }),
+        ResolvedType::Closure { .. } => Err(TypeMapError::NotYetSupported {
+            kind: "Closure".to_owned(),
+        }),
+        ResolvedType::Error => Err(TypeMapError::NotYetSupported {
+            kind: "Error".to_owned(),
+        }),
+    }
+}
+
+/// Map a function `return_type` to a `Vec<ValType>` suitable for
+/// `wasm_encoder::TypeSection::function`.
+///
+/// `None` (unit return) and `Some(Primitive(Never))` both produce an
+/// empty vector.
+pub fn result_types(return_ty: Option<&ResolvedType>) -> Result<Vec<ValType>, TypeMapError> {
+    let Some(ty) = return_ty else {
+        return Ok(Vec::new());
+    };
+    Ok(resolved_value_type(ty)?.map_or_else(Vec::new, |vt| vec![vt]))
+}
