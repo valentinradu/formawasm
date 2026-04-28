@@ -7,17 +7,20 @@ first, then come back here for the "what to do now" view.
 
 ---
 
-## Status (as of 2026-04-27)
+## Status (as of 2026-04-28)
 
 **Upstream — formalang at `~/projects/formalang`:**
 
 - ✅ **PR 1 — Numeric specialization**: MERGED as `ff2a6c1`. `PrimitiveType` now has `I32 / I64 / F32 / F64`; integer-literal default is `I32`, float-literal default is `F64`; literal suffixes (`42I32`, `3.14F64`) supported.
 - ✅ **PR 2 — Closure-conversion `IrPass`**: MERGED as `92fdf7c`. `ir::ClosureConversionPass` lifts every `IrExpr::Closure` to a top-level `IrFunction` paired with a synthesized capture-environment `IrStruct`, replacing the closure expression with `IrExpr::ClosureRef { funcref, env_struct, ty }`. Run between `MonomorphisePass` and `DeadCodeEliminationPass`.
+- ⏳ **PR — Numeric literal precision**: design at `~/projects/formalang/docs/developer/numeric_literal_precision.md`. Replaces `NumberLiteral.value: f64` with a discriminated `Integer(i128) | Float(f64)` so backends can round-trip `i64` literals exactly. Phase 1a's `Literal` lowering depends on this.
+- ⏳ **PR — Resolve-references pass**: design at `~/projects/formalang/docs/developer/resolve_references_pass.md`. New IR pass between `MonomorphisePass` and `ClosureConversionPass` that turns string-based references into typed IDs (`FunctionId`, `BindingId`, `FieldIdx`, `VariantIdx`, `MethodIdx`, `LetId`). Phase 1a's `Reference` / `LetRef` / `FunctionCall` lowering depends on this.
 
 **This repo:**
 
-- ✅ `README.md` — full project spec.
-- ❌ Everything else. **Not yet a Cargo project.** PR 3 mc1 runs `cargo init`.
+- ✅ Repo bootstrap (PR 3 mc1–mc3): scaffold + private GitHub repo + `WasmBackend` stub.
+- ✅ Phase 1a mc1–mc5: deps, pre-flight checks, public-surface survey, primitive type mapping, module skeleton.
+- ⏳ Phase 1a mc6 onwards: function-signature emission, expression lowering, WIT generation, component wrap, fibonacci milestone. **Blocked on the two upstream PRs above** for `Literal` precision and reference resolution; mc6 (function-signature emission) can run in parallel since it touches neither.
 
 > **Quality bar.** This repo mirrors the lint / CI / build setup at
 > `~/projects/smid/smid-ws0` — strict clippy (deny `unwrap_used`,
