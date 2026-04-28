@@ -6,11 +6,13 @@
 //! backend.
 
 mod backend;
+pub mod module;
 pub mod preflight;
 pub mod survey;
 pub mod types;
 
 pub use backend::{WasmBackend, WasmBackendError};
+pub use module::ModuleBuilder;
 pub use preflight::PreflightError;
 pub use survey::PublicSurface;
 pub use types::TypeMapError;
