@@ -6,8 +6,10 @@
 //! backend.
 
 mod backend;
+pub mod preflight;
 
 pub use backend::{WasmBackend, WasmBackendError};
+pub use preflight::PreflightError;
 
 pub use formalang::ir::{
     EnumId, FunctionId, IrFunction, IrFunctionParam, IrFunctionSig, IrImport, IrImportItem,

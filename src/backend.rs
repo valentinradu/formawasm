@@ -1,11 +1,13 @@
 //! `WasmBackend` — entry point that turns an [`IrModule`] into a
 //! WebAssembly component. Implementation is staged across the phases
-//! laid out in `PLAN.md`; this module currently holds the stub that
-//! wires the trait impl up.
+//! laid out in `PLAN.md`; this module currently runs pre-flight checks
+//! and stubs the rest of the pipeline.
 
 use formalang::ir::IrModule;
 use formalang::pipeline::Backend;
 use thiserror::Error;
+
+use crate::preflight::{self, PreflightError};
 
 /// Backend that lowers a typed IR module to a WebAssembly component.
 #[derive(Debug, Default)]
@@ -23,8 +25,14 @@ impl WasmBackend {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum WasmBackendError {
-    /// Returned by the current stub. Replaced with real variants as
-    /// the backend gains capability.
+    /// Pre-flight rejected the module because of an upstream-pipeline
+    /// invariant violation.
+    #[error(transparent)]
+    Preflight(#[from] PreflightError),
+
+    /// Returned when the backend reaches a code path that hasn't been
+    /// implemented yet. Replaced with concrete variants as each phase
+    /// lands.
     #[error("not yet implemented")]
     NotYetImplemented,
 }
@@ -33,7 +41,8 @@ impl Backend for WasmBackend {
     type Output = Vec<u8>;
     type Error = WasmBackendError;
 
-    fn generate(&self, _module: &IrModule) -> Result<Self::Output, Self::Error> {
+    fn generate(&self, module: &IrModule) -> Result<Self::Output, Self::Error> {
+        preflight::check(module)?;
         Err(WasmBackendError::NotYetImplemented)
     }
 }
