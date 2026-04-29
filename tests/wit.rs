@@ -4,9 +4,10 @@
 //! non-primitive rejection path, and a round-trip back through
 //! `wit_parser::Resolve` to confirm the emitted text is real WIT.
 
-use formalang::ast::{ParamConvention, PrimitiveType};
+use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
-    BindingId, FunctionId, IrFunction, IrFunctionParam, IrModule, ResolvedType, StructId,
+    BindingId, FunctionId, IrEnum, IrEnumVariant, IrField, IrFunction, IrFunctionParam, IrModule,
+    IrStruct, ResolvedType, StructId,
 };
 use formawasm::survey::{self, PublicSurface};
 use formawasm::types::TypeMapError;
@@ -225,6 +226,157 @@ fn export_index_out_of_range_is_rejected() -> TestResult {
         Err(WitEmitError::ExportOutOfRange { index: 7, len: 0 }) => Ok(()),
         other => Err(format!("expected ExportOutOfRange, got {other:?}").into()),
     }
+}
+
+fn primitive_field(name: &str, p: PrimitiveType) -> IrField {
+    IrField {
+        name: name.to_owned(),
+        ty: primitive(p),
+        mutable: false,
+        optional: false,
+        default: None,
+        doc: None,
+        convention: ParamConvention::Let,
+    }
+}
+
+#[test]
+fn public_struct_emits_record_with_kebab_case_fields() -> TestResult {
+    let mut module = IrModule::new();
+    module.structs.push(IrStruct {
+        name: "Pair".to_owned(),
+        visibility: Visibility::Public,
+        traits: Vec::new(),
+        fields: vec![
+            primitive_field("a", PrimitiveType::I32),
+            primitive_field("b", PrimitiveType::I64),
+        ],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    if !wit.contains("record pair {") {
+        return Err(format!("missing record pair declaration:\n{wit}").into());
+    }
+    if !wit.contains("a: s32") {
+        return Err(format!("missing field a:\n{wit}").into());
+    }
+    if !wit.contains("b: s64") {
+        return Err(format!("missing field b:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn public_enum_emits_variant_with_unit_and_payload_arms() -> TestResult {
+    let mut module = IrModule::new();
+    module.enums.push(IrEnum {
+        name: "Maybe".to_owned(),
+        visibility: Visibility::Public,
+        variants: vec![
+            IrEnumVariant {
+                name: "None".to_owned(),
+                fields: Vec::new(),
+            },
+            IrEnumVariant {
+                name: "Some".to_owned(),
+                fields: vec![primitive_field("v", PrimitiveType::I32)],
+            },
+        ],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    if !wit.contains("variant maybe {") {
+        return Err(format!("missing variant maybe declaration:\n{wit}").into());
+    }
+    if !wit.contains("none,") {
+        return Err(format!("missing unit arm `none`:\n{wit}").into());
+    }
+    if !wit.contains("some(s32),") {
+        return Err(format!("missing payload arm `some(s32)`:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn multi_field_variant_payload_is_rejected() -> TestResult {
+    let mut module = IrModule::new();
+    module.enums.push(IrEnum {
+        name: "Pair".to_owned(),
+        visibility: Visibility::Public,
+        variants: vec![IrEnumVariant {
+            name: "Both".to_owned(),
+            fields: vec![
+                primitive_field("a", PrimitiveType::I32),
+                primitive_field("b", PrimitiveType::I32),
+            ],
+        }],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+
+    let surface = survey::survey(&module);
+    match wit::emit_wit(&module, &surface) {
+        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
+            if kind.contains("variant") =>
+        {
+            Ok(())
+        }
+        other => {
+            Err(format!("expected NotYetSupported for multi-field variant, got {other:?}").into())
+        }
+    }
+}
+
+#[test]
+fn record_and_variant_round_trip_through_wit_parser() -> TestResult {
+    let mut module = IrModule::new();
+    module.structs.push(IrStruct {
+        name: "Point".to_owned(),
+        visibility: Visibility::Public,
+        traits: Vec::new(),
+        fields: vec![
+            primitive_field("x", PrimitiveType::I32),
+            primitive_field("y", PrimitiveType::I32),
+        ],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+    module.enums.push(IrEnum {
+        name: "Color".to_owned(),
+        visibility: Visibility::Public,
+        variants: vec![
+            IrEnumVariant {
+                name: "Red".to_owned(),
+                fields: Vec::new(),
+            },
+            IrEnumVariant {
+                name: "Green".to_owned(),
+                fields: Vec::new(),
+            },
+            IrEnumVariant {
+                name: "Blue".to_owned(),
+                fields: Vec::new(),
+            },
+        ],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    Ok(())
 }
 
 #[test]
