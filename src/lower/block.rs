@@ -403,7 +403,15 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
             }
             walk_count(result, out)?;
         }
-        IrExpr::BinaryOp { left, right, .. } => {
+        IrExpr::BinaryOp {
+            left, right, op, ..
+        } => {
+            // `BinaryOperator::Range` allocates a `{ start, end }`
+            // aggregate in linear memory and reserves one scratch
+            // local for the base pointer.
+            if matches!(op, formalang::ast::BinaryOperator::Range) {
+                bump_count(out)?;
+            }
             walk_count(left, out)?;
             walk_count(right, out)?;
         }

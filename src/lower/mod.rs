@@ -33,8 +33,8 @@ use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
 pub use aggregate::{
-    lower_array, lower_closure_ref, lower_enum_inst, lower_field_access, lower_self_field_ref,
-    lower_struct_inst, lower_tuple,
+    lower_array, lower_closure_ref, lower_enum_inst, lower_field_access, lower_range,
+    lower_self_field_ref, lower_struct_inst, lower_tuple,
 };
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};

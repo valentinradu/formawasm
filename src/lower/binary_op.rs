@@ -5,7 +5,7 @@ use formalang::ast::{BinaryOperator, PrimitiveType};
 use formalang::ir::{IrExpr, ResolvedType};
 use wasm_encoder::InstructionSink;
 
-use super::{LowerContext, LowerError, lower_expr};
+use super::{LowerContext, LowerError, lower_expr, lower_range};
 
 /// Lower an [`IrExpr::BinaryOp`] onto `sink`.
 ///
@@ -18,13 +18,27 @@ pub fn lower_binary_op(
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::BinaryOp {
-        left, right, op, ..
+        left,
+        right,
+        op,
+        ty,
     } = expr
     else {
         return Err(LowerError::NotYetImplemented {
             what: "lower_binary_op called with non-BinaryOp expression".to_owned(),
         });
     };
+
+    // Range expressions allocate a `{ start, end }` aggregate in
+    // linear memory and don't fit the operand-prim arithmetic path.
+    if matches!(op, BinaryOperator::Range) {
+        let ResolvedType::Range(inner) = ty else {
+            return Err(LowerError::NotYetImplemented {
+                what: format!("Range BinaryOp carrying non-Range type {ty:?}"),
+            });
+        };
+        return lower_range(inner.as_ref(), left, right, sink, ctx);
+    }
 
     let operand_prim = match left.ty() {
         ResolvedType::Primitive(p) => *p,
@@ -204,13 +218,6 @@ fn emit_binary_op(
         }
         (BinaryOperator::Or, PrimitiveType::Boolean) => {
             sink.i32_or();
-        }
-
-        // ── Range — Phase 1c ────────────────────────────────────────
-        (BinaryOperator::Range, _) => {
-            return Err(LowerError::NotYetImplemented {
-                what: "BinaryOperator::Range (Phase 1c)".to_owned(),
-            });
         }
 
         // ── Disallowed combinations + future variants ───────────────

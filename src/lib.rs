@@ -19,8 +19,8 @@ pub mod wit;
 pub use backend::{WasmBackend, WasmBackendError};
 pub use component::{ComponentWrapError, wrap_component};
 pub use layout::{
-    ArrayLayout, EnumLayout, FieldLayout, LayoutError, StructLayout, VariantLayout, plan_array,
-    plan_enum, plan_struct,
+    ArrayLayout, EnumLayout, FieldLayout, LayoutError, RangeLayout, StructLayout, VariantLayout,
+    plan_array, plan_enum, plan_range, plan_struct,
 };
 pub use lower::{BindingMap, FunctionMap, LowerContext, LowerError};
 pub use module::ModuleBuilder;

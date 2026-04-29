@@ -453,6 +453,88 @@ pub fn plan_array(elem: &ResolvedType, _module: &IrModule) -> Result<ArrayLayout
     })
 }
 
+// ── range layout ─────────────────────────────────────────────────────
+
+/// Layout decisions for a `Range<T>` value.
+///
+/// A range is a two-field struct `{ start: T, end: T }` laid out
+/// contiguously in linear memory. Phase 1c restricts `T` to primitive
+/// numeric types (the only kinds that have an ordering sensible enough
+/// for `..` and the `For`-loop iteration the sieve relies on).
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain layout record consumed externally; intentionally constructible"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeLayout {
+    /// Total bytes one range value occupies, including any trailing
+    /// alignment padding.
+    pub size: u32,
+    /// Range alignment (== bound alignment).
+    pub align: u32,
+    /// Size of one bound (`start` or `end`) in bytes.
+    pub bound_size: u32,
+    /// Alignment of one bound in bytes.
+    pub bound_align: u32,
+    /// Byte offset where `end` lives relative to the range's base.
+    /// `start` is always at offset 0.
+    pub end_offset: u32,
+}
+
+/// Compute the layout of `Range<bound>`.
+///
+/// `module` is accepted for API symmetry with the struct/enum/array
+/// planners; the current implementation only inspects `bound`.
+///
+/// The bound type must be a primitive — aggregates (and the still-
+/// unsupported heap-typed primitives) surface as
+/// [`LayoutError::NotYetSupported`]. Boolean is technically permitted
+/// because it has a primitive layout, even if `false..true` is
+/// semantically odd.
+pub fn plan_range(bound: &ResolvedType, _module: &IrModule) -> Result<RangeLayout, LayoutError> {
+    let (bound_size, bound_align) = match bound {
+        ResolvedType::Primitive(p) => primitive_size_align(*p)?,
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Trait(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Error => {
+            return Err(LayoutError::NotYetSupported {
+                kind: format!("Range<{bound:?}>"),
+            });
+        }
+    };
+
+    let end_offset =
+        align_up(bound_size, bound_align).ok_or_else(|| LayoutError::SizeOverflow {
+            name: "<range>".to_owned(),
+        })?;
+    let raw_size = end_offset
+        .checked_add(bound_size)
+        .ok_or_else(|| LayoutError::SizeOverflow {
+            name: "<range>".to_owned(),
+        })?;
+    let size = align_up(raw_size, bound_align).ok_or_else(|| LayoutError::SizeOverflow {
+        name: "<range>".to_owned(),
+    })?;
+
+    Ok(RangeLayout {
+        size,
+        align: bound_align,
+        bound_size,
+        bound_align,
+        end_offset,
+    })
+}
+
 /// Return the in-buffer `(size, align)` pair for an array element.
 ///
 /// Aggregate element types live as `i32` pointers, so they always

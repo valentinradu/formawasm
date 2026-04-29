@@ -18,8 +18,8 @@ use wasm_encoder::{InstructionSink, MemArg};
 
 use super::{LowerContext, LowerError, lower_expr};
 use crate::layout::{
-    ARRAY_HEADER_ALIGN, ArrayLayout, ENUM_TAG_ALIGN, FieldLayout, LayoutError, StructLayout,
-    VariantLayout, plan_array, plan_enum, plan_struct,
+    ARRAY_HEADER_ALIGN, ArrayLayout, ENUM_TAG_ALIGN, FieldLayout, LayoutError, RangeLayout,
+    StructLayout, VariantLayout, plan_array, plan_enum, plan_range, plan_struct,
 };
 use crate::module::MEMORY_INDEX;
 
@@ -548,6 +548,64 @@ fn store_array_element(
         | ResolvedType::Error => Err(LowerError::NotYetImplemented {
             what: format!("array element of type {elem_ty:?}"),
         }),
+    }
+}
+
+/// Lower a `BinaryOp { op: Range, left, right }` expression.
+///
+/// Allocates a `Range<T>` value as a two-field aggregate
+/// `{ start: T, end: T }` in linear memory:
+///
+/// 1. Plan the range layout via [`plan_range`] from the expression's
+///    declared element type.
+/// 2. Allocate `layout.size` bytes through the bump allocator and
+///    park the base pointer in a fresh scratch local.
+/// 3. Lower `left`, store at `start_offset = 0`. Lower `right`, store
+///    at `layout.end_offset`. Both stores use the primitive width
+///    appropriate to the bound type.
+/// 4. Leave the base pointer on the stack as the range value.
+///
+/// The element type must be a primitive (validated upstream by
+/// [`plan_range`]); aggregate-bound ranges surface as
+/// [`LayoutError::NotYetSupported`].
+pub fn lower_range(
+    elem_ty: &ResolvedType,
+    left: &IrExpr,
+    right: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let module = ctx.module()?;
+    let layout = plan_range(elem_ty, module)?;
+    let primitive = primitive_of(elem_ty)?;
+
+    let base_local = allocate_aggregate(layout.size, sink, ctx)?;
+
+    // start at offset 0
+    sink.local_get(base_local);
+    lower_expr(left, sink, ctx)?;
+    store_primitive(primitive, range_field_layout(layout, 0), sink);
+
+    // end at offset `layout.end_offset`
+    sink.local_get(base_local);
+    lower_expr(right, sink, ctx)?;
+    store_primitive(
+        primitive,
+        range_field_layout(layout, layout.end_offset),
+        sink,
+    );
+
+    sink.local_get(base_local);
+    Ok(())
+}
+
+/// Build the synthetic [`FieldLayout`] for `start` / `end` slots given
+/// a [`RangeLayout`] and the bound's offset.
+const fn range_field_layout(layout: RangeLayout, offset: u32) -> FieldLayout {
+    FieldLayout {
+        offset,
+        size: layout.bound_size,
+        align: layout.bound_align,
     }
 }
 
