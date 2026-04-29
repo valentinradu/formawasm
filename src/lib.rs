@@ -6,6 +6,7 @@
 //! backend.
 
 mod backend;
+pub mod component;
 pub mod lower;
 pub mod module;
 pub mod module_lowering;
@@ -15,6 +16,7 @@ pub mod types;
 pub mod wit;
 
 pub use backend::{WasmBackend, WasmBackendError};
+pub use component::{ComponentWrapError, wrap_component};
 pub use lower::{BindingMap, FunctionMap, LowerContext, LowerError};
 pub use module::ModuleBuilder;
 pub use module_lowering::{ModuleLowerError, lower_module};
