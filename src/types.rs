@@ -112,6 +112,19 @@ pub fn resolved_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMap
     }
 }
 
+/// Hard-coded layout for a closure value in linear memory.
+///
+/// 8 bytes total, 4-byte aligned: `(i32 funcref_index, i32 env_ptr)`.
+/// Phase 1b mc11 lays out the value but does not yet wire indirect
+/// invocation through a funcref table — that's a Phase 1c+ concern.
+pub const CLOSURE_VALUE_SIZE: u32 = 8;
+/// Closure-value alignment in bytes.
+pub const CLOSURE_VALUE_ALIGN: u32 = 4;
+/// Offset of the funcref index field inside a closure value.
+pub const CLOSURE_FUNCREF_OFFSET: u32 = 0;
+/// Offset of the env pointer field inside a closure value.
+pub const CLOSURE_ENV_OFFSET: u32 = 4;
+
 /// Map a function `return_type` to a `Vec<ValType>` suitable for
 /// `wasm_encoder::TypeSection::function`.
 ///
@@ -155,9 +168,10 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
     // `NotYetImplemented` until each lands.
     match ty {
         ResolvedType::Primitive(p) => primitive_value_type(*p),
-        ResolvedType::Struct(_) | ResolvedType::Tuple(_) | ResolvedType::Enum(_) => {
-            Ok(Some(ValType::I32))
-        }
+        ResolvedType::Struct(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Closure { .. } => Ok(Some(ValType::I32)),
         ResolvedType::Trait(_) => Err(TypeMapError::NotYetSupported {
             kind: "Trait".to_owned(),
         }),
@@ -181,9 +195,6 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
         }),
         ResolvedType::Dictionary { .. } => Err(TypeMapError::NotYetSupported {
             kind: "Dictionary<K, V>".to_owned(),
-        }),
-        ResolvedType::Closure { .. } => Err(TypeMapError::NotYetSupported {
-            kind: "Closure".to_owned(),
         }),
         ResolvedType::Error => Err(TypeMapError::NotYetSupported {
             kind: "Error".to_owned(),

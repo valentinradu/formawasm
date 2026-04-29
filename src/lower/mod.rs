@@ -33,7 +33,8 @@ use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
 pub use aggregate::{
-    lower_enum_inst, lower_field_access, lower_self_field_ref, lower_struct_inst, lower_tuple,
+    lower_closure_ref, lower_enum_inst, lower_field_access, lower_self_field_ref,
+    lower_struct_inst, lower_tuple,
 };
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
@@ -517,11 +518,11 @@ pub fn lower_expr(
         IrExpr::Match { .. } => lower_match(expr, sink, ctx),
         IrExpr::SelfFieldRef { .. } => lower_self_field_ref(expr, sink, ctx),
         IrExpr::MethodCall { .. } => lower_method_call(expr, sink, ctx),
+        IrExpr::ClosureRef { .. } => lower_closure_ref(expr, sink, ctx),
 
         IrExpr::Array { .. }
         | IrExpr::For { .. }
         | IrExpr::Closure { .. }
-        | IrExpr::ClosureRef { .. }
         | IrExpr::DictLiteral { .. }
         | IrExpr::DictAccess { .. } => Err(LowerError::NotYetImplemented {
             what: format!("IrExpr::{}", expr_variant_name(expr)),

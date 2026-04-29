@@ -158,6 +158,94 @@ pub(super) fn load_primitive(
     }
 }
 
+/// Lower [`IrExpr::ClosureRef`].
+///
+/// Materializes the closure as an `(i32 funcref, i32 env_ptr)` pair
+/// in linear memory:
+///
+/// 1. Look up the lifted top-level function by name (last segment of
+///    `funcref`) in `module.functions` and record its wasm function
+///    index.
+/// 2. Lower `env_struct` — typically an `IrExpr::StructInst` whose
+///    fields hold the captured values; the result is the env's base
+///    pointer.
+/// 3. Allocate `CLOSURE_VALUE_SIZE` bytes through the bump allocator,
+///    store the funcref index at offset 0 and the env pointer at
+///    offset 4, and leave the closure value's base pointer on the
+///    stack.
+///
+/// Indirect invocation (calling the closure) is not yet wired — that
+/// needs a wasm `Table` of funcrefs plus `call_indirect`, which lands
+/// later. Today's job is just to produce a valid closure VALUE.
+pub fn lower_closure_ref(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::ClosureRef {
+        funcref,
+        env_struct,
+        ..
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_closure_ref called with non-ClosureRef expression".to_owned(),
+        });
+    };
+
+    let module = ctx.module()?;
+    let last = funcref
+        .last()
+        .ok_or_else(|| LowerError::NotYetImplemented {
+            what: "ClosureRef carries an empty funcref path".to_owned(),
+        })?;
+    let func_idx_u32 = module
+        .functions
+        .iter()
+        .enumerate()
+        .find(|(_, f)| &f.name == last)
+        .map(|(i, _)| i)
+        .ok_or_else(|| LowerError::NotYetImplemented {
+            what: format!("ClosureRef target function '{last}' is not in module.functions"),
+        })?;
+    let func_idx_raw = u32::try_from(func_idx_u32).map_err(|_| LowerError::NotYetImplemented {
+        what: "ClosureRef target index exceeds u32::MAX".to_owned(),
+    })?;
+    let funcref_wasm_idx = ctx
+        .functions
+        .get(formalang::ir::FunctionId(func_idx_raw))
+        .ok_or(LowerError::UnknownFunction(formalang::ir::FunctionId(
+            func_idx_raw,
+        )))?;
+    let funcref_signed =
+        i32::try_from(funcref_wasm_idx).map_err(|_| LowerError::NotYetImplemented {
+            what: "ClosureRef target wasm index exceeds i32::MAX".to_owned(),
+        })?;
+
+    let base_local = allocate_aggregate(crate::types::CLOSURE_VALUE_SIZE, sink, ctx)?;
+
+    // Funcref slot at offset 0.
+    sink.local_get(base_local);
+    sink.i32_const(funcref_signed);
+    sink.i32_store(MemArg {
+        offset: u64::from(crate::types::CLOSURE_FUNCREF_OFFSET),
+        align: 2, // log2(4)
+        memory_index: MEMORY_INDEX,
+    });
+
+    // Env pointer slot at offset 4.
+    sink.local_get(base_local);
+    lower_expr(env_struct, sink, ctx)?;
+    sink.i32_store(MemArg {
+        offset: u64::from(crate::types::CLOSURE_ENV_OFFSET),
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    });
+
+    sink.local_get(base_local);
+    Ok(())
+}
+
 /// Lower [`IrExpr::EnumInst`].
 ///
 /// Allocates `enum_layout.size` bytes through the bump allocator,

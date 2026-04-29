@@ -238,6 +238,7 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
             Ok(())
         }
         IrExpr::FieldAccess { object, .. } => walk_for_locals(object, out),
+        IrExpr::ClosureRef { env_struct, .. } => walk_for_locals(env_struct, out),
         IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
             for (_, _, value) in fields {
                 walk_for_locals(value, out)?;
@@ -276,7 +277,6 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
         | IrExpr::Closure { .. }
-        | IrExpr::ClosureRef { .. }
         | IrExpr::DictLiteral { .. }
         | IrExpr::DictAccess { .. } => Ok(()),
     }
@@ -443,6 +443,12 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
                 walk_count(&arm.body, out)?;
             }
         }
+        IrExpr::ClosureRef { env_struct, .. } => {
+            // Each ClosureRef reserves a scratch local for the
+            // (funcref, env_ptr) pair's base pointer.
+            bump_count(out)?;
+            walk_count(env_struct, out)?;
+        }
 
         IrExpr::Literal { .. }
         | IrExpr::Reference { .. }
@@ -451,7 +457,6 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
         | IrExpr::Closure { .. }
-        | IrExpr::ClosureRef { .. }
         | IrExpr::DictLiteral { .. }
         | IrExpr::DictAccess { .. } => {}
     }
