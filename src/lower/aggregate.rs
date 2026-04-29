@@ -585,6 +585,104 @@ fn store_array_element(
     }
 }
 
+/// Lower [`IrExpr::DictAccess`] when its `dict` is an [`IrExpr::Array`]
+/// value.
+///
+/// Pattern: read the buffer pointer from the array's header at offset 0,
+/// then leave `buf_ptr + idx * element_size` on the stack and emit the
+/// element type's primitive `load` opcode (or `i32_load` for aggregate
+/// elements, which live as pointers in the buffer).
+///
+/// Bounds checking is intentionally absent for Phase 1c — out-of-range
+/// reads land wherever the multiply takes them. A trapping bounds check
+/// rides a later phase once the language has a panicking-runtime story.
+///
+/// Dictionary-typed receivers (`ResolvedType::Dictionary`) are rejected
+/// as `NotYetImplemented`; real dictionary access lands in Phase 2.
+pub fn lower_dict_access(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::DictAccess { dict, key, .. } = expr else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_dict_access called with non-DictAccess expression".to_owned(),
+        });
+    };
+
+    let coll_ty = dict.ty();
+    let ResolvedType::Array(elem_box) = coll_ty else {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("DictAccess on collection type {coll_ty:?}"),
+        });
+    };
+    let elem_ty = elem_box.as_ref();
+
+    let module = ctx.module()?;
+    let layout = plan_array(elem_ty, module)?;
+    let elem_size_signed =
+        i32::try_from(layout.element_size).map_err(|_| LayoutError::SizeOverflow {
+            name: "<array element>".to_owned(),
+        })?;
+
+    // Load the element-buffer pointer from header[0].
+    lower_expr(dict, sink, ctx)?;
+    sink.i32_load(MemArg {
+        offset: 0,
+        align: align_to_log2(ARRAY_HEADER_ALIGN),
+        memory_index: MEMORY_INDEX,
+    });
+
+    // Compute buf_ptr + idx * elem_size.
+    lower_expr(key, sink, ctx)?;
+    sink.i32_const(elem_size_signed);
+    sink.i32_mul();
+    sink.i32_add();
+
+    let field_layout = FieldLayout {
+        offset: 0,
+        size: layout.element_size,
+        align: layout.element_align,
+    };
+    load_array_element(elem_ty, field_layout, sink)
+}
+
+/// Emit the `load` opcode that reads one array element at the address
+/// already on the stack, given the element's resolved type. Mirrors
+/// [`store_array_element`].
+fn load_array_element(
+    elem_ty: &ResolvedType,
+    field_layout: FieldLayout,
+    sink: &mut InstructionSink<'_>,
+) -> Result<(), LowerError> {
+    match elem_ty {
+        ResolvedType::Primitive(p) => {
+            load_primitive(*p, field_layout, sink);
+            Ok(())
+        }
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Array(_) => {
+            sink.i32_load(field_mem_arg(field_layout));
+            Ok(())
+        }
+        // `plan_array` rejects every other element type, so this arm
+        // is defensive only.
+        ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Trait(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Error => Err(LowerError::NotYetImplemented {
+            what: format!("array element of type {elem_ty:?}"),
+        }),
+    }
+}
+
 /// Lower a `BinaryOp { op: Range, left, right }` expression.
 ///
 /// Allocates a `Range<T>` value as a two-field aggregate

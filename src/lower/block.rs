@@ -238,6 +238,10 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
             Ok(())
         }
         IrExpr::FieldAccess { object, .. } => walk_for_locals(object, out),
+        IrExpr::DictAccess { dict, key, .. } => {
+            walk_for_locals(dict, out)?;
+            walk_for_locals(key, out)
+        }
         IrExpr::ClosureRef { env_struct, .. } => walk_for_locals(env_struct, out),
         IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
             for (_, _, value) in fields {
@@ -295,8 +299,7 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::Array { .. }
         | IrExpr::Closure { .. }
-        | IrExpr::DictLiteral { .. }
-        | IrExpr::DictAccess { .. } => Ok(()),
+        | IrExpr::DictLiteral { .. } => Ok(()),
     }
 }
 
@@ -392,6 +395,17 @@ fn bump_count(n: &mut u32) -> Result<(), LowerError> {
     Ok(())
 }
 
+fn walk_count_block_statement(stmt: &IrBlockStatement, out: &mut u32) -> Result<(), LowerError> {
+    match stmt {
+        IrBlockStatement::Let { value, .. } => walk_count(value, out),
+        IrBlockStatement::Assign { target, value } => {
+            walk_count(target, out)?;
+            walk_count(value, out)
+        }
+        IrBlockStatement::Expr(e) => walk_count(e, out),
+    }
+}
+
 fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
     match expr {
         IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
@@ -410,14 +424,7 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
             statements, result, ..
         } => {
             for stmt in statements {
-                match stmt {
-                    IrBlockStatement::Let { value, .. } => walk_count(value, out)?,
-                    IrBlockStatement::Assign { target, value } => {
-                        walk_count(target, out)?;
-                        walk_count(value, out)?;
-                    }
-                    IrBlockStatement::Expr(e) => walk_count(e, out)?,
-                }
+                walk_count_block_statement(stmt, out)?;
             }
             walk_count(result, out)?;
         }
@@ -458,6 +465,10 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
             }
         }
         IrExpr::FieldAccess { object, .. } => walk_count(object, out)?,
+        IrExpr::DictAccess { dict, key, .. } => {
+            walk_count(dict, out)?;
+            walk_count(key, out)?;
+        }
         IrExpr::Match {
             scrutinee, arms, ..
         } => {
@@ -503,8 +514,7 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         | IrExpr::LetRef { .. }
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::Closure { .. }
-        | IrExpr::DictLiteral { .. }
-        | IrExpr::DictAccess { .. } => {}
+        | IrExpr::DictLiteral { .. } => {}
     }
     Ok(())
 }
