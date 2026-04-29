@@ -13,11 +13,11 @@
 //! 4. Reloads the base pointer as the constructor's value.
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{IrExpr, IrStruct, ResolvedType};
+use formalang::ir::{IrExpr, IrField, IrModule, IrStruct, ResolvedType};
 use wasm_encoder::{InstructionSink, MemArg};
 
 use super::{LowerContext, LowerError, lower_expr};
-use crate::layout::{FieldLayout, plan_struct};
+use crate::layout::{FieldLayout, StructLayout, plan_struct};
 use crate::module::MEMORY_INDEX;
 
 /// Lower [`IrExpr::StructInst`].
@@ -119,6 +119,196 @@ pub(super) fn store_primitive(
         | _ => {
             sink.unreachable();
         }
+    }
+}
+
+/// Pick the right `xN.load` opcode for `p`. `bool` uses
+/// `i32.load8_u` to zero-extend the byte into the i32 value type.
+pub(super) fn load_primitive(
+    p: PrimitiveType,
+    layout: FieldLayout,
+    sink: &mut InstructionSink<'_>,
+) {
+    let mem_arg = field_mem_arg(layout);
+    match p {
+        PrimitiveType::Boolean => {
+            sink.i32_load8_u(mem_arg);
+        }
+        PrimitiveType::I32 => {
+            sink.i32_load(mem_arg);
+        }
+        PrimitiveType::I64 => {
+            sink.i64_load(mem_arg);
+        }
+        PrimitiveType::F32 => {
+            sink.f32_load(mem_arg);
+        }
+        PrimitiveType::F64 => {
+            sink.f64_load(mem_arg);
+        }
+        PrimitiveType::Never
+        | PrimitiveType::String
+        | PrimitiveType::Path
+        | PrimitiveType::Regex
+        | _ => {
+            sink.unreachable();
+        }
+    }
+}
+
+/// Lower [`IrExpr::FieldAccess`].
+///
+/// Evaluates `object` to leave its base pointer on the stack, then
+/// emits the primitive load at the resolved field's offset. Works
+/// for both struct objects (`ResolvedType::Struct(_)`) and tuple
+/// objects (`ResolvedType::Tuple(_)`).
+pub fn lower_field_access(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::FieldAccess {
+        object,
+        field,
+        field_idx,
+        ..
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_field_access called with non-FieldAccess expression".to_owned(),
+        });
+    };
+
+    let module = ctx.module()?;
+    let (layout, fields_meta) = layout_for_aggregate(object.ty(), module)?;
+
+    // Resolve the field. `field_idx` carries the resolved position;
+    // fall back to a name lookup if it points past the end (older IR
+    // emitters sometimes leave it as `FieldIdx(0)` placeholder).
+    let idx = field_idx.0 as usize;
+    let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
+        && let Some(fd) = fields_meta.get(idx)
+    {
+        (fl, fd)
+    } else {
+        lookup_field_by_name_with_meta(&fields_meta, &layout.fields, field, &type_tag(object.ty()))?
+    };
+
+    let primitive = primitive_of(&field_def.ty)?;
+    lower_expr(object, sink, ctx)?;
+    load_primitive(primitive, *field_layout, sink);
+    Ok(())
+}
+
+/// Plan the layout for an aggregate object expression and return its
+/// field metadata. Tuple objects are mapped to a synthetic struct so
+/// `plan_struct` can reused.
+fn layout_for_aggregate(
+    ty: &ResolvedType,
+    module: &IrModule,
+) -> Result<(StructLayout, Vec<IrField>), LowerError> {
+    match ty {
+        ResolvedType::Struct(id) => {
+            let s = module
+                .structs
+                .get(id.0 as usize)
+                .ok_or(LowerError::UnknownStruct(*id))?;
+            let layout = plan_struct(s, module)?;
+            Ok((layout, s.fields.clone()))
+        }
+        ResolvedType::Tuple(_) => {
+            let synthetic = synthetic_struct_for_tuple(ty)?;
+            let layout = plan_struct(&synthetic, module)?;
+            Ok((layout, synthetic.fields))
+        }
+        ResolvedType::Primitive(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => Err(LowerError::FieldAccessOnNonAggregate { ty: ty.clone() }),
+    }
+}
+
+/// Build a synthetic [`IrStruct`] from a `ResolvedType::Tuple(...)`.
+/// Lets the layout planner be reused for tuples without duplicating
+/// its alignment logic.
+pub(super) fn synthetic_struct_for_tuple(ty: &ResolvedType) -> Result<IrStruct, LowerError> {
+    let ResolvedType::Tuple(fields) = ty else {
+        return Err(LowerError::FieldAccessOnNonAggregate { ty: ty.clone() });
+    };
+    Ok(IrStruct {
+        name: "__tuple".to_owned(),
+        visibility: formalang::ast::Visibility::Private,
+        traits: Vec::new(),
+        fields: fields
+            .iter()
+            .map(|(field_name, field_ty)| IrField {
+                name: field_name.clone(),
+                ty: field_ty.clone(),
+                mutable: false,
+                optional: false,
+                default: None,
+                doc: None,
+                convention: formalang::ast::ParamConvention::Let,
+            })
+            .collect(),
+        generic_params: Vec::new(),
+        doc: None,
+    })
+}
+
+/// Resolve a field by name once we already have the field-meta and
+/// layout vectors. Used as a fallback when `FieldIdx` is out of
+/// range — kept robust to placeholder IDs that older IR emitters
+/// produce.
+fn lookup_field_by_name_with_meta<'a>(
+    fields_meta: &'a [IrField],
+    field_layouts: &'a [FieldLayout],
+    name: &str,
+    aggregate_tag: &str,
+) -> Result<(&'a FieldLayout, &'a IrField), LowerError> {
+    for (i, f) in fields_meta.iter().enumerate() {
+        if f.name == name {
+            let fl = field_layouts
+                .get(i)
+                .ok_or_else(|| LowerError::FieldIndexOutOfRange {
+                    struct_name: aggregate_tag.to_owned(),
+                    field_count: fields_meta.len(),
+                    field_idx: u32::try_from(i).unwrap_or(u32::MAX),
+                })?;
+            return Ok((fl, f));
+        }
+    }
+    Err(LowerError::FieldIndexOutOfRange {
+        struct_name: aggregate_tag.to_owned(),
+        field_count: fields_meta.len(),
+        field_idx: u32::MAX,
+    })
+}
+
+fn type_tag(ty: &ResolvedType) -> String {
+    match ty {
+        ResolvedType::Struct(_) => "<struct>".to_owned(),
+        ResolvedType::Tuple(_) => "__tuple".to_owned(),
+        ResolvedType::Primitive(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => "<non-aggregate>".to_owned(),
     }
 }
 
