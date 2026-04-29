@@ -61,8 +61,96 @@ fn lower_block_statement(
             }
             Ok(())
         }
-        IrBlockStatement::Assign { .. } => Err(LowerError::NotYetImplemented {
-            what: "IrBlockStatement::Assign (Phase 1b)".to_owned(),
+        IrBlockStatement::Assign { target, value } => lower_assign(target, value, sink, ctx),
+    }
+}
+
+/// Lower an `Assign` statement.
+///
+/// Phase 1b mc9 supports field-write targets — `self.x = value` and
+/// `obj.x = value` — by emitting the value's bytes at the resolved
+/// field offset of the object's pointer. Primitive lvalues (mutable
+/// `let` bindings) and tuple-element writes ride later phases.
+fn lower_assign(
+    target: &IrExpr,
+    value: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    use super::aggregate::{
+        layout_for_aggregate, lookup_field_by_name, lookup_field_by_name_with_meta, primitive_of,
+        store_primitive,
+    };
+    use crate::layout::plan_struct;
+
+    match target {
+        IrExpr::SelfFieldRef {
+            field, field_idx, ..
+        } => {
+            let struct_id = ctx.self_struct_id.ok_or(LowerError::MissingSelfStruct)?;
+            let module = ctx.module()?;
+            let s = module
+                .structs
+                .get(struct_id.0 as usize)
+                .ok_or(LowerError::UnknownStruct(struct_id))?;
+            let layout = plan_struct(s, module)?;
+            let idx = field_idx.0 as usize;
+            let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
+                && let Some(fd) = s.fields.get(idx)
+            {
+                (fl, fd)
+            } else {
+                lookup_field_by_name(s, &layout.fields, field)?
+            };
+            let primitive = primitive_of(&field_def.ty)?;
+            sink.local_get(0);
+            lower_expr(value, sink, ctx)?;
+            store_primitive(primitive, *field_layout, sink);
+            Ok(())
+        }
+        IrExpr::FieldAccess {
+            object,
+            field,
+            field_idx,
+            ..
+        } => {
+            let module = ctx.module()?;
+            let (layout, fields_meta) = layout_for_aggregate(object.ty(), module)?;
+            let idx = field_idx.0 as usize;
+            let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
+                && let Some(fd) = fields_meta.get(idx)
+            {
+                (fl, fd)
+            } else {
+                lookup_field_by_name_with_meta(&fields_meta, &layout.fields, field, "<aggregate>")?
+            };
+            let primitive = primitive_of(&field_def.ty)?;
+            lower_expr(object, sink, ctx)?;
+            lower_expr(value, sink, ctx)?;
+            store_primitive(primitive, *field_layout, sink);
+            Ok(())
+        }
+        IrExpr::Literal { .. }
+        | IrExpr::StructInst { .. }
+        | IrExpr::EnumInst { .. }
+        | IrExpr::Array { .. }
+        | IrExpr::Tuple { .. }
+        | IrExpr::Reference { .. }
+        | IrExpr::LetRef { .. }
+        | IrExpr::BinaryOp { .. }
+        | IrExpr::UnaryOp { .. }
+        | IrExpr::If { .. }
+        | IrExpr::For { .. }
+        | IrExpr::Match { .. }
+        | IrExpr::FunctionCall { .. }
+        | IrExpr::MethodCall { .. }
+        | IrExpr::Closure { .. }
+        | IrExpr::ClosureRef { .. }
+        | IrExpr::DictLiteral { .. }
+        | IrExpr::DictAccess { .. }
+        | IrExpr::Block { .. } => Err(LowerError::NotYetImplemented {
+            what: "IrBlockStatement::Assign target shape (only field writes supported in mc9)"
+                .to_owned(),
         }),
     }
 }

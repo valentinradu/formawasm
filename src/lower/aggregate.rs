@@ -403,7 +403,7 @@ pub fn lower_field_access(
 /// Plan the layout for an aggregate object expression and return its
 /// field metadata. Tuple objects are mapped to a synthetic struct so
 /// `plan_struct` can reused.
-fn layout_for_aggregate(
+pub(super) fn layout_for_aggregate(
     ty: &ResolvedType,
     module: &IrModule,
 ) -> Result<(StructLayout, Vec<IrField>), LowerError> {
@@ -468,7 +468,7 @@ pub(super) fn synthetic_struct_for_tuple(ty: &ResolvedType) -> Result<IrStruct, 
 /// layout vectors. Used as a fallback when `FieldIdx` is out of
 /// range — kept robust to placeholder IDs that older IR emitters
 /// produce.
-fn lookup_field_by_name_with_meta<'a>(
+pub(super) fn lookup_field_by_name_with_meta<'a>(
     fields_meta: &'a [IrField],
     field_layouts: &'a [FieldLayout],
     name: &str,
