@@ -332,4 +332,4 @@ New pass at `src/ir/closure_conv.rs`. Runs *after* `MonomorphisePass`, *before* 
 
 ## Status
 
-Upstream prerequisites in formalang are **complete** (PR 1 — numeric specialization — merged as `ff2a6c1`; PR 2 — closure-conversion pass — merged as `92fdf7c`). This repo currently contains only the project spec (`README.md`) and an action-oriented plan (`PLAN.md`); PR 3 (repo bootstrap) is the next concrete work. See [PLAN.md](PLAN.md) for the immediate microcommit list.
+Upstream prerequisites in formalang are **complete** (PR 1 — numeric specialization — merged as `ff2a6c1`; PR 2 — closure-conversion pass — merged as `92fdf7c`; numeric-literal precision and resolve-references passes also merged). **Phase 1a is complete**: `WasmBackend::generate` runs the assembled pipeline (preflight, public-surface survey, core-module lowering, WIT emission, component wrap) and produces a Component-Model artifact; recursive fibonacci compiled through this entry point validates and runs under wasmtime's component runtime. **Phase 1b is in progress** — aggregates, methods, calling conventions, and intramodule closures. See [PLAN.md](PLAN.md) for the current immediate-work mc.
