@@ -43,7 +43,20 @@ above into one program. Each mc has its own end-to-end test under
 program test is straightforward to add but not currently committed.
 Indirect closure invocation also remains for Phase 1c.
 
-- ⏳ **Phase 1c next**: collections (`Array<T>`, `Range<T>`), `For`-loop lowering, WIT lists. Sieve-of-Eratosthenes is the milestone.
+**Phase 1c progress** (in flight):
+
+- ✅ mc1 (`da90a70`): `plan_array` layout planner — `{ ptr, len, cap }` header + per-element stride.
+- ✅ mc2 (`4f15613`): `lower_array` materializes the literal end-to-end, validated under wasmtime for I32 / I64 / Boolean / struct-pointer arrays.
+- ✅ mc3 (`d513052`): `Range<T>` planner + lowering for the `BinaryOperator::Range` form (`lo..hi`).
+- ✅ mc4 (`c349117` + cleanup `25d6c92`): For-loop comprehension over `Range<I32>` collecting body values into a fresh `Array<body_ty>`. Loop variable threaded via the new upstream `var_binding_id` field on `IrExpr::For` (formalang `8cfe909`). Cleanup commit deduplicates array-header writes between `lower_array` / `lower_for` and replaces the silent scratch-local count with a shared constant.
+- ⏳ **mc5 next**: index access (`a[i]`) so loop bodies can read array elements.
+- ⏳ mc6: For over `Array<T>` (likely close to free once index access lands — desugars to `for i in 0..len { let elem = arr[i]; … }`).
+- ⏳ mc7: WIT `list<T>` mapping so public `Array<I32>` signatures cross the WIT boundary.
+- ⏳ mc8: Sieve-of-Eratosthenes end-to-end test — the Phase 1c milestone.
+
+**Known restrictions to lift later in Phase 1c:**
+
+- `lower_for` only handles `Range<I32>`; wider numeric ranges (`Range<I64>`, `Range<F32>`, `Range<F64>`) need a typed scratch-local mechanism in the function-body planner — currently scratch locals are all i32. Bounded by mc beyond the sieve milestone.
 
 > **Quality bar.** This repo mirrors the lint / CI / build setup at
 > `~/projects/smid/smid-ws0` — strict clippy (deny `unwrap_used`,
@@ -117,32 +130,30 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-## Immediate work — Phase 1c mc1: `Array<T>` memory-layout planner
+## Immediate work — Phase 1c mc5: index access (`a[i]`)
 
-The first 1c mc lands the linear-memory layout for arrays: a fixed
-`{ ptr: i32, len: i32, cap: i32 }` header that points at a separately-
-allocated element buffer. Nothing emits code yet — this just produces
-the layout information later mcs (`Array` literal lowering, `For`
-loop, WIT `list<T>` mapping) will consume.
+Phase 1c mc1–mc4 are committed (see Status above). The next mc lands
+indexed read access so loop bodies can pull individual array elements
+out of `Array<T>` values.
 
 **Scope**
 
-- Extend `src/layout.rs` with `pub struct ArrayLayout { pub header_size: u32, pub header_align: u32, pub element_size: u32, pub element_align: u32 }`.
-- `pub fn plan_array(elem: &ResolvedType, module: &IrModule) -> Result<ArrayLayout, LayoutError>`.
-- Header is always 12 bytes / 4-aligned: `ptr` at offset 0, `len` at 4, `cap` at 8.
-- Element size/align comes from `type_size_align`; aggregate elements (Phase 1c+ mcs) carry pointer-sized headers (`{ size: 4, align: 4 }`) since aggregates live as `i32` pointers in our linear-memory model.
+- `IrExpr::Index { collection, index, ty }` — verify the IR shape in `~/projects/formalang/src/ir/expr/mod.rs` first; the variant name and field layout may differ.
+- New helper in `src/lower/aggregate.rs` (or a new `index.rs`): allocate no scratch, just emit `collection_ptr.ptr + index * elem_size` then the right `load` opcode for the element type. Aggregate elements (struct, enum, tuple, array, range) load as `i32` pointers since the value behind them already lives in linear memory.
+- Wire the dispatch in `lower_expr`. Update `walk_count` to pass through the children (no scratch locals needed for index access itself).
+- Bounds checking: out-of-scope for mc5. The emitted code does pointer arithmetic only; out-of-bounds reads land wherever the multiply takes them. Add a `panic` / trap path in a later mc once the language has a panicking-runtime story.
 
 **Tests**
 
-- `Array<I32>` → element size/align 4/4.
-- `Array<I64>` → element size/align 8/8.
-- `Array<Boolean>` → element size/align 1/1.
-- `Array<Pair>` (struct element) → element size/align 4/4 (pointer).
-- `Array<Never>` → `LayoutError::NotYetSupported`.
+- Build a literal `[10, 20, 30]`, index at 0, 1, 2; assert each via wasmtime round-trip.
+- Same for `Array<I64>` (different stride / load opcode).
+- For-over-Range body that reads through an outer `let arr = [...]`, returns `arr[p % 3]`. Confirms index access composes with the existing For-loop infra.
 
-After mc1 lands, the next mc emits the actual `Array` literal lowering
-that allocates the header + element buffer and walks the literal's
-elements.
+After mc5, mc6 wires the For-over-`Array<T>` form (likely a desugar to
+`for i in 0..len { let elem = arr[i]; … }`), then mc7 maps `Array<T>`
+to WIT `list<T>` so the sieve's `Array<I32>` return type crosses the
+component boundary, and mc8 commits the sieve-of-Eratosthenes
+end-to-end test as the Phase 1c milestone.
 
 ---
 
