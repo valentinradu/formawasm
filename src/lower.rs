@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use formalang::ast::{Literal, NumberValue, PrimitiveType};
+use formalang::ast::{BinaryOperator, Literal, NumberValue, PrimitiveType};
 use formalang::ir::{BindingId, IrExpr, ReferenceTarget, ResolvedType};
 use thiserror::Error;
 use wasm_encoder::{Ieee32, Ieee64, InstructionSink};
@@ -61,6 +61,18 @@ pub enum LowerError {
         "Reference target is Unresolved — ResolveReferencesPass must run before WasmBackend::generate"
     )]
     UnresolvedReference,
+
+    /// A binary or unary operator was applied to operand type(s) the
+    /// backend does not support — either a fundamentally invalid combo
+    /// (e.g. `And` on `I32`) or a deferred case (e.g. arithmetic on
+    /// `String`, which lives in Phase 2).
+    #[error("operator {op} on {operand:?} is not supported in this phase")]
+    UnsupportedOperator {
+        /// Operator name (e.g. `"Add"`, `"Range"`, `"Mod"`).
+        op: String,
+        /// Operand primitive type at the offending site.
+        operand: PrimitiveType,
+    },
 }
 
 /// Mapping from a function-local `BindingId` (parameters + `let`
@@ -298,4 +310,301 @@ fn number_value_string(v: &NumberValue) -> String {
         NumberValue::Float(f) => f.to_string(),
         _ => "<unknown>".to_owned(),
     }
+}
+
+/// Lower an [`IrExpr::BinaryOp`] onto `sink`. Operands are lowered
+/// recursively via [`lower_expr`]; the operator dispatch reads the
+/// left operand's primitive type to choose the right wasm
+/// instruction.
+pub fn lower_binary_op(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    bindings: &BindingMap,
+) -> Result<(), LowerError> {
+    let IrExpr::BinaryOp {
+        left, right, op, ..
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_binary_op called with non-BinaryOp expression".to_owned(),
+        });
+    };
+
+    let operand_prim = match left.ty() {
+        ResolvedType::Primitive(p) => *p,
+        ResolvedType::Struct(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => {
+            return Err(LowerError::NotYetImplemented {
+                what: format!("BinaryOp on non-primitive operand type {:?}", left.ty()),
+            });
+        }
+    };
+
+    lower_expr(left, sink, bindings)?;
+    lower_expr(right, sink, bindings)?;
+    emit_binary_op(*op, operand_prim, sink)
+}
+
+/// Top-level expression dispatcher.
+///
+/// Each variant either funnels into its dedicated `lower_*` helper or
+/// surfaces a typed `NotYetImplemented` error tagged with the variant
+/// name. The caller is responsible for the surrounding stack
+/// discipline (block types, end markers, function frames).
+pub fn lower_expr(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    bindings: &BindingMap,
+) -> Result<(), LowerError> {
+    match expr {
+        IrExpr::Literal { .. } => lower_literal(expr, sink),
+        IrExpr::Reference { .. } => lower_reference(expr, sink, bindings),
+        IrExpr::LetRef { .. } => lower_let_ref(expr, sink, bindings),
+        IrExpr::BinaryOp { .. } => lower_binary_op(expr, sink, bindings),
+
+        IrExpr::SelfFieldRef { .. }
+        | IrExpr::FieldAccess { .. }
+        | IrExpr::StructInst { .. }
+        | IrExpr::EnumInst { .. }
+        | IrExpr::Tuple { .. }
+        | IrExpr::Array { .. }
+        | IrExpr::UnaryOp { .. }
+        | IrExpr::If { .. }
+        | IrExpr::For { .. }
+        | IrExpr::Match { .. }
+        | IrExpr::FunctionCall { .. }
+        | IrExpr::MethodCall { .. }
+        | IrExpr::Closure { .. }
+        | IrExpr::ClosureRef { .. }
+        | IrExpr::DictLiteral { .. }
+        | IrExpr::DictAccess { .. }
+        | IrExpr::Block { .. } => Err(LowerError::NotYetImplemented {
+            what: format!("IrExpr::{}", expr_variant_name(expr)),
+        }),
+    }
+}
+
+const fn expr_variant_name(expr: &IrExpr) -> &'static str {
+    match expr {
+        IrExpr::Literal { .. } => "Literal",
+        IrExpr::Reference { .. } => "Reference",
+        IrExpr::LetRef { .. } => "LetRef",
+        IrExpr::SelfFieldRef { .. } => "SelfFieldRef",
+        IrExpr::FieldAccess { .. } => "FieldAccess",
+        IrExpr::StructInst { .. } => "StructInst",
+        IrExpr::EnumInst { .. } => "EnumInst",
+        IrExpr::Tuple { .. } => "Tuple",
+        IrExpr::Array { .. } => "Array",
+        IrExpr::BinaryOp { .. } => "BinaryOp",
+        IrExpr::UnaryOp { .. } => "UnaryOp",
+        IrExpr::If { .. } => "If",
+        IrExpr::For { .. } => "For",
+        IrExpr::Match { .. } => "Match",
+        IrExpr::FunctionCall { .. } => "FunctionCall",
+        IrExpr::MethodCall { .. } => "MethodCall",
+        IrExpr::Closure { .. } => "Closure",
+        IrExpr::ClosureRef { .. } => "ClosureRef",
+        IrExpr::DictLiteral { .. } => "DictLiteral",
+        IrExpr::DictAccess { .. } => "DictAccess",
+        IrExpr::Block { .. } => "Block",
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "type-dispatched operator table — splitting hides the per-(op, type) mapping"
+)]
+fn emit_binary_op(
+    op: BinaryOperator,
+    operand: PrimitiveType,
+    sink: &mut InstructionSink<'_>,
+) -> Result<(), LowerError> {
+    let unsupported = || LowerError::UnsupportedOperator {
+        op: format!("{op:?}"),
+        operand,
+    };
+
+    match (op, operand) {
+        // ── Integer arithmetic ──────────────────────────────────────
+        (BinaryOperator::Add, PrimitiveType::I32) => {
+            sink.i32_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::I32) => {
+            sink.i32_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::I32) => {
+            sink.i32_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::I32) => {
+            sink.i32_div_s();
+        }
+        (BinaryOperator::Mod, PrimitiveType::I32) => {
+            sink.i32_rem_s();
+        }
+        (BinaryOperator::Add, PrimitiveType::I64) => {
+            sink.i64_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::I64) => {
+            sink.i64_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::I64) => {
+            sink.i64_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::I64) => {
+            sink.i64_div_s();
+        }
+        (BinaryOperator::Mod, PrimitiveType::I64) => {
+            sink.i64_rem_s();
+        }
+
+        // ── Float arithmetic (no Mod — wasm has no f*.rem) ──────────
+        (BinaryOperator::Add, PrimitiveType::F32) => {
+            sink.f32_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::F32) => {
+            sink.f32_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::F32) => {
+            sink.f32_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::F32) => {
+            sink.f32_div();
+        }
+        (BinaryOperator::Add, PrimitiveType::F64) => {
+            sink.f64_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::F64) => {
+            sink.f64_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::F64) => {
+            sink.f64_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::F64) => {
+            sink.f64_div();
+        }
+        // ── Comparisons ─────────────────────────────────────────────
+        (BinaryOperator::Eq, PrimitiveType::I32 | PrimitiveType::Boolean) => {
+            sink.i32_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::I32 | PrimitiveType::Boolean) => {
+            sink.i32_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::I32) => {
+            sink.i32_lt_s();
+        }
+        (BinaryOperator::Gt, PrimitiveType::I32) => {
+            sink.i32_gt_s();
+        }
+        (BinaryOperator::Le, PrimitiveType::I32) => {
+            sink.i32_le_s();
+        }
+        (BinaryOperator::Ge, PrimitiveType::I32) => {
+            sink.i32_ge_s();
+        }
+        (BinaryOperator::Eq, PrimitiveType::I64) => {
+            sink.i64_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::I64) => {
+            sink.i64_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::I64) => {
+            sink.i64_lt_s();
+        }
+        (BinaryOperator::Gt, PrimitiveType::I64) => {
+            sink.i64_gt_s();
+        }
+        (BinaryOperator::Le, PrimitiveType::I64) => {
+            sink.i64_le_s();
+        }
+        (BinaryOperator::Ge, PrimitiveType::I64) => {
+            sink.i64_ge_s();
+        }
+        (BinaryOperator::Eq, PrimitiveType::F32) => {
+            sink.f32_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::F32) => {
+            sink.f32_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::F32) => {
+            sink.f32_lt();
+        }
+        (BinaryOperator::Gt, PrimitiveType::F32) => {
+            sink.f32_gt();
+        }
+        (BinaryOperator::Le, PrimitiveType::F32) => {
+            sink.f32_le();
+        }
+        (BinaryOperator::Ge, PrimitiveType::F32) => {
+            sink.f32_ge();
+        }
+        (BinaryOperator::Eq, PrimitiveType::F64) => {
+            sink.f64_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::F64) => {
+            sink.f64_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::F64) => {
+            sink.f64_lt();
+        }
+        (BinaryOperator::Gt, PrimitiveType::F64) => {
+            sink.f64_gt();
+        }
+        (BinaryOperator::Le, PrimitiveType::F64) => {
+            sink.f64_le();
+        }
+        (BinaryOperator::Ge, PrimitiveType::F64) => {
+            sink.f64_ge();
+        }
+
+        // ── Logical (Boolean only — i32 representation, eager eval) ─
+        (BinaryOperator::And, PrimitiveType::Boolean) => {
+            sink.i32_and();
+        }
+        (BinaryOperator::Or, PrimitiveType::Boolean) => {
+            sink.i32_or();
+        }
+
+        // ── Range — Phase 1c ────────────────────────────────────────
+        (BinaryOperator::Range, _) => {
+            return Err(LowerError::NotYetImplemented {
+                what: "BinaryOperator::Range (Phase 1c)".to_owned(),
+            });
+        }
+
+        // ── Disallowed combinations + future variants ───────────────
+        (
+            BinaryOperator::Add
+            | BinaryOperator::Sub
+            | BinaryOperator::Mul
+            | BinaryOperator::Div
+            | BinaryOperator::Mod
+            | BinaryOperator::Lt
+            | BinaryOperator::Gt
+            | BinaryOperator::Le
+            | BinaryOperator::Ge
+            | BinaryOperator::And
+            | BinaryOperator::Or,
+            _,
+        ) => {
+            return Err(unsupported());
+        }
+        _ => {
+            return Err(LowerError::NotYetImplemented {
+                what: format!("BinaryOperator::{op:?} on {operand:?}"),
+            });
+        }
+    }
+
+    Ok(())
 }
