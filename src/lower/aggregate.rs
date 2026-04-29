@@ -156,6 +156,43 @@ pub(super) fn load_primitive(
     }
 }
 
+/// Lower [`IrExpr::Tuple`].
+///
+/// Treats the tuple as an anonymous struct synthesized from the
+/// carried `ResolvedType::Tuple(...)`. Layout planning, allocation,
+/// and per-field stores reuse the same path as
+/// [`lower_struct_inst`]; the only difference is the field-meta
+/// source.
+pub fn lower_tuple(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::Tuple { fields, ty, .. } = expr else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_tuple called with non-Tuple expression".to_owned(),
+        });
+    };
+
+    let module = ctx.module()?;
+    let synthetic = synthetic_struct_for_tuple(ty)?;
+    let layout = plan_struct(&synthetic, module)?;
+
+    let base_local = allocate_aggregate(layout.size, sink, ctx)?;
+
+    for (name, value_expr) in fields {
+        let (field_layout, field_def) =
+            lookup_field_by_name_with_meta(&synthetic.fields, &layout.fields, name, "__tuple")?;
+        let primitive = primitive_of(&field_def.ty)?;
+        sink.local_get(base_local);
+        lower_expr(value_expr, sink, ctx)?;
+        store_primitive(primitive, *field_layout, sink);
+    }
+
+    sink.local_get(base_local);
+    Ok(())
+}
+
 /// Lower [`IrExpr::FieldAccess`].
 ///
 /// Evaluates `object` to leave its base pointer on the stack, then

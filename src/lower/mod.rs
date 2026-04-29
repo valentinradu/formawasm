@@ -30,7 +30,7 @@ use wasm_encoder::InstructionSink;
 use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
-pub use aggregate::{lower_field_access, lower_struct_inst};
+pub use aggregate::{lower_field_access, lower_struct_inst, lower_tuple};
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
 pub use call::lower_function_call;
@@ -393,10 +393,10 @@ pub fn lower_expr(
 
         IrExpr::StructInst { .. } => lower_struct_inst(expr, sink, ctx),
         IrExpr::FieldAccess { .. } => lower_field_access(expr, sink, ctx),
+        IrExpr::Tuple { .. } => lower_tuple(expr, sink, ctx),
 
         IrExpr::SelfFieldRef { .. }
         | IrExpr::EnumInst { .. }
-        | IrExpr::Tuple { .. }
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
         | IrExpr::Match { .. }
