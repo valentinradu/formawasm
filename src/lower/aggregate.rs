@@ -13,11 +13,13 @@
 //! 4. Reloads the base pointer as the constructor's value.
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{IrExpr, IrField, IrModule, IrStruct, ResolvedType};
+use formalang::ir::{IrEnum, IrEnumVariant, IrExpr, IrField, IrModule, IrStruct, ResolvedType};
 use wasm_encoder::{InstructionSink, MemArg};
 
 use super::{LowerContext, LowerError, lower_expr};
-use crate::layout::{FieldLayout, StructLayout, plan_struct};
+use crate::layout::{
+    ENUM_TAG_ALIGN, FieldLayout, StructLayout, VariantLayout, plan_enum, plan_struct,
+};
 use crate::module::MEMORY_INDEX;
 
 /// Lower [`IrExpr::StructInst`].
@@ -154,6 +156,122 @@ pub(super) fn load_primitive(
             sink.unreachable();
         }
     }
+}
+
+/// Lower [`IrExpr::EnumInst`].
+///
+/// Allocates `enum_layout.size` bytes through the bump allocator,
+/// stores the variant's discriminant tag at `tag_offset`, then writes
+/// each provided field at the variant's absolute field offset. The
+/// base pointer is left on the stack as the constructor's value.
+///
+/// The `variant_idx` stored on the IR node is the source of truth
+/// when in range; we fall back to a name lookup so older IR shapes
+/// emitted with the placeholder `VariantIdx(0)` still resolve.
+pub fn lower_enum_inst(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::EnumInst {
+        enum_id,
+        variant,
+        variant_idx,
+        fields,
+        ..
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_enum_inst called with non-EnumInst expression".to_owned(),
+        });
+    };
+
+    let id = enum_id.ok_or(LowerError::ExternalEnumInst)?;
+    let module = ctx.module()?;
+    let e = module
+        .enums
+        .get(id.0 as usize)
+        .ok_or(LowerError::UnknownEnum(id))?;
+    let layout = plan_enum(e, module)?;
+
+    let (variant_layout, variant_def) =
+        resolve_variant(e, &layout.variants, variant_idx.0, variant)?;
+
+    let base_local = allocate_aggregate(layout.size, sink, ctx)?;
+
+    // Tag store: i32_const tag, then i32_store at tag_offset.
+    sink.local_get(base_local);
+    let tag_signed = i32::try_from(variant_layout.tag).unwrap_or(i32::MAX);
+    sink.i32_const(tag_signed);
+    sink.i32_store(MemArg {
+        offset: u64::from(layout.tag_offset),
+        align: align_to_log2(ENUM_TAG_ALIGN),
+        memory_index: MEMORY_INDEX,
+    });
+
+    // Field stores. Match by name so we're robust to a placeholder
+    // FieldIdx(0) on the IR node.
+    for (field_name, _idx, value_expr) in fields {
+        let (field_layout, field_def) =
+            lookup_variant_field_by_name(variant_def, &variant_layout.fields, field_name)?;
+        let primitive = primitive_of(&field_def.ty)?;
+        sink.local_get(base_local);
+        lower_expr(value_expr, sink, ctx)?;
+        store_primitive(primitive, *field_layout, sink);
+    }
+
+    sink.local_get(base_local);
+    Ok(())
+}
+
+/// Resolve the variant identified by `idx` (with name fallback) on
+/// `e`, returning both the layout-side and IR-side metadata.
+fn resolve_variant<'a>(
+    e: &'a IrEnum,
+    variants: &'a [VariantLayout],
+    idx: u32,
+    name: &str,
+) -> Result<(&'a VariantLayout, &'a IrEnumVariant), LowerError> {
+    let i = idx as usize;
+    if let Some(vl) = variants.get(i)
+        && let Some(vd) = e.variants.get(i)
+        && vl.name == vd.name
+    {
+        return Ok((vl, vd));
+    }
+    for (vl, vd) in variants.iter().zip(e.variants.iter()) {
+        if vd.name == name {
+            return Ok((vl, vd));
+        }
+    }
+    Err(LowerError::UnknownVariant {
+        enum_name: e.name.clone(),
+        variant: name.to_owned(),
+    })
+}
+
+fn lookup_variant_field_by_name<'a>(
+    variant_def: &'a IrEnumVariant,
+    field_layouts: &'a [FieldLayout],
+    name: &str,
+) -> Result<(&'a FieldLayout, &'a IrField), LowerError> {
+    for (i, f) in variant_def.fields.iter().enumerate() {
+        if f.name == name {
+            let fl = field_layouts
+                .get(i)
+                .ok_or_else(|| LowerError::FieldIndexOutOfRange {
+                    struct_name: variant_def.name.clone(),
+                    field_count: variant_def.fields.len(),
+                    field_idx: u32::try_from(i).unwrap_or(u32::MAX),
+                })?;
+            return Ok((fl, f));
+        }
+    }
+    Err(LowerError::FieldIndexOutOfRange {
+        struct_name: variant_def.name.clone(),
+        field_count: variant_def.fields.len(),
+        field_idx: u32::MAX,
+    })
 }
 
 /// Lower [`IrExpr::Tuple`].

@@ -30,7 +30,7 @@ use wasm_encoder::InstructionSink;
 use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
-pub use aggregate::{lower_field_access, lower_struct_inst, lower_tuple};
+pub use aggregate::{lower_enum_inst, lower_field_access, lower_struct_inst, lower_tuple};
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
 pub use call::lower_function_call;
@@ -184,6 +184,28 @@ pub enum LowerError {
     /// `structs` vector does not contain. Indicates corrupt IR.
     #[error("StructId {0:?} is not present in IrModule.structs")]
     UnknownStruct(formalang::ir::StructId),
+
+    /// An `EnumInst` carries `enum_id = None`, which means it
+    /// instantiates an external (cross-module) enum. External
+    /// references land in Phase 4.
+    #[error("EnumInst targets an external enum (enum_id = None) — Phase 4")]
+    ExternalEnumInst,
+
+    /// An `EnumInst` was given an `enum_id` that the module's
+    /// `enums` vector does not contain. Indicates corrupt IR.
+    #[error("EnumId {0:?} is not present in IrModule.enums")]
+    UnknownEnum(formalang::ir::EnumId),
+
+    /// An `EnumInst` references a variant that the resolved enum
+    /// definition does not contain. Indicates an upstream invariant
+    /// violation.
+    #[error("variant '{variant}' is not declared on enum '{enum_name}'")]
+    UnknownVariant {
+        /// Containing enum name.
+        enum_name: String,
+        /// Source-level variant name.
+        variant: String,
+    },
 }
 
 /// Mapping from a module-scope `FunctionId` to its wasm function
@@ -394,9 +416,9 @@ pub fn lower_expr(
         IrExpr::StructInst { .. } => lower_struct_inst(expr, sink, ctx),
         IrExpr::FieldAccess { .. } => lower_field_access(expr, sink, ctx),
         IrExpr::Tuple { .. } => lower_tuple(expr, sink, ctx),
+        IrExpr::EnumInst { .. } => lower_enum_inst(expr, sink, ctx),
 
         IrExpr::SelfFieldRef { .. }
-        | IrExpr::EnumInst { .. }
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
         | IrExpr::Match { .. }
