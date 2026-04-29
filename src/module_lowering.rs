@@ -25,7 +25,7 @@ type ParamBinding = (BindingId, ValType);
 #[non_exhaustive]
 pub enum ModuleLowerError {
     /// An expression-level lowering failure surfaced from
-    /// [`lower_function_body`] or one of its callees.
+    /// [`lower_function_body_in_module`] or one of its callees.
     #[error(transparent)]
     Lower(#[from] LowerError),
 

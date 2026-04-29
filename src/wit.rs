@@ -4,7 +4,8 @@
 //! describing one world named `component`, with one `export` per
 //! exported function. Phase 1a covers primitive-only signatures —
 //! aggregate types (struct, enum, tuple, array, …) surface here as
-//! [`WitEmitError::TypeNotSupported`] until their lowerings land.
+//! [`TypeMapError::NotYetSupported`] (wrapped in
+//! [`WitEmitError::TypeMap`]) until their lowerings land.
 //!
 //! The emitted WIT is parsed back through [`wit_parser::Resolve`]
 //! before returning, so a string this module yields is guaranteed to
