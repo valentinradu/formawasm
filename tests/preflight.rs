@@ -4,8 +4,8 @@
 
 use formalang::ast::{Literal, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
-    IrEnum, IrEnumVariant, IrExpr, IrField, IrFunction, IrFunctionParam, IrFunctionSig, IrLet,
-    IrModule, IrStruct, IrTrait, ResolvedType,
+    BindingId, IrEnum, IrEnumVariant, IrExpr, IrField, IrFunction, IrFunctionParam, IrFunctionSig,
+    IrLet, IrModule, IrStruct, IrTrait, ResolvedType,
 };
 use formawasm::preflight::{self, PreflightError};
 
@@ -234,6 +234,7 @@ fn rejects_type_param_in_function_param() -> TestResult {
         name: "identity".to_owned(),
         generic_params: Vec::new(),
         params: vec![IrFunctionParam {
+            binding_id: BindingId(0),
             name: "value".to_owned(),
             external_label: None,
             ty: Some(ResolvedType::TypeParam("T".to_owned())),

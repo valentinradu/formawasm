@@ -289,9 +289,14 @@ fn check_expr(expr: &IrExpr, location: &str) -> Result<(), PreflightError> {
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::LetRef { .. } => Ok(()),
 
-        IrExpr::StructInst { fields, .. }
-        | IrExpr::EnumInst { fields, .. }
-        | IrExpr::Tuple { fields, .. } => {
+        IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
+            for (_, _, sub) in fields {
+                check_expr(sub, location)?;
+            }
+            Ok(())
+        }
+
+        IrExpr::Tuple { fields, .. } => {
             for (_, sub) in fields {
                 check_expr(sub, location)?;
             }
@@ -403,7 +408,7 @@ fn check_block_statement(stmt: &IrBlockStatement, location: &str) -> Result<(), 
 }
 
 fn check_match_arm(arm: &IrMatchArm, location: &str) -> Result<(), PreflightError> {
-    for (_, ty) in &arm.bindings {
+    for (_, _, ty) in &arm.bindings {
         check_type(ty, location)?;
     }
     check_expr(&arm.body, location)
