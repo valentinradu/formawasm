@@ -12,6 +12,36 @@ use wasm_encoder::{
     GlobalType, MemorySection, MemoryType, Module, TypeSection, ValType,
 };
 
+/// Alignment, in bytes, the bump allocator rounds every returned address up to.
+///
+/// Picked to satisfy the largest primitive alignment the canonical
+/// ABI imposes (`i64` / `f64` = 8); over-aligning the smaller
+/// primitives wastes a handful of bytes per allocation, which is
+/// acceptable for Phase 1b where allocations are infrequent.
+pub const BUMP_ALLOCATOR_ALIGN: u32 = 8;
+
+/// Source-level name we assign to the bump-allocator helper. Not
+/// exported, but kept stable so debug tooling can identify it.
+pub const BUMP_ALLOCATOR_NAME: &str = "__alloc";
+
+/// Round-up addend for the bump allocator's alignment math:
+/// `BUMP_ALLOCATOR_ALIGN - 1`. Hardcoded as `i32` to feed
+/// `wasm_encoder::Instruction::i32_const` without going through a
+/// fallible `u32 → i32` cast at call time.
+const BUMP_ALIGN_ROUND_UP_ADDEND: i32 = 7;
+
+/// Bitmask the bump allocator AND-s with to clear the low alignment
+/// bits: `!(BUMP_ALLOCATOR_ALIGN - 1)` reinterpreted as `i32`. Same
+/// reason as above for the hand-coded value.
+const BUMP_ALIGN_KEEP_MASK: i32 = -8;
+
+const _: () = {
+    assert!(
+        BUMP_ALLOCATOR_ALIGN == 8,
+        "BUMP_ALIGN_ROUND_UP_ADDEND / BUMP_ALIGN_KEEP_MASK assume 8-byte alignment",
+    );
+};
+
 /// Index of the single linear memory the runtime uses for all heap
 /// allocations.
 pub const MEMORY_INDEX: u32 = 0;
@@ -40,6 +70,7 @@ pub struct ModuleBuilder {
     globals: GlobalSection,
     exports: ExportSection,
     code: CodeSection,
+    bump_allocator: Option<u32>,
 }
 
 impl Default for ModuleBuilder {
@@ -79,6 +110,7 @@ impl ModuleBuilder {
             globals,
             exports: ExportSection::new(),
             code: CodeSection::new(),
+            bump_allocator: None,
         }
     }
 
@@ -115,6 +147,51 @@ impl ModuleBuilder {
         let mut body = Function::new(core::iter::empty());
         body.instructions().unreachable().end();
         self.declare_function_with_body(param_types, result_types, &body)
+    }
+
+    /// Declare and emit the bump-allocator runtime helper, returning
+    /// its wasm function index. Subsequent calls return the same
+    /// index without re-emitting the function — the helper is meant
+    /// to live exactly once per module.
+    ///
+    /// Signature: `__alloc(size: i32) -> i32` (raw byte size in,
+    /// allocation address out). Each returned address is aligned up
+    /// to [`BUMP_ALLOCATOR_ALIGN`] bytes; the heap pointer global is
+    /// advanced past the allocation. Out-of-memory is not yet handled
+    /// — callers that bust the linear-memory ceiling get a wasm trap.
+    pub fn declare_bump_allocator(&mut self) -> u32 {
+        if let Some(idx) = self.bump_allocator {
+            return idx;
+        }
+
+        let mut body = Function::new(core::iter::once((1, ValType::I32)));
+        let mut i = body.instructions();
+        // local 0 = size param, local 1 = aligned base pointer.
+        // aligned_ptr = (heap_ptr + (ALIGN - 1)) & ~(ALIGN - 1)
+        i.global_get(HEAP_PTR_GLOBAL_INDEX)
+            .i32_const(BUMP_ALIGN_ROUND_UP_ADDEND)
+            .i32_add()
+            .i32_const(BUMP_ALIGN_KEEP_MASK)
+            .i32_and()
+            .local_tee(1)
+            // new heap_ptr = aligned_ptr + size
+            .local_get(0)
+            .i32_add()
+            .global_set(HEAP_PTR_GLOBAL_INDEX)
+            // return aligned_ptr
+            .local_get(1)
+            .end();
+
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.bump_allocator = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the bump allocator if it has been
+    /// declared, else `None`.
+    #[must_use]
+    pub const fn bump_allocator_index(&self) -> Option<u32> {
+        self.bump_allocator
     }
 
     /// Number of declared functions so far.
