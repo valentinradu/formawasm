@@ -1,0 +1,240 @@
+//! Lowering of [`IrExpr::BinaryOp`] (arithmetic, comparison,
+//! logical) into core-wasm instructions.
+
+use formalang::ast::{BinaryOperator, PrimitiveType};
+use formalang::ir::{IrExpr, ResolvedType};
+use wasm_encoder::InstructionSink;
+
+use super::{LowerContext, LowerError, lower_expr};
+
+/// Lower an [`IrExpr::BinaryOp`] onto `sink`.
+///
+/// Operands are lowered recursively via [`super::lower_expr`]; the
+/// operator dispatch reads the left operand's primitive type to
+/// choose the right wasm instruction.
+pub fn lower_binary_op(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::BinaryOp {
+        left, right, op, ..
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_binary_op called with non-BinaryOp expression".to_owned(),
+        });
+    };
+
+    let operand_prim = match left.ty() {
+        ResolvedType::Primitive(p) => *p,
+        ResolvedType::Struct(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => {
+            return Err(LowerError::NotYetImplemented {
+                what: format!("BinaryOp on non-primitive operand type {:?}", left.ty()),
+            });
+        }
+    };
+
+    lower_expr(left, sink, ctx)?;
+    lower_expr(right, sink, ctx)?;
+    emit_binary_op(*op, operand_prim, sink)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "type-dispatched operator table — splitting hides the per-(op, type) mapping"
+)]
+fn emit_binary_op(
+    op: BinaryOperator,
+    operand: PrimitiveType,
+    sink: &mut InstructionSink<'_>,
+) -> Result<(), LowerError> {
+    let unsupported = || LowerError::UnsupportedOperator {
+        op: format!("{op:?}"),
+        operand,
+    };
+
+    match (op, operand) {
+        // ── Integer arithmetic ──────────────────────────────────────
+        (BinaryOperator::Add, PrimitiveType::I32) => {
+            sink.i32_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::I32) => {
+            sink.i32_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::I32) => {
+            sink.i32_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::I32) => {
+            sink.i32_div_s();
+        }
+        (BinaryOperator::Mod, PrimitiveType::I32) => {
+            sink.i32_rem_s();
+        }
+        (BinaryOperator::Add, PrimitiveType::I64) => {
+            sink.i64_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::I64) => {
+            sink.i64_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::I64) => {
+            sink.i64_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::I64) => {
+            sink.i64_div_s();
+        }
+        (BinaryOperator::Mod, PrimitiveType::I64) => {
+            sink.i64_rem_s();
+        }
+
+        // ── Float arithmetic (no Mod — wasm has no f*.rem) ──────────
+        (BinaryOperator::Add, PrimitiveType::F32) => {
+            sink.f32_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::F32) => {
+            sink.f32_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::F32) => {
+            sink.f32_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::F32) => {
+            sink.f32_div();
+        }
+        (BinaryOperator::Add, PrimitiveType::F64) => {
+            sink.f64_add();
+        }
+        (BinaryOperator::Sub, PrimitiveType::F64) => {
+            sink.f64_sub();
+        }
+        (BinaryOperator::Mul, PrimitiveType::F64) => {
+            sink.f64_mul();
+        }
+        (BinaryOperator::Div, PrimitiveType::F64) => {
+            sink.f64_div();
+        }
+        // ── Comparisons ─────────────────────────────────────────────
+        (BinaryOperator::Eq, PrimitiveType::I32 | PrimitiveType::Boolean) => {
+            sink.i32_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::I32 | PrimitiveType::Boolean) => {
+            sink.i32_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::I32) => {
+            sink.i32_lt_s();
+        }
+        (BinaryOperator::Gt, PrimitiveType::I32) => {
+            sink.i32_gt_s();
+        }
+        (BinaryOperator::Le, PrimitiveType::I32) => {
+            sink.i32_le_s();
+        }
+        (BinaryOperator::Ge, PrimitiveType::I32) => {
+            sink.i32_ge_s();
+        }
+        (BinaryOperator::Eq, PrimitiveType::I64) => {
+            sink.i64_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::I64) => {
+            sink.i64_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::I64) => {
+            sink.i64_lt_s();
+        }
+        (BinaryOperator::Gt, PrimitiveType::I64) => {
+            sink.i64_gt_s();
+        }
+        (BinaryOperator::Le, PrimitiveType::I64) => {
+            sink.i64_le_s();
+        }
+        (BinaryOperator::Ge, PrimitiveType::I64) => {
+            sink.i64_ge_s();
+        }
+        (BinaryOperator::Eq, PrimitiveType::F32) => {
+            sink.f32_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::F32) => {
+            sink.f32_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::F32) => {
+            sink.f32_lt();
+        }
+        (BinaryOperator::Gt, PrimitiveType::F32) => {
+            sink.f32_gt();
+        }
+        (BinaryOperator::Le, PrimitiveType::F32) => {
+            sink.f32_le();
+        }
+        (BinaryOperator::Ge, PrimitiveType::F32) => {
+            sink.f32_ge();
+        }
+        (BinaryOperator::Eq, PrimitiveType::F64) => {
+            sink.f64_eq();
+        }
+        (BinaryOperator::Ne, PrimitiveType::F64) => {
+            sink.f64_ne();
+        }
+        (BinaryOperator::Lt, PrimitiveType::F64) => {
+            sink.f64_lt();
+        }
+        (BinaryOperator::Gt, PrimitiveType::F64) => {
+            sink.f64_gt();
+        }
+        (BinaryOperator::Le, PrimitiveType::F64) => {
+            sink.f64_le();
+        }
+        (BinaryOperator::Ge, PrimitiveType::F64) => {
+            sink.f64_ge();
+        }
+
+        // ── Logical (Boolean only — i32 representation, eager eval) ─
+        (BinaryOperator::And, PrimitiveType::Boolean) => {
+            sink.i32_and();
+        }
+        (BinaryOperator::Or, PrimitiveType::Boolean) => {
+            sink.i32_or();
+        }
+
+        // ── Range — Phase 1c ────────────────────────────────────────
+        (BinaryOperator::Range, _) => {
+            return Err(LowerError::NotYetImplemented {
+                what: "BinaryOperator::Range (Phase 1c)".to_owned(),
+            });
+        }
+
+        // ── Disallowed combinations + future variants ───────────────
+        (
+            BinaryOperator::Add
+            | BinaryOperator::Sub
+            | BinaryOperator::Mul
+            | BinaryOperator::Div
+            | BinaryOperator::Mod
+            | BinaryOperator::Lt
+            | BinaryOperator::Gt
+            | BinaryOperator::Le
+            | BinaryOperator::Ge
+            | BinaryOperator::And
+            | BinaryOperator::Or,
+            _,
+        ) => return Err(unsupported()),
+        // Future #[non_exhaustive] BinaryOperator variants ride this arm.
+        _ => {
+            return Err(LowerError::NotYetImplemented {
+                what: format!("BinaryOperator::{op:?} on {operand:?}"),
+            });
+        }
+    }
+
+    Ok(())
+}
