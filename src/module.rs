@@ -80,11 +80,15 @@ impl ModuleBuilder {
         }
     }
 
-    /// Declare a function with the given param + result valtypes.
-    /// Returns the wasm function index. The body is initialised to a
-    /// single `unreachable` instruction; later lowering passes plug
-    /// in the real body.
-    pub fn declare_function(&mut self, param_types: &[ValType], result_types: &[ValType]) -> u32 {
+    /// Declare a function with the given param + result valtypes and a
+    /// caller-supplied body. The body must already include the closing
+    /// `end` instruction. Returns the wasm function index.
+    pub fn declare_function_with_body(
+        &mut self,
+        param_types: &[ValType],
+        result_types: &[ValType],
+        body: &Function,
+    ) -> u32 {
         let type_index = self.types.len();
         let func_index = self.functions.len();
 
@@ -92,15 +96,18 @@ impl ModuleBuilder {
             .ty()
             .function(param_types.iter().copied(), result_types.iter().copied());
         self.functions.function(type_index);
-
-        // Placeholder body — bodies that survive into the emitted
-        // module trap on entry until a later lowering pass overwrites
-        // them. Locals list is empty for now.
-        let mut body = Function::new(core::iter::empty());
-        body.instructions().unreachable().end();
-        self.code.function(&body);
+        self.code.function(body);
 
         func_index
+    }
+
+    /// Declare a function with the given param + result valtypes and a
+    /// placeholder `unreachable` body. Useful for tests and for laying
+    /// down the function-index space before bodies are lowered.
+    pub fn declare_function(&mut self, param_types: &[ValType], result_types: &[ValType]) -> u32 {
+        let mut body = Function::new(core::iter::empty());
+        body.instructions().unreachable().end();
+        self.declare_function_with_body(param_types, result_types, &body)
     }
 
     /// Number of declared functions so far.
