@@ -10,6 +10,7 @@
 //! shared types ([`LowerError`], [`BindingMap`], [`FunctionMap`],
 //! [`LowerContext`]) and the recursive [`lower_expr`] dispatcher.
 
+mod aggregate;
 mod binary_op;
 mod block;
 mod call;
@@ -18,6 +19,7 @@ mod literal;
 mod reference;
 mod unary_op;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use formalang::ast::PrimitiveType;
@@ -28,6 +30,7 @@ use wasm_encoder::InstructionSink;
 use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
+pub use aggregate::lower_struct_inst;
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
 pub use call::lower_function_call;
@@ -267,11 +270,11 @@ impl BindingMap {
 
 /// Context passed through the recursive lowering walkers.
 ///
-/// `bindings` and `functions` are always populated. `module` and
-/// `bump_allocator` are populated by the production module-level
-/// lowering pass; expression-only tests can leave them unset and the
-/// affected lowerings will surface a [`LowerError::MissingContext`]
-/// the moment they're invoked.
+/// `bindings` and `functions` are always populated. `module`,
+/// `bump_allocator`, and `scratch_locals` are populated by the
+/// production module-level lowering pass; expression-only tests can
+/// leave them unset and the affected lowerings will surface a
+/// [`LowerError::MissingContext`] the moment they're invoked.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct LowerContext<'a> {
@@ -286,13 +289,20 @@ pub struct LowerContext<'a> {
     /// Wasm function index of the bump-allocator helper. Aggregate
     /// constructors call this to reserve linear-memory bytes.
     pub bump_allocator: Option<u32>,
+    /// Counter that hands out fresh wasm-local indices reserved as
+    /// scratch slots for aggregate base pointers. The function-body
+    /// pre-walk has already extended `Function::new(locals)` to
+    /// include these; the counter starts past the params + lets and
+    /// increments per aggregate construction visited in lowering
+    /// order.
+    pub scratch_locals: Option<&'a Cell<u32>>,
 }
 
 impl<'a> LowerContext<'a> {
-    /// Bundle the maps a walker needs. `module` and `bump_allocator`
-    /// default to `None`; use [`Self::with_module`] /
-    /// [`Self::with_bump_allocator`] to attach them when the lowering
-    /// path needs aggregates.
+    /// Bundle the maps a walker needs. `module`, `bump_allocator`,
+    /// and `scratch_locals` default to `None`; use the matching
+    /// `with_*` setters to attach them when the lowering path needs
+    /// aggregates.
     #[must_use]
     pub const fn new(bindings: &'a BindingMap, functions: &'a FunctionMap) -> Self {
         Self {
@@ -300,6 +310,7 @@ impl<'a> LowerContext<'a> {
             functions,
             module: None,
             bump_allocator: None,
+            scratch_locals: None,
         }
     }
 
@@ -317,6 +328,13 @@ impl<'a> LowerContext<'a> {
         self
     }
 
+    /// Attach the scratch-local counter.
+    #[must_use]
+    pub const fn with_scratch_locals(mut self, counter: &'a Cell<u32>) -> Self {
+        self.scratch_locals = Some(counter);
+        self
+    }
+
     /// Borrow the IR module or surface
     /// [`LowerError::MissingContext`] if the field is unset.
     pub fn module(&self) -> Result<&'a IrModule, LowerError> {
@@ -330,6 +348,25 @@ impl<'a> LowerContext<'a> {
         self.bump_allocator.ok_or(LowerError::MissingContext {
             what: "bump_allocator",
         })
+    }
+
+    /// Hand out the next scratch wasm-local index. The pre-walk that
+    /// reserved these locals must have counted at least as many
+    /// aggregate constructions as the lowering walker actually visits;
+    /// otherwise we'd be pointing past the end of the function's
+    /// locals table.
+    pub fn next_scratch_local(&self) -> Result<u32, LowerError> {
+        let counter = self.scratch_locals.ok_or(LowerError::MissingContext {
+            what: "scratch_locals",
+        })?;
+        let idx = counter.get();
+        let next = idx
+            .checked_add(1)
+            .ok_or_else(|| LowerError::NotYetImplemented {
+                what: "more than u32::MAX scratch locals in a single function".to_owned(),
+            })?;
+        counter.set(next);
+        Ok(idx)
     }
 }
 
@@ -354,9 +391,10 @@ pub fn lower_expr(
         IrExpr::FunctionCall { .. } => lower_function_call(expr, sink, ctx),
         IrExpr::If { .. } => lower_if(expr, sink, ctx),
 
+        IrExpr::StructInst { .. } => lower_struct_inst(expr, sink, ctx),
+
         IrExpr::SelfFieldRef { .. }
         | IrExpr::FieldAccess { .. }
-        | IrExpr::StructInst { .. }
         | IrExpr::EnumInst { .. }
         | IrExpr::Tuple { .. }
         | IrExpr::Array { .. }

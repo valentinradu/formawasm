@@ -11,7 +11,7 @@ use wasm_encoder::ValType;
 
 use crate::lower::{FunctionMap, LowerError, lower_function_body_in_module};
 use crate::module::ModuleBuilder;
-use crate::types::{TypeMapError, resolved_value_type, result_types};
+use crate::types::{TypeMapError, body_result_types, body_value_type};
 
 /// `(BindingId, ValType)` pair recording one function parameter's
 /// binding identity alongside its wasm value type.
@@ -107,7 +107,7 @@ fn emit_function(
         })?;
 
     let (param_valtypes, param_bindings) = lower_params(f)?;
-    let result_valtypes = result_types(f.return_type.as_ref())?;
+    let result_valtypes = body_result_types(f.return_type.as_ref())?;
 
     let body = lower_function_body_in_module(
         body_expr,
@@ -149,7 +149,7 @@ fn param_value_type(
     ty: &ResolvedType,
     function: &str,
 ) -> Result<ValType, ModuleLowerError> {
-    resolved_value_type(ty)?.ok_or_else(|| ModuleLowerError::MissingParamType {
+    body_value_type(ty)?.ok_or_else(|| ModuleLowerError::MissingParamType {
         function: function.to_owned(),
         name: param.name.clone(),
     })

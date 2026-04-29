@@ -24,6 +24,11 @@ pub const BUMP_ALLOCATOR_ALIGN: u32 = 8;
 /// exported, but kept stable so debug tooling can identify it.
 pub const BUMP_ALLOCATOR_NAME: &str = "__alloc";
 
+/// Export name under which the runtime memory is published. Required
+/// by `wit-component`'s canonical-ABI lifting/lowering and useful for
+/// tests that need to peek at constructed aggregates.
+pub const MEMORY_EXPORT_NAME: &str = "memory";
+
 /// Round-up addend for the bump allocator's alignment math:
 /// `BUMP_ALLOCATOR_ALIGN - 1`. Hardcoded as `i32` to feed
 /// `wasm_encoder::Instruction::i32_const` without going through a
@@ -103,12 +108,15 @@ impl ModuleBuilder {
             &ConstExpr::i32_const(HEAP_BASE),
         );
 
+        let mut exports = ExportSection::new();
+        exports.export(MEMORY_EXPORT_NAME, ExportKind::Memory, MEMORY_INDEX);
+
         Self {
             types: TypeSection::new(),
             functions: FunctionSection::new(),
             memories,
             globals,
-            exports: ExportSection::new(),
+            exports,
             code: CodeSection::new(),
             bump_allocator: None,
         }

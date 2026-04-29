@@ -124,6 +124,19 @@ pub fn result_types(return_ty: Option<&ResolvedType>) -> Result<Vec<ValType>, Ty
     Ok(resolved_value_type(ty)?.map_or_else(Vec::new, |vt| vec![vt]))
 }
 
+/// `body_value_type` analogue of [`result_types`].
+///
+/// Used for the internal core-Wasm function signature where
+/// aggregates appear as `i32` pointers. The WIT boundary is still
+/// validated through the strict [`resolved_value_type`] /
+/// `wit::emit_wit` path.
+pub fn body_result_types(return_ty: Option<&ResolvedType>) -> Result<Vec<ValType>, TypeMapError> {
+    let Some(ty) = return_ty else {
+        return Ok(Vec::new());
+    };
+    Ok(body_value_type(ty)?.map_or_else(Vec::new, |vt| vec![vt]))
+}
+
 /// Map a [`ResolvedType`] to its in-body wasm value type.
 ///
 /// Aggregate types (struct, tuple, enum once it lands) live in linear

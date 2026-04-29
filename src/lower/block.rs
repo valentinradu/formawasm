@@ -1,6 +1,8 @@
 //! Lowering of [`IrExpr::Block`] and the function-body assembler
 //! that plans wasm locals before instruction emission.
 
+use std::cell::Cell;
+
 use formalang::ast::PrimitiveType;
 use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrModule, ResolvedType};
 use wasm_encoder::{Function, InstructionSink, ValType};
@@ -183,7 +185,11 @@ pub fn lower_function_body(
 /// Wires the [`IrModule`] reference and the bump-allocator function
 /// index into the [`LowerContext`]. Aggregate lowerings invoke the
 /// bump allocator and consult the module to look up struct / enum
-/// definitions, so they require this entry point.
+/// definitions, so they require this entry point. Also pre-walks
+/// `body` to count aggregate constructions and reserves one
+/// `i32`-typed scratch local per occurrence so the recursive
+/// lowering can stash each base pointer without clobbering enclosing
+/// constructions.
 pub fn lower_function_body_in_module(
     body: &IrExpr,
     param_bindings: &[(BindingId, ValType)],
@@ -192,10 +198,117 @@ pub fn lower_function_body_in_module(
     bump_allocator: u32,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
+    let scratch_count = count_aggregates(body)?;
+    let scratch_offset = scratch_locals_offset(param_bindings.len(), plan.locals.len())?;
+
+    let mut locals = plan.locals;
+    if scratch_count > 0 {
+        locals.push((scratch_count, ValType::I32));
+    }
+
+    let scratch_counter = Cell::new(scratch_offset);
     let ctx = LowerContext::new(&plan.bindings, functions)
         .with_module(module)
-        .with_bump_allocator(bump_allocator);
-    finish_function_body(body, plan.locals, &ctx)
+        .with_bump_allocator(bump_allocator)
+        .with_scratch_locals(&scratch_counter);
+    finish_function_body(body, locals, &ctx)
+}
+
+fn scratch_locals_offset(params: usize, lets: usize) -> Result<u32, LowerError> {
+    let p = u32::try_from(params).map_err(|_| LowerError::NotYetImplemented {
+        what: "more than u32::MAX parameters in a single function".to_owned(),
+    })?;
+    let l = u32::try_from(lets).map_err(|_| LowerError::NotYetImplemented {
+        what: "more than u32::MAX `let` bindings in a single function".to_owned(),
+    })?;
+    p.checked_add(l)
+        .ok_or_else(|| LowerError::NotYetImplemented {
+            what: "params + lets overflow u32 in a single function".to_owned(),
+        })
+}
+
+fn count_aggregates(expr: &IrExpr) -> Result<u32, LowerError> {
+    let mut n: u32 = 0;
+    walk_count(expr, &mut n)?;
+    Ok(n)
+}
+
+fn bump_count(n: &mut u32) -> Result<(), LowerError> {
+    *n = n
+        .checked_add(1)
+        .ok_or_else(|| LowerError::NotYetImplemented {
+            what: "more than u32::MAX aggregate constructions in a single function".to_owned(),
+        })?;
+    Ok(())
+}
+
+fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
+    match expr {
+        IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
+            bump_count(out)?;
+            for (_, _, e) in fields {
+                walk_count(e, out)?;
+            }
+        }
+        IrExpr::Tuple { fields, .. } => {
+            bump_count(out)?;
+            for (_, e) in fields {
+                walk_count(e, out)?;
+            }
+        }
+        IrExpr::Block {
+            statements, result, ..
+        } => {
+            for stmt in statements {
+                match stmt {
+                    IrBlockStatement::Let { value, .. } => walk_count(value, out)?,
+                    IrBlockStatement::Assign { target, value } => {
+                        walk_count(target, out)?;
+                        walk_count(value, out)?;
+                    }
+                    IrBlockStatement::Expr(e) => walk_count(e, out)?,
+                }
+            }
+            walk_count(result, out)?;
+        }
+        IrExpr::BinaryOp { left, right, .. } => {
+            walk_count(left, out)?;
+            walk_count(right, out)?;
+        }
+        IrExpr::UnaryOp { operand, .. } => walk_count(operand, out)?,
+        IrExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            walk_count(condition, out)?;
+            walk_count(then_branch, out)?;
+            if let Some(else_branch) = else_branch {
+                walk_count(else_branch, out)?;
+            }
+        }
+        IrExpr::FunctionCall { args, .. } => {
+            for (_, arg) in args {
+                walk_count(arg, out)?;
+            }
+        }
+        IrExpr::FieldAccess { object, .. } => walk_count(object, out)?,
+
+        IrExpr::Literal { .. }
+        | IrExpr::Reference { .. }
+        | IrExpr::LetRef { .. }
+        | IrExpr::SelfFieldRef { .. }
+        | IrExpr::Array { .. }
+        | IrExpr::For { .. }
+        | IrExpr::Match { .. }
+        | IrExpr::MethodCall { .. }
+        | IrExpr::Closure { .. }
+        | IrExpr::ClosureRef { .. }
+        | IrExpr::DictLiteral { .. }
+        | IrExpr::DictAccess { .. } => {}
+    }
+    Ok(())
 }
 
 /// Pre-computed bindings + per-let local types for a function body.
