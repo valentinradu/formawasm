@@ -8,6 +8,7 @@
 mod backend;
 pub mod lower;
 pub mod module;
+pub mod module_lowering;
 pub mod preflight;
 pub mod survey;
 pub mod types;
@@ -15,6 +16,7 @@ pub mod types;
 pub use backend::{WasmBackend, WasmBackendError};
 pub use lower::{BindingMap, FunctionMap, LowerContext, LowerError};
 pub use module::ModuleBuilder;
+pub use module_lowering::{ModuleLowerError, lower_module};
 pub use preflight::PreflightError;
 pub use survey::PublicSurface;
 pub use types::TypeMapError;

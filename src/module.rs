@@ -8,8 +8,8 @@
 //! [`ModuleBuilder::finish`] emits the byte-encoded module.
 
 use wasm_encoder::{
-    CodeSection, ConstExpr, Function, FunctionSection, GlobalSection, GlobalType, MemorySection,
-    MemoryType, Module, TypeSection, ValType,
+    CodeSection, ConstExpr, ExportKind, ExportSection, Function, FunctionSection, GlobalSection,
+    GlobalType, MemorySection, MemoryType, Module, TypeSection, ValType,
 };
 
 /// Index of the single linear memory the runtime uses for all heap
@@ -38,6 +38,7 @@ pub struct ModuleBuilder {
     functions: FunctionSection,
     memories: MemorySection,
     globals: GlobalSection,
+    exports: ExportSection,
     code: CodeSection,
 }
 
@@ -76,8 +77,14 @@ impl ModuleBuilder {
             functions: FunctionSection::new(),
             memories,
             globals,
+            exports: ExportSection::new(),
             code: CodeSection::new(),
         }
+    }
+
+    /// Export a previously-declared function under `name`.
+    pub fn export_function(&mut self, name: &str, function_index: u32) {
+        self.exports.export(name, ExportKind::Func, function_index);
     }
 
     /// Declare a function with the given param + result valtypes and a
@@ -131,6 +138,9 @@ impl ModuleBuilder {
         }
         module.section(&self.memories);
         module.section(&self.globals);
+        if !self.exports.is_empty() {
+            module.section(&self.exports);
+        }
         if !self.code.is_empty() {
             module.section(&self.code);
         }
