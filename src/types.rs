@@ -123,3 +123,57 @@ pub fn result_types(return_ty: Option<&ResolvedType>) -> Result<Vec<ValType>, Ty
     };
     Ok(resolved_value_type(ty)?.map_or_else(Vec::new, |vt| vec![vt]))
 }
+
+/// Map a [`ResolvedType`] to its in-body wasm value type.
+///
+/// Aggregate types (struct, tuple, enum once it lands) live in linear
+/// memory and are passed around as `i32` pointers, so they map to
+/// [`ValType::I32`]. Primitives map the same way as
+/// [`resolved_value_type`]; the strict version is reserved for the
+/// WIT boundary, where aggregate-as-pointer would lie about the
+/// component-model surface.
+///
+/// `Ok(None)` represents `Never` (no value carried).
+pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapError> {
+    // Pre-1b-mc4 the enum layout doesn't exist yet, but as soon as it
+    // lands the storage will also be a pointer, so we map it eagerly
+    // alongside `Struct` / `Tuple` for forward-compatibility — the
+    // aggregate lowerings still gate behind their own
+    // `NotYetImplemented` until each lands.
+    match ty {
+        ResolvedType::Primitive(p) => primitive_value_type(*p),
+        ResolvedType::Struct(_) | ResolvedType::Tuple(_) | ResolvedType::Enum(_) => {
+            Ok(Some(ValType::I32))
+        }
+        ResolvedType::Trait(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Trait".to_owned(),
+        }),
+        ResolvedType::Array(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Array<T>".to_owned(),
+        }),
+        ResolvedType::Range(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Range<T>".to_owned(),
+        }),
+        ResolvedType::Optional(_) => Err(TypeMapError::NotYetSupported {
+            kind: "Optional<T>".to_owned(),
+        }),
+        ResolvedType::Generic { .. } => Err(TypeMapError::NotYetSupported {
+            kind: "Generic".to_owned(),
+        }),
+        ResolvedType::TypeParam(name) => Err(TypeMapError::NotYetSupported {
+            kind: format!("TypeParam({name})"),
+        }),
+        ResolvedType::External { name, .. } => Err(TypeMapError::NotYetSupported {
+            kind: format!("External({name})"),
+        }),
+        ResolvedType::Dictionary { .. } => Err(TypeMapError::NotYetSupported {
+            kind: "Dictionary<K, V>".to_owned(),
+        }),
+        ResolvedType::Closure { .. } => Err(TypeMapError::NotYetSupported {
+            kind: "Closure".to_owned(),
+        }),
+        ResolvedType::Error => Err(TypeMapError::NotYetSupported {
+            kind: "Error".to_owned(),
+        }),
+    }
+}

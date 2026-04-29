@@ -2,11 +2,11 @@
 //! that plans wasm locals before instruction emission.
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, ResolvedType};
+use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrModule, ResolvedType};
 use wasm_encoder::{Function, InstructionSink, ValType};
 
 use super::{BindingMap, FunctionMap, LowerContext, LowerError, lower_expr};
-use crate::types::resolved_value_type;
+use crate::types::body_value_type;
 
 /// Lower an [`IrExpr::Block`] onto `sink`. Statements run in order;
 /// the result expression's value becomes the block's value (left on
@@ -90,7 +90,7 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
                         ..
                     } => {
                         let resolved = ty.as_ref().unwrap_or_else(|| value.ty());
-                        let vt = resolved_value_type(resolved)?.ok_or_else(|| {
+                        let vt = body_value_type(resolved)?.ok_or_else(|| {
                             LowerError::ZeroSizedLetBinding {
                                 name: name.clone(),
                                 ty: resolved.clone(),
@@ -162,11 +162,52 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
 /// lowers the body and emits the closing `end`. `functions` carries
 /// the module-level `FunctionId` -> wasm-index map; pass an empty
 /// [`FunctionMap`] when the body makes no calls.
+///
+/// This entry point omits the [`IrModule`] reference and the bump-
+/// allocator function index, so any aggregate lowering inside `body`
+/// will surface a [`LowerError::MissingContext`]. Use
+/// [`lower_function_body_in_module`] when the body can construct
+/// structs / tuples / enums.
 pub fn lower_function_body(
     body: &IrExpr,
     param_bindings: &[(BindingId, ValType)],
     functions: &FunctionMap,
 ) -> Result<Function, LowerError> {
+    let plan = plan_function_locals(body, param_bindings)?;
+    let ctx = LowerContext::new(&plan.bindings, functions);
+    finish_function_body(body, plan.locals, &ctx)
+}
+
+/// Module-aware variant of [`lower_function_body`].
+///
+/// Wires the [`IrModule`] reference and the bump-allocator function
+/// index into the [`LowerContext`]. Aggregate lowerings invoke the
+/// bump allocator and consult the module to look up struct / enum
+/// definitions, so they require this entry point.
+pub fn lower_function_body_in_module(
+    body: &IrExpr,
+    param_bindings: &[(BindingId, ValType)],
+    functions: &FunctionMap,
+    module: &IrModule,
+    bump_allocator: u32,
+) -> Result<Function, LowerError> {
+    let plan = plan_function_locals(body, param_bindings)?;
+    let ctx = LowerContext::new(&plan.bindings, functions)
+        .with_module(module)
+        .with_bump_allocator(bump_allocator);
+    finish_function_body(body, plan.locals, &ctx)
+}
+
+/// Pre-computed bindings + per-let local types for a function body.
+struct FunctionPlan {
+    bindings: BindingMap,
+    locals: Vec<(u32, ValType)>,
+}
+
+fn plan_function_locals(
+    body: &IrExpr,
+    param_bindings: &[(BindingId, ValType)],
+) -> Result<FunctionPlan, LowerError> {
     let local_bindings = collect_local_bindings(body)?;
 
     let mut binding_map = BindingMap::new();
@@ -179,12 +220,22 @@ pub fn lower_function_body(
         binding_map.insert(*id, idx);
     }
 
-    let ctx = LowerContext::new(&binding_map, functions);
     let locals: Vec<(u32, ValType)> = local_bindings.iter().map(|(_, vt)| (1, *vt)).collect();
+    Ok(FunctionPlan {
+        bindings: binding_map,
+        locals,
+    })
+}
+
+fn finish_function_body(
+    body: &IrExpr,
+    locals: Vec<(u32, ValType)>,
+    ctx: &LowerContext<'_>,
+) -> Result<Function, LowerError> {
     let mut func = Function::new(locals);
     {
         let sink = &mut func.instructions();
-        lower_expr(body, sink, &ctx)?;
+        lower_expr(body, sink, ctx)?;
         sink.end();
     }
     Ok(func)

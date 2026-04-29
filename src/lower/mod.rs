@@ -21,14 +21,15 @@ mod unary_op;
 use std::collections::HashMap;
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{BindingId, FunctionId, IrExpr, ResolvedType};
+use formalang::ir::{BindingId, FunctionId, IrExpr, IrModule, ResolvedType};
 use thiserror::Error;
 use wasm_encoder::InstructionSink;
 
+use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
 pub use binary_op::lower_binary_op;
-pub use block::{lower_block, lower_function_body};
+pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
 pub use call::lower_function_call;
 pub use control::lower_if;
 pub use literal::lower_literal;
@@ -129,6 +130,57 @@ pub enum LowerError {
         /// Source-level path of the call (e.g. `["math", "sin"]`).
         path: Vec<String>,
     },
+
+    /// A lowering needs an [`LowerContext`] field that is not set —
+    /// typically the [`IrModule`] reference (for struct/enum lookups)
+    /// or the bump-allocator function index. Surfaced when an
+    /// aggregate lowering runs through a context built for the
+    /// expression-only test path.
+    #[error("LowerContext is missing the {what} field required for this lowering")]
+    MissingContext {
+        /// Static tag identifying the missing field.
+        what: &'static str,
+    },
+
+    /// A `StructInst` carries `struct_id = None`, which means it
+    /// instantiates an external (cross-module) struct. External
+    /// references land in Phase 4.
+    #[error("StructInst targets an external struct (struct_id = None) — Phase 4")]
+    ExternalStructInst,
+
+    /// A struct's layout could not be planned — see the wrapped
+    /// [`LayoutError`] for the underlying cause.
+    #[error(transparent)]
+    Layout(#[from] LayoutError),
+
+    /// A `FieldAccess` references a field index past the end of its
+    /// containing struct's `fields` vector. Indicates an upstream
+    /// invariant violation.
+    #[error(
+        "field index {field_idx} is out of range for struct '{struct_name}' ({field_count} fields)"
+    )]
+    FieldIndexOutOfRange {
+        /// Source-level struct name.
+        struct_name: String,
+        /// Number of fields actually in the struct.
+        field_count: usize,
+        /// The offending field index.
+        field_idx: u32,
+    },
+
+    /// A `FieldAccess`'s `object` expression has a non-aggregate type
+    /// (e.g. a primitive). This means the type-checker accepted a
+    /// field access on something that has no fields.
+    #[error("field access on non-aggregate type {ty:?} — type-checker should have rejected this")]
+    FieldAccessOnNonAggregate {
+        /// The offending object's resolved type.
+        ty: ResolvedType,
+    },
+
+    /// A `StructInst` was given a `struct_id` that the module's
+    /// `structs` vector does not contain. Indicates corrupt IR.
+    #[error("StructId {0:?} is not present in IrModule.structs")]
+    UnknownStruct(formalang::ir::StructId),
 }
 
 /// Mapping from a module-scope `FunctionId` to its wasm function
@@ -213,9 +265,13 @@ impl BindingMap {
     }
 }
 
-/// Context passed through the recursive lowering walkers. Bundles
-/// the binding and function maps so the walkers don't grow a longer
-/// argument list as more resolved-id maps appear.
+/// Context passed through the recursive lowering walkers.
+///
+/// `bindings` and `functions` are always populated. `module` and
+/// `bump_allocator` are populated by the production module-level
+/// lowering pass; expression-only tests can leave them unset and the
+/// affected lowerings will surface a [`LowerError::MissingContext`]
+/// the moment they're invoked.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct LowerContext<'a> {
@@ -223,16 +279,57 @@ pub struct LowerContext<'a> {
     pub bindings: &'a BindingMap,
     /// Module-scope function indices.
     pub functions: &'a FunctionMap,
+    /// Reference to the IR module being lowered. Aggregate lowerings
+    /// (`StructInst`, `FieldAccess`, `EnumInst`, `Match`, …) need it
+    /// to look up struct / enum definitions for layout planning.
+    pub module: Option<&'a IrModule>,
+    /// Wasm function index of the bump-allocator helper. Aggregate
+    /// constructors call this to reserve linear-memory bytes.
+    pub bump_allocator: Option<u32>,
 }
 
 impl<'a> LowerContext<'a> {
-    /// Bundle the maps a walker needs.
+    /// Bundle the maps a walker needs. `module` and `bump_allocator`
+    /// default to `None`; use [`Self::with_module`] /
+    /// [`Self::with_bump_allocator`] to attach them when the lowering
+    /// path needs aggregates.
     #[must_use]
     pub const fn new(bindings: &'a BindingMap, functions: &'a FunctionMap) -> Self {
         Self {
             bindings,
             functions,
+            module: None,
+            bump_allocator: None,
         }
+    }
+
+    /// Attach the IR-module reference used for struct/enum lookups.
+    #[must_use]
+    pub const fn with_module(mut self, module: &'a IrModule) -> Self {
+        self.module = Some(module);
+        self
+    }
+
+    /// Attach the bump-allocator helper's wasm function index.
+    #[must_use]
+    pub const fn with_bump_allocator(mut self, idx: u32) -> Self {
+        self.bump_allocator = Some(idx);
+        self
+    }
+
+    /// Borrow the IR module or surface
+    /// [`LowerError::MissingContext`] if the field is unset.
+    pub fn module(&self) -> Result<&'a IrModule, LowerError> {
+        self.module
+            .ok_or(LowerError::MissingContext { what: "module" })
+    }
+
+    /// Return the bump-allocator function index or surface
+    /// [`LowerError::MissingContext`] if the field is unset.
+    pub fn bump_allocator(&self) -> Result<u32, LowerError> {
+        self.bump_allocator.ok_or(LowerError::MissingContext {
+            what: "bump_allocator",
+        })
     }
 }
 

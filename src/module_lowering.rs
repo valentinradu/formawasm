@@ -9,7 +9,7 @@
 use formalang::ir::{BindingId, FunctionId, IrFunction, IrFunctionParam, IrModule, ResolvedType};
 use wasm_encoder::ValType;
 
-use crate::lower::{FunctionMap, LowerError, lower_function_body};
+use crate::lower::{FunctionMap, LowerError, lower_function_body_in_module};
 use crate::module::ModuleBuilder;
 use crate::types::{TypeMapError, resolved_value_type, result_types};
 
@@ -58,22 +58,31 @@ pub enum ModuleLowerError {
 
 /// Walk `module` and return the encoded core-Wasm bytes.
 ///
-/// Top-level non-extern functions are emitted in declaration order;
-/// each function's wasm index equals its position in
-/// `module.functions` (since Phase 1a has no imports). Nested
-/// `module.modules` and `module.impls` are not yet walked — they
-/// land in Phase 1b alongside method dispatch.
+/// Top-level non-extern functions are emitted after the bump-
+/// allocator runtime helper, so `FunctionId(i)` maps to wasm index
+/// `i + 1` (the helper occupies wasm index 0). [`FunctionMap`] hides
+/// that offset from call-site lowerings.
+///
+/// Nested `module.modules` and `module.impls` are not yet walked —
+/// they land in Phase 1b alongside method dispatch.
 pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
-    let mut function_map = FunctionMap::new();
+    let mut builder = ModuleBuilder::new();
+    let bump_idx = builder.declare_bump_allocator();
+    let user_offset = bump_idx
+        .checked_add(1)
+        .ok_or(ModuleLowerError::TooManyFunctions)?;
 
+    let mut function_map = FunctionMap::new();
     for (i, _) in module.functions.iter().enumerate() {
-        let wasm_idx = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
-        function_map.insert(FunctionId(wasm_idx), wasm_idx);
+        let id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        let wasm_idx = id_raw
+            .checked_add(user_offset)
+            .ok_or(ModuleLowerError::TooManyFunctions)?;
+        function_map.insert(FunctionId(id_raw), wasm_idx);
     }
 
-    let mut builder = ModuleBuilder::new();
     for f in &module.functions {
-        emit_function(f, &mut builder, &function_map)?;
+        emit_function(f, &mut builder, &function_map, module, bump_idx)?;
     }
     Ok(builder.finish())
 }
@@ -82,6 +91,8 @@ fn emit_function(
     f: &IrFunction,
     builder: &mut ModuleBuilder,
     function_map: &FunctionMap,
+    module: &IrModule,
+    bump_allocator: u32,
 ) -> Result<(), ModuleLowerError> {
     if f.is_extern() {
         return Err(ModuleLowerError::ExternFunction {
@@ -98,7 +109,13 @@ fn emit_function(
     let (param_valtypes, param_bindings) = lower_params(f)?;
     let result_valtypes = result_types(f.return_type.as_ref())?;
 
-    let body = lower_function_body(body_expr, &param_bindings, function_map)?;
+    let body = lower_function_body_in_module(
+        body_expr,
+        &param_bindings,
+        function_map,
+        module,
+        bump_allocator,
+    )?;
     let wasm_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
     // Phase 1a: every non-extern top-level function is exported by
     // its source-level name. Survey-driven export filtering lands
