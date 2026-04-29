@@ -6,7 +6,9 @@
 //! function body and plugs it into a fresh `ModuleBuilder` before
 //! returning the encoded module bytes.
 
-use formalang::ir::{BindingId, FunctionId, IrFunction, IrFunctionParam, IrModule, ResolvedType};
+use formalang::ir::{
+    BindingId, FunctionId, IrFunction, IrFunctionParam, IrModule, ResolvedType, StructId,
+};
 use wasm_encoder::ValType;
 
 use crate::lower::{FunctionMap, LowerError, lower_function_body_in_module};
@@ -109,12 +111,14 @@ fn emit_function(
     let (param_valtypes, param_bindings) = lower_params(f)?;
     let result_valtypes = body_result_types(f.return_type.as_ref())?;
 
+    let self_struct_id = detect_self_struct(f);
     let body = lower_function_body_in_module(
         body_expr,
         &param_bindings,
         function_map,
         module,
         bump_allocator,
+        self_struct_id,
     )?;
     let wasm_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
     // Phase 1a: every non-extern top-level function is exported by
@@ -122,6 +126,36 @@ fn emit_function(
     // alongside WIT generation in the next mc.
     builder.export_function(&f.name, wasm_idx);
     Ok(())
+}
+
+/// Identify the enclosing impl's struct id when `f` is a method.
+///
+/// Phase 1b mc7 detects methods purely by shape: the first parameter
+/// is named `self` and has a `ResolvedType::Struct(_)` type. Once impl
+/// walking lands the right answer will come from the surrounding
+/// `IrImpl`, but for now this is enough to lower `SelfFieldRef`
+/// inside hand-built `module.functions` test fixtures.
+fn detect_self_struct(f: &IrFunction) -> Option<StructId> {
+    let first = f.params.first()?;
+    if first.name != "self" {
+        return None;
+    }
+    match first.ty.as_ref()? {
+        ResolvedType::Struct(id) => Some(*id),
+        ResolvedType::Primitive(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => None,
+    }
 }
 
 fn lower_params(f: &IrFunction) -> Result<(Vec<ValType>, Vec<ParamBinding>), ModuleLowerError> {

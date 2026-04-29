@@ -4,7 +4,7 @@
 use std::cell::Cell;
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrModule, ResolvedType};
+use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrModule, ResolvedType, StructId};
 use wasm_encoder::{Function, InstructionSink, ValType};
 
 use super::{BindingMap, FunctionMap, LowerContext, LowerError, lower_expr};
@@ -221,6 +221,7 @@ pub fn lower_function_body_in_module(
     functions: &FunctionMap,
     module: &IrModule,
     bump_allocator: u32,
+    self_struct_id: Option<StructId>,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
     let scratch_count = count_aggregates(body)?;
@@ -232,10 +233,13 @@ pub fn lower_function_body_in_module(
     }
 
     let scratch_counter = Cell::new(scratch_offset);
-    let ctx = LowerContext::new(&plan.bindings, functions)
+    let mut ctx = LowerContext::new(&plan.bindings, functions)
         .with_module(module)
         .with_bump_allocator(bump_allocator)
         .with_scratch_locals(&scratch_counter);
+    if let Some(id) = self_struct_id {
+        ctx = ctx.with_self_struct_id(id);
+    }
     finish_function_body(body, locals, &ctx)
 }
 

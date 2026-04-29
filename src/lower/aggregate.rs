@@ -311,6 +311,51 @@ pub fn lower_tuple(
     Ok(())
 }
 
+/// Lower [`IrExpr::SelfFieldRef`].
+///
+/// Reads the field at the resolved offset through `self`, which lives
+/// at wasm-local 0 (the implicit first parameter on every method).
+/// The enclosing impl's struct id comes from
+/// [`LowerContext::self_struct_id`]; the field's primitive type comes
+/// from the carried `ty`.
+pub fn lower_self_field_ref(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::SelfFieldRef {
+        field, field_idx, ..
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_self_field_ref called with non-SelfFieldRef expression".to_owned(),
+        });
+    };
+
+    let struct_id = ctx.self_struct_id.ok_or(LowerError::MissingSelfStruct)?;
+    let module = ctx.module()?;
+    let s = module
+        .structs
+        .get(struct_id.0 as usize)
+        .ok_or(LowerError::UnknownStruct(struct_id))?;
+    let layout = plan_struct(s, module)?;
+
+    let idx = field_idx.0 as usize;
+    let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
+        && let Some(fd) = s.fields.get(idx)
+    {
+        (fl, fd)
+    } else {
+        lookup_field_by_name(s, &layout.fields, field)?
+    };
+
+    let primitive = primitive_of(&field_def.ty)?;
+    // `self` is the first wasm parameter — local index 0.
+    sink.local_get(0);
+    load_primitive(primitive, *field_layout, sink);
+    Ok(())
+}
+
 /// Lower [`IrExpr::FieldAccess`].
 ///
 /// Evaluates `object` to leave its base pointer on the stack, then

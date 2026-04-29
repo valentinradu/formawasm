@@ -23,14 +23,16 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{BindingId, FunctionId, IrExpr, IrModule, ResolvedType};
+use formalang::ir::{BindingId, FunctionId, IrExpr, IrModule, ResolvedType, StructId};
 use thiserror::Error;
 use wasm_encoder::InstructionSink;
 
 use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
-pub use aggregate::{lower_enum_inst, lower_field_access, lower_struct_inst, lower_tuple};
+pub use aggregate::{
+    lower_enum_inst, lower_field_access, lower_self_field_ref, lower_struct_inst, lower_tuple,
+};
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
 pub use call::lower_function_call;
@@ -206,6 +208,12 @@ pub enum LowerError {
         /// Source-level variant name.
         variant: String,
     },
+
+    /// A `SelfFieldRef` was lowered without a [`LowerContext::self_struct_id`]
+    /// set. Means the function is not a method of any struct, but its
+    /// body uses `self.field` — an upstream invariant violation.
+    #[error("SelfFieldRef encountered in a function with no `self` struct context")]
+    MissingSelfStruct,
 }
 
 /// Mapping from a module-scope `FunctionId` to its wasm function
@@ -318,6 +326,12 @@ pub struct LowerContext<'a> {
     /// increments per aggregate construction visited in lowering
     /// order.
     pub scratch_locals: Option<&'a Cell<u32>>,
+    /// Struct that defines the enclosing impl, if the function being
+    /// lowered is a method. `SelfFieldRef` lowering plans this
+    /// struct's layout to translate field-name accesses into linear-
+    /// memory loads through the implicit `self: i32` parameter at
+    /// wasm-local 0.
+    pub self_struct_id: Option<StructId>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -333,6 +347,7 @@ impl<'a> LowerContext<'a> {
             module: None,
             bump_allocator: None,
             scratch_locals: None,
+            self_struct_id: None,
         }
     }
 
@@ -354,6 +369,14 @@ impl<'a> LowerContext<'a> {
     #[must_use]
     pub const fn with_scratch_locals(mut self, counter: &'a Cell<u32>) -> Self {
         self.scratch_locals = Some(counter);
+        self
+    }
+
+    /// Attach the enclosing impl's struct id for `SelfFieldRef`
+    /// lookups.
+    #[must_use]
+    pub const fn with_self_struct_id(mut self, id: StructId) -> Self {
+        self.self_struct_id = Some(id);
         self
     }
 
@@ -418,9 +441,9 @@ pub fn lower_expr(
         IrExpr::Tuple { .. } => lower_tuple(expr, sink, ctx),
         IrExpr::EnumInst { .. } => lower_enum_inst(expr, sink, ctx),
         IrExpr::Match { .. } => lower_match(expr, sink, ctx),
+        IrExpr::SelfFieldRef { .. } => lower_self_field_ref(expr, sink, ctx),
 
-        IrExpr::SelfFieldRef { .. }
-        | IrExpr::Array { .. }
+        IrExpr::Array { .. }
         | IrExpr::For { .. }
         | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
