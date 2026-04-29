@@ -22,7 +22,28 @@ first, then come back here for the "what to do now" view.
 - ✅ Phase 1a mc1–mc5: deps, pre-flight checks, public-surface survey, primitive type mapping, module skeleton.
 - ✅ Phase 1a mc6+: function-signature emission, every Phase 1a expression lowering (`Literal`, `Reference`, `LetRef`, `BinaryOp`, `UnaryOp`, `Block`, `Let`, direct `FunctionCall`, `If`), module-level walker (`lower_module`), WIT generation for primitive-only signatures, `wit-component` wrap, full pipeline wired through `WasmBackend::generate`. **Fibonacci milestone hit**: a recursive `fib` function compiled via the public `Backend::generate` entry point validates as a Component-Model artifact and computes correct values when instantiated under wasmtime's component runtime.
 
-- ⏳ **Phase 1b in progress**: aggregates, methods, calling conventions. See README's "Roadmap" for the full microcommit list; the immediate-work section below tracks the current mc.
+**Phase 1b is COMPLETE** (closed out 2026-04-29):
+
+- ✅ mc1: `IrStruct` memory-layout planner.
+- ✅ mc2: Bump-allocator runtime helper (`__alloc(size: i32) -> i32`).
+- ✅ mc3 (split into a-d): `StructInst`, `FieldAccess`, `Tuple` lowering. Aggregates live in linear memory; the function-body planner reserves an `i32` scratch local per construction so nested allocations don't clobber each other.
+- ✅ mc4: `IrEnum` memory-layout planner (uniform-size variants, `i32` discriminant tag at offset 0, payload aligned).
+- ✅ mc5: `EnumInst` lowering (alloc + tag store + variant-specific field stores).
+- ✅ mc6: `Match` via `br_table` on the discriminant tag, with payload-binding extraction into wasm locals.
+- ✅ mc7: `SelfFieldRef` reads through wasm-local 0 (the implicit self pointer) plus `LowerContext::self_struct_id` for layout lookup.
+- ✅ mc8: `MethodCall` static dispatch + impl walking. `lower_module` now walks `module.impls` and registers each method in a `MethodMap` keyed on `(ImplId, MethodIdx)`.
+- ✅ mc9: `IrBlockStatement::Assign` for `SelfFieldRef` and `FieldAccess` targets (so methods with `mut self` can mutate fields).
+- ✅ mc10: `ParamConvention::Sink` / `ParamConvention::Mut` confirmed to lower as `Let` for aggregates (pointer pass-through).
+- ✅ mc11: `ClosureRef` materializes a `(i32 funcref, i32 env_ptr)` pair in linear memory. Indirect invocation via a funcref table is still deferred — Phase 1c+.
+- ✅ mc12: WIT mapping `IrStruct` → `record`, `IrEnum` → `variant` (kebab-cased identifiers, unit and single-payload arms, multi-field variants surface as `NotYetSupported`). Round-trips through `wit_parser::Resolve`.
+
+**Phase 1b deferred:** the formal "milestone test" combining all of the
+above into one program. Each mc has its own end-to-end test under
+`tests/`, so the composition is exercised piecewise; a unified
+program test is straightforward to add but not currently committed.
+Indirect closure invocation also remains for Phase 1c.
+
+- ⏳ **Phase 1c next**: collections (`Array<T>`, `Range<T>`), `For`-loop lowering, WIT lists. Sieve-of-Eratosthenes is the milestone.
 
 > **Quality bar.** This repo mirrors the lint / CI / build setup at
 > `~/projects/smid/smid-ws0` — strict clippy (deny `unwrap_used`,
@@ -96,40 +117,32 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-## Immediate work — Phase 1b mc1: `IrStruct` memory-layout planner
+## Immediate work — Phase 1c mc1: `Array<T>` memory-layout planner
 
-The first 1b mc lands a pure-data-structure pass that decides where
-every `IrStruct` field lives in linear memory. Nothing emits code yet
-— this just produces the layout information later mcs will consume
-(bump-allocator, `StructInst`, `FieldAccess`, `Tuple`, env-struct
-materialization for `ClosureRef`).
+The first 1c mc lands the linear-memory layout for arrays: a fixed
+`{ ptr: i32, len: i32, cap: i32 }` header that points at a separately-
+allocated element buffer. Nothing emits code yet — this just produces
+the layout information later mcs (`Array` literal lowering, `For`
+loop, WIT `list<T>` mapping) will consume.
 
 **Scope**
 
-- New module `src/layout.rs` (or `src/struct_layout.rs`).
-- `pub struct StructLayout { pub size: u32, pub align: u32, pub fields: Vec<FieldLayout> }`.
-- `pub struct FieldLayout { pub offset: u32, pub size: u32, pub align: u32 }`.
-- `pub fn plan_struct(s: &IrStruct, module: &IrModule) -> Result<StructLayout, LayoutError>`.
-- ABI: follow Component-Model canonical ABI sizes/aligns for primitives — `bool` = 1/1, `s32`/`f32` = 4/4, `s64`/`f64` = 8/8. Each field starts at the next offset rounded up to its alignment; total size is rounded up to the struct's alignment (max of field alignments, min 1).
-- For Phase 1b mc1 the supported field types are *primitives only*; nested structs / enums / arrays / tuples surface as `LayoutError::NotYetSupported`. Later mcs extend coverage as their lowerings land.
+- Extend `src/layout.rs` with `pub struct ArrayLayout { pub header_size: u32, pub header_align: u32, pub element_size: u32, pub element_align: u32 }`.
+- `pub fn plan_array(elem: &ResolvedType, module: &IrModule) -> Result<ArrayLayout, LayoutError>`.
+- Header is always 12 bytes / 4-aligned: `ptr` at offset 0, `len` at 4, `cap` at 8.
+- Element size/align comes from `type_size_align`; aggregate elements (Phase 1c+ mcs) carry pointer-sized headers (`{ size: 4, align: 4 }`) since aggregates live as `i32` pointers in our linear-memory model.
 
-**Tests** (in `tests/layout.rs`, smid-style `TestResult`)
+**Tests**
 
-- empty struct → size 0, align 1.
-- single `s32` field → size 4, align 4, offset 0.
-- two `s32` fields → size 8, align 4, offsets 0 and 4.
-- `s32, s64` → size 16, align 8, offsets 0 and 8 (4-byte gap to align the i64).
-- `bool, s32` → size 8, align 4, offsets 0 and 4 (3-byte gap).
-- `bool, bool, s32` → size 8, align 4, offsets 0, 1, 4.
-- `s64, s32` → size 16, align 8, offsets 0 and 8 (trailing pad to 16).
-- nested struct field → `LayoutError::NotYetSupported`.
+- `Array<I32>` → element size/align 4/4.
+- `Array<I64>` → element size/align 8/8.
+- `Array<Boolean>` → element size/align 1/1.
+- `Array<Pair>` (struct element) → element size/align 4/4 (pointer).
+- `Array<Never>` → `LayoutError::NotYetSupported`.
 
-**Verify**: `cargo build` + `cargo clippy --all-targets -- -D warnings`
-+ `cargo test` green.
-
-After mc1 lands, the next mc emits a bump-allocator runtime helper
-(`__alloc(size: i32) -> i32` over the heap-pointer global) so that
-`StructInst` lowering in the following mc can call it.
+After mc1 lands, the next mc emits the actual `Array` literal lowering
+that allocates the header + element buffer and walks the literal's
+elements.
 
 ---
 
