@@ -7,7 +7,7 @@ use formalang::ast::PrimitiveType;
 use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrModule, ResolvedType, StructId};
 use wasm_encoder::{Function, InstructionSink, ValType};
 
-use super::{BindingMap, FunctionMap, LowerContext, LowerError, lower_expr};
+use super::{BindingMap, FunctionMap, LowerContext, LowerError, MethodMap, lower_expr};
 use crate::types::body_value_type;
 
 /// Lower an [`IrExpr::Block`] onto `sink`. Statements run in order;
@@ -77,37 +77,44 @@ fn collect_local_bindings(expr: &IrExpr) -> Result<Vec<(BindingId, ValType)>, Lo
     Ok(out)
 }
 
+fn walk_block_statements(
+    statements: &[IrBlockStatement],
+    out: &mut Vec<(BindingId, ValType)>,
+) -> Result<(), LowerError> {
+    for stmt in statements {
+        match stmt {
+            IrBlockStatement::Let {
+                binding_id,
+                name,
+                value,
+                ty,
+                ..
+            } => {
+                let resolved = ty.as_ref().unwrap_or_else(|| value.ty());
+                let vt =
+                    body_value_type(resolved)?.ok_or_else(|| LowerError::ZeroSizedLetBinding {
+                        name: name.clone(),
+                        ty: resolved.clone(),
+                    })?;
+                out.push((*binding_id, vt));
+                walk_for_locals(value, out)?;
+            }
+            IrBlockStatement::Assign { target, value } => {
+                walk_for_locals(target, out)?;
+                walk_for_locals(value, out)?;
+            }
+            IrBlockStatement::Expr(e) => walk_for_locals(e, out)?,
+        }
+    }
+    Ok(())
+}
+
 fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result<(), LowerError> {
     match expr {
         IrExpr::Block {
             statements, result, ..
         } => {
-            for stmt in statements {
-                match stmt {
-                    IrBlockStatement::Let {
-                        binding_id,
-                        name,
-                        value,
-                        ty,
-                        ..
-                    } => {
-                        let resolved = ty.as_ref().unwrap_or_else(|| value.ty());
-                        let vt = body_value_type(resolved)?.ok_or_else(|| {
-                            LowerError::ZeroSizedLetBinding {
-                                name: name.clone(),
-                                ty: resolved.clone(),
-                            }
-                        })?;
-                        out.push((*binding_id, vt));
-                        walk_for_locals(value, out)?;
-                    }
-                    IrBlockStatement::Assign { target, value } => {
-                        walk_for_locals(target, out)?;
-                        walk_for_locals(value, out)?;
-                    }
-                    IrBlockStatement::Expr(e) => walk_for_locals(e, out)?,
-                }
-            }
+            walk_block_statements(statements, out)?;
             walk_for_locals(result, out)
         }
 
@@ -130,6 +137,13 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
             Ok(())
         }
         IrExpr::FunctionCall { args, .. } => {
+            for (_, arg) in args {
+                walk_for_locals(arg, out)?;
+            }
+            Ok(())
+        }
+        IrExpr::MethodCall { receiver, args, .. } => {
+            walk_for_locals(receiver, out)?;
             for (_, arg) in args {
                 walk_for_locals(arg, out)?;
             }
@@ -173,7 +187,6 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
-        | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }
         | IrExpr::DictLiteral { .. }
@@ -219,6 +232,7 @@ pub fn lower_function_body_in_module(
     body: &IrExpr,
     param_bindings: &[(BindingId, ValType)],
     functions: &FunctionMap,
+    methods: &MethodMap,
     module: &IrModule,
     bump_allocator: u32,
     self_struct_id: Option<StructId>,
@@ -234,6 +248,7 @@ pub fn lower_function_body_in_module(
 
     let scratch_counter = Cell::new(scratch_offset);
     let mut ctx = LowerContext::new(&plan.bindings, functions)
+        .with_methods(methods)
         .with_module(module)
         .with_bump_allocator(bump_allocator)
         .with_scratch_locals(&scratch_counter);
@@ -322,6 +337,12 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
                 walk_count(arg, out)?;
             }
         }
+        IrExpr::MethodCall { receiver, args, .. } => {
+            walk_count(receiver, out)?;
+            for (_, arg) in args {
+                walk_count(arg, out)?;
+            }
+        }
         IrExpr::FieldAccess { object, .. } => walk_count(object, out)?,
         IrExpr::Match {
             scrutinee, arms, ..
@@ -341,7 +362,6 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
-        | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }
         | IrExpr::DictLiteral { .. }

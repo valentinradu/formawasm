@@ -7,11 +7,12 @@
 //! returning the encoded module bytes.
 
 use formalang::ir::{
-    BindingId, FunctionId, IrFunction, IrFunctionParam, IrModule, ResolvedType, StructId,
+    BindingId, FunctionId, ImplId, ImplTarget, IrFunction, IrFunctionParam, IrImpl, IrModule,
+    MethodIdx, ResolvedType, StructId,
 };
 use wasm_encoder::ValType;
 
-use crate::lower::{FunctionMap, LowerError, lower_function_body_in_module};
+use crate::lower::{FunctionMap, LowerError, MethodMap, lower_function_body_in_module};
 use crate::module::ModuleBuilder;
 use crate::types::{TypeMapError, body_result_types, body_value_type};
 
@@ -62,11 +63,12 @@ pub enum ModuleLowerError {
 ///
 /// Top-level non-extern functions are emitted after the bump-
 /// allocator runtime helper, so `FunctionId(i)` maps to wasm index
-/// `i + 1` (the helper occupies wasm index 0). [`FunctionMap`] hides
-/// that offset from call-site lowerings.
+/// `i + 1` (the helper occupies wasm index 0). Methods declared in
+/// `module.impls` follow at wasm indices past the top-level
+/// functions; the [`MethodMap`] hides the per-impl indexing from
+/// call-site lowerings. [`FunctionMap`] hides the user-offset shift.
 ///
-/// Nested `module.modules` and `module.impls` are not yet walked —
-/// they land in Phase 1b alongside method dispatch.
+/// Nested `module.modules` are still not walked.
 pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     let mut builder = ModuleBuilder::new();
     let bump_idx = builder.declare_bump_allocator();
@@ -83,18 +85,98 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         function_map.insert(FunctionId(id_raw), wasm_idx);
     }
 
+    // Pre-assign wasm function indices for every method in every
+    // impl, so MethodCall lowering can resolve targets without
+    // re-walking the impls.
+    let methods_offset = user_offset
+        .checked_add(
+            u32::try_from(module.functions.len())
+                .map_err(|_| ModuleLowerError::TooManyFunctions)?,
+        )
+        .ok_or(ModuleLowerError::TooManyFunctions)?;
+    let mut method_map = MethodMap::new();
+    let mut method_counter: u32 = 0;
+    for (i, imp) in module.impls.iter().enumerate() {
+        if imp.is_extern {
+            continue;
+        }
+        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        for (j, _) in imp.functions.iter().enumerate() {
+            let m_idx_raw = u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            let wasm_idx = methods_offset
+                .checked_add(method_counter)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            method_map.insert((ImplId(impl_id_raw), MethodIdx(m_idx_raw)), wasm_idx);
+            method_counter = method_counter
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+        }
+    }
+
     for f in &module.functions {
-        emit_function(f, &mut builder, &function_map, module, bump_idx)?;
+        emit_function(
+            f,
+            &mut builder,
+            &function_map,
+            &method_map,
+            module,
+            bump_idx,
+            None,
+        )?;
+    }
+    for (i, imp) in module.impls.iter().enumerate() {
+        if imp.is_extern {
+            continue;
+        }
+        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        emit_impl(
+            imp,
+            ImplId(impl_id_raw),
+            &mut builder,
+            &function_map,
+            &method_map,
+            module,
+            bump_idx,
+        )?;
     }
     Ok(builder.finish())
+}
+
+fn emit_impl(
+    imp: &IrImpl,
+    _impl_id: ImplId,
+    builder: &mut ModuleBuilder,
+    function_map: &FunctionMap,
+    method_map: &MethodMap,
+    module: &IrModule,
+    bump_allocator: u32,
+) -> Result<(), ModuleLowerError> {
+    let self_struct_id = match imp.target {
+        ImplTarget::Struct(id) => Some(id),
+        ImplTarget::Enum(_) => None, // enum methods land later; tests cover struct methods
+    };
+    for f in &imp.functions {
+        emit_function(
+            f,
+            builder,
+            function_map,
+            method_map,
+            module,
+            bump_allocator,
+            self_struct_id,
+        )?;
+    }
+    Ok(())
 }
 
 fn emit_function(
     f: &IrFunction,
     builder: &mut ModuleBuilder,
     function_map: &FunctionMap,
+    method_map: &MethodMap,
     module: &IrModule,
     bump_allocator: u32,
+    impl_self_struct_id: Option<StructId>,
 ) -> Result<(), ModuleLowerError> {
     if f.is_extern() {
         return Err(ModuleLowerError::ExternFunction {
@@ -111,11 +193,12 @@ fn emit_function(
     let (param_valtypes, param_bindings) = lower_params(f)?;
     let result_valtypes = body_result_types(f.return_type.as_ref())?;
 
-    let self_struct_id = detect_self_struct(f);
+    let self_struct_id = impl_self_struct_id.or_else(|| detect_self_struct(f));
     let body = lower_function_body_in_module(
         body_expr,
         &param_bindings,
         function_map,
+        method_map,
         module,
         bump_allocator,
         self_struct_id,
@@ -123,8 +206,12 @@ fn emit_function(
     let wasm_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
     // Phase 1a: every non-extern top-level function is exported by
     // its source-level name. Survey-driven export filtering lands
-    // alongside WIT generation in the next mc.
-    builder.export_function(&f.name, wasm_idx);
+    // alongside WIT generation in the next mc. Impl methods do NOT
+    // get exported — name collisions between different impls would
+    // otherwise produce a malformed module.
+    if impl_self_struct_id.is_none() {
+        builder.export_function(&f.name, wasm_idx);
+    }
     Ok(())
 }
 

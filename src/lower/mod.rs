@@ -23,7 +23,9 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{BindingId, FunctionId, IrExpr, IrModule, ResolvedType, StructId};
+use formalang::ir::{
+    BindingId, FunctionId, ImplId, IrExpr, IrModule, MethodIdx, ResolvedType, StructId,
+};
 use thiserror::Error;
 use wasm_encoder::InstructionSink;
 
@@ -35,7 +37,9 @@ pub use aggregate::{
 };
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
-pub use call::lower_function_call;
+// MethodMap is exported for the production module-lowering pass that
+// consumes it as a coordinated input alongside FunctionMap.
+pub use call::{lower_function_call, lower_method_call};
 pub use control::{lower_if, lower_match};
 pub use literal::lower_literal;
 pub use reference::{lower_let_ref, lower_reference};
@@ -214,6 +218,23 @@ pub enum LowerError {
     /// body uses `self.field` — an upstream invariant violation.
     #[error("SelfFieldRef encountered in a function with no `self` struct context")]
     MissingSelfStruct,
+
+    /// A `MethodCall` with `DispatchKind::Static { impl_id }` and
+    /// `method_idx` whose pair is not present in the module's
+    /// [`MethodMap`]. Indicates the impl was never walked or the
+    /// indices are inconsistent.
+    #[error("static method (impl {impl_id:?}, method {method_idx:?}) is not registered")]
+    UnknownMethod {
+        /// The offending impl id.
+        impl_id: ImplId,
+        /// The offending method index inside that impl.
+        method_idx: MethodIdx,
+    },
+
+    /// A `MethodCall` with `DispatchKind::Virtual { .. }` was
+    /// encountered. Virtual dispatch lands in Phase 3.
+    #[error("virtual method dispatch is not yet supported (Phase 3)")]
+    VirtualMethodCall,
 }
 
 /// Mapping from a module-scope `FunctionId` to its wasm function
@@ -243,6 +264,47 @@ impl FunctionMap {
     }
 
     /// Number of functions recorded so far.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// Whether the map is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
+/// Mapping from `(ImplId, MethodIdx)` to the wasm function index of the emitted method body.
+///
+/// Built by the module-level lowering pass alongside [`FunctionMap`]
+/// so [`IrExpr::MethodCall`] dispatches resolve without re-walking
+/// `IrModule.impls`.
+#[derive(Debug, Default, Clone)]
+pub struct MethodMap {
+    by_id: HashMap<(ImplId, MethodIdx), u32>,
+}
+
+impl MethodMap {
+    /// Build an empty map.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a method's wasm function index.
+    pub fn insert(&mut self, key: (ImplId, MethodIdx), wasm_index: u32) {
+        self.by_id.insert(key, wasm_index);
+    }
+
+    /// Look up a method's wasm function index.
+    #[must_use]
+    pub fn get(&self, key: (ImplId, MethodIdx)) -> Option<u32> {
+        self.by_id.get(&key).copied()
+    }
+
+    /// Number of methods recorded so far.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_id.len()
@@ -312,6 +374,10 @@ pub struct LowerContext<'a> {
     pub bindings: &'a BindingMap,
     /// Module-scope function indices.
     pub functions: &'a FunctionMap,
+    /// Method indices keyed on `(ImplId, MethodIdx)`. Empty by
+    /// default; the production module-lowering pass populates it
+    /// before walking method-bearing function bodies.
+    pub methods: Option<&'a MethodMap>,
     /// Reference to the IR module being lowered. Aggregate lowerings
     /// (`StructInst`, `FieldAccess`, `EnumInst`, `Match`, …) need it
     /// to look up struct / enum definitions for layout planning.
@@ -344,11 +410,19 @@ impl<'a> LowerContext<'a> {
         Self {
             bindings,
             functions,
+            methods: None,
             module: None,
             bump_allocator: None,
             scratch_locals: None,
             self_struct_id: None,
         }
+    }
+
+    /// Attach the method-index map.
+    #[must_use]
+    pub const fn with_methods(mut self, methods: &'a MethodMap) -> Self {
+        self.methods = Some(methods);
+        self
     }
 
     /// Attach the IR-module reference used for struct/enum lookups.
@@ -442,10 +516,10 @@ pub fn lower_expr(
         IrExpr::EnumInst { .. } => lower_enum_inst(expr, sink, ctx),
         IrExpr::Match { .. } => lower_match(expr, sink, ctx),
         IrExpr::SelfFieldRef { .. } => lower_self_field_ref(expr, sink, ctx),
+        IrExpr::MethodCall { .. } => lower_method_call(expr, sink, ctx),
 
         IrExpr::Array { .. }
         | IrExpr::For { .. }
-        | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }
         | IrExpr::DictLiteral { .. }
