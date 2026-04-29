@@ -2,7 +2,7 @@
 
 use formalang::ast::{PrimitiveType, UnaryOperator};
 use formalang::ir::{BindingId, IrExpr, ReferenceTarget, ResolvedType};
-use formawasm::lower::{self, BindingMap, LowerError};
+use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
 use wasmparser::{Validator, WasmFeatures};
@@ -43,12 +43,14 @@ fn build_unary_function(
 ) -> Result<Vec<u8>, TestError> {
     let mut bindings = BindingMap::new();
     bindings.insert(BindingId(0), 0);
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
 
     let mut builder = ModuleBuilder::new();
     let mut body = Function::new(core::iter::empty());
     {
         let sink = &mut body.instructions();
-        lower::lower_expr(expr, sink, &bindings)?;
+        lower::lower_expr(expr, sink, &ctx)?;
         sink.end();
     }
     builder.declare_function_with_body(&[operand_ty], &[result_ty], &body);
@@ -114,8 +116,10 @@ fn rejects_neg_on_boolean() -> TestResult {
     );
     let mut bindings = BindingMap::new();
     bindings.insert(BindingId(0), 0);
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_expr(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_expr(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::UnsupportedOperator {
             op,
@@ -134,8 +138,10 @@ fn rejects_not_on_i32() -> TestResult {
     );
     let mut bindings = BindingMap::new();
     bindings.insert(BindingId(0), 0);
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_expr(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_expr(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::UnsupportedOperator {
             op,

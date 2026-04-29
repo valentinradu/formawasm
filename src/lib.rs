@@ -13,7 +13,7 @@ pub mod survey;
 pub mod types;
 
 pub use backend::{WasmBackend, WasmBackendError};
-pub use lower::LowerError;
+pub use lower::{BindingMap, FunctionMap, LowerContext, LowerError};
 pub use module::ModuleBuilder;
 pub use preflight::PreflightError;
 pub use survey::PublicSurface;

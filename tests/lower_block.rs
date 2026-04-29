@@ -8,7 +8,7 @@ use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
 };
 use formalang::ir::{BindingId, IrBlockStatement, IrExpr, ReferenceTarget, ResolvedType};
-use formawasm::lower::{self, LowerError};
+use formawasm::lower::{self, FunctionMap, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::ValType;
 use wasmparser::{Validator, WasmFeatures};
@@ -72,7 +72,7 @@ fn empty_block_with_literal_result() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
-    let body = lower::lower_function_body(&block, &[])?;
+    let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
     let mut builder = ModuleBuilder::new();
     builder.declare_function_with_body(&[], &[ValType::I32], &body);
     validate(&builder.finish())
@@ -93,7 +93,7 @@ fn let_binding_then_ref() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
-    let body = lower::lower_function_body(&block, &[])?;
+    let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
     let mut builder = ModuleBuilder::new();
     builder.declare_function_with_body(&[], &[ValType::I32], &body);
     validate(&builder.finish())
@@ -119,7 +119,8 @@ fn let_uses_param_then_returns_arithmetic() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
-    let body = lower::lower_function_body(&block, &[(BindingId(0), ValType::I32)])?;
+    let body =
+        lower::lower_function_body(&block, &[(BindingId(0), ValType::I32)], &FunctionMap::new())?;
     let mut builder = ModuleBuilder::new();
     builder.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
     validate(&builder.finish())
@@ -166,7 +167,7 @@ fn multiple_lets_with_dependencies() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
-    let body = lower::lower_function_body(&block, &[])?;
+    let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
     let mut builder = ModuleBuilder::new();
     builder.declare_function_with_body(&[], &[ValType::I32], &body);
     validate(&builder.finish())
@@ -184,7 +185,7 @@ fn expr_statement_is_dropped_before_result() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
-    let body = lower::lower_function_body(&block, &[])?;
+    let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
     let mut builder = ModuleBuilder::new();
     builder.declare_function_with_body(&[], &[ValType::I32], &body);
     validate(&builder.finish())
@@ -201,7 +202,7 @@ fn assign_statement_is_not_yet_implemented() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
-    match lower::lower_function_body(&block, &[(BindingId(0), ValType::I32)]) {
+    match lower::lower_function_body(&block, &[(BindingId(0), ValType::I32)], &FunctionMap::new()) {
         Err(LowerError::NotYetImplemented { what }) if what.contains("Assign") => Ok(()),
         other => Err(format!("expected NotYetImplemented(Assign), got {other:?}").into()),
     }
@@ -239,7 +240,7 @@ fn nested_block_inside_block_resolves_correctly() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
-    let body = lower::lower_function_body(&outer_block, &[])?;
+    let body = lower::lower_function_body(&outer_block, &[], &FunctionMap::new())?;
     let mut builder = ModuleBuilder::new();
     builder.declare_function_with_body(&[], &[ValType::I32], &body);
     validate(&builder.finish())

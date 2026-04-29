@@ -9,7 +9,9 @@
 use std::collections::HashMap;
 
 use formalang::ast::{BinaryOperator, Literal, NumberValue, PrimitiveType, UnaryOperator};
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, ReferenceTarget, ResolvedType};
+use formalang::ir::{
+    BindingId, FunctionId, IrBlockStatement, IrExpr, ReferenceTarget, ResolvedType,
+};
 use thiserror::Error;
 use wasm_encoder::{Function, Ieee32, Ieee64, InstructionSink, ValType};
 
@@ -92,6 +94,85 @@ pub enum LowerError {
         /// The declared resolved type.
         ty: ResolvedType,
     },
+
+    /// A `FunctionCall` carries a `FunctionId` that the caller's
+    /// [`FunctionMap`] does not know about. Indicates the module-
+    /// level lowering pass failed to register this function before
+    /// walking call sites.
+    #[error("FunctionId {0:?} is not registered in the function map")]
+    UnknownFunction(FunctionId),
+
+    /// A `FunctionCall` carries `function_id = None`. Either the
+    /// resolution pass failed, or the call targets an external
+    /// (cross-module) function which won't be supported until
+    /// Phase 4.
+    #[error("FunctionCall path {path:?} is unresolved (function_id = None)")]
+    UnresolvedFunctionCall {
+        /// Source-level path of the call (e.g. `["math", "sin"]`).
+        path: Vec<String>,
+    },
+}
+
+/// Mapping from a module-scope `FunctionId` to its wasm function
+/// index. Built by the module-level lowering pass before walking
+/// any function bodies.
+#[derive(Debug, Default, Clone)]
+pub struct FunctionMap {
+    by_id: HashMap<FunctionId, u32>,
+}
+
+impl FunctionMap {
+    /// Build an empty map.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a function's wasm index.
+    pub fn insert(&mut self, id: FunctionId, wasm_index: u32) {
+        self.by_id.insert(id, wasm_index);
+    }
+
+    /// Look up a function's wasm index, or `None` when missing.
+    #[must_use]
+    pub fn get(&self, id: FunctionId) -> Option<u32> {
+        self.by_id.get(&id).copied()
+    }
+
+    /// Number of functions recorded so far.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// Whether the map is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
+/// Context passed through the recursive lowering walkers. Bundles
+/// the binding and function maps so the walkers don't grow a longer
+/// argument list as more resolved-id maps appear.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct LowerContext<'a> {
+    /// Function-local binding indices (params + lets).
+    pub bindings: &'a BindingMap,
+    /// Module-scope function indices.
+    pub functions: &'a FunctionMap,
+}
+
+impl<'a> LowerContext<'a> {
+    /// Bundle the maps a walker needs.
+    #[must_use]
+    pub const fn new(bindings: &'a BindingMap, functions: &'a FunctionMap) -> Self {
+        Self {
+            bindings,
+            functions,
+        }
+    }
 }
 
 /// Mapping from a function-local `BindingId` (parameters + `let`
@@ -259,7 +340,7 @@ pub fn lower_literal(expr: &IrExpr, sink: &mut InstructionSink<'_>) -> Result<()
 pub fn lower_reference(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
-    bindings: &BindingMap,
+    ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::Reference { target, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
@@ -269,7 +350,10 @@ pub fn lower_reference(
 
     match target {
         ReferenceTarget::Param(id) | ReferenceTarget::Local(id) => {
-            let idx = bindings.get(*id).ok_or(LowerError::UnknownBinding(*id))?;
+            let idx = ctx
+                .bindings
+                .get(*id)
+                .ok_or(LowerError::UnknownBinding(*id))?;
             sink.local_get(idx);
             Ok(())
         }
@@ -296,7 +380,7 @@ pub fn lower_reference(
 pub fn lower_let_ref(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
-    bindings: &BindingMap,
+    ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::LetRef { binding_id, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
@@ -304,7 +388,8 @@ pub fn lower_let_ref(
         });
     };
 
-    let idx = bindings
+    let idx = ctx
+        .bindings
         .get(*binding_id)
         .ok_or(LowerError::UnknownBinding(*binding_id))?;
     sink.local_get(idx);
@@ -338,7 +423,7 @@ fn number_value_string(v: &NumberValue) -> String {
 pub fn lower_binary_op(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
-    bindings: &BindingMap,
+    ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::BinaryOp {
         left, right, op, ..
@@ -370,8 +455,8 @@ pub fn lower_binary_op(
         }
     };
 
-    lower_expr(left, sink, bindings)?;
-    lower_expr(right, sink, bindings)?;
+    lower_expr(left, sink, ctx)?;
+    lower_expr(right, sink, ctx)?;
     emit_binary_op(*op, operand_prim, sink)
 }
 
@@ -386,7 +471,7 @@ pub fn lower_binary_op(
 pub fn lower_unary_op(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
-    bindings: &BindingMap,
+    ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::UnaryOp { op, operand, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
@@ -419,24 +504,24 @@ pub fn lower_unary_op(
         (UnaryOperator::Neg, PrimitiveType::I32) => {
             // wasm has no i32.neg; emit (0 - operand).
             sink.i32_const(0);
-            lower_expr(operand, sink, bindings)?;
+            lower_expr(operand, sink, ctx)?;
             sink.i32_sub();
         }
         (UnaryOperator::Neg, PrimitiveType::I64) => {
             sink.i64_const(0);
-            lower_expr(operand, sink, bindings)?;
+            lower_expr(operand, sink, ctx)?;
             sink.i64_sub();
         }
         (UnaryOperator::Neg, PrimitiveType::F32) => {
-            lower_expr(operand, sink, bindings)?;
+            lower_expr(operand, sink, ctx)?;
             sink.f32_neg();
         }
         (UnaryOperator::Neg, PrimitiveType::F64) => {
-            lower_expr(operand, sink, bindings)?;
+            lower_expr(operand, sink, ctx)?;
             sink.f64_neg();
         }
         (UnaryOperator::Not, PrimitiveType::Boolean) => {
-            lower_expr(operand, sink, bindings)?;
+            lower_expr(operand, sink, ctx)?;
             sink.i32_eqz();
         }
         (UnaryOperator::Neg | UnaryOperator::Not, _) => {
@@ -456,13 +541,48 @@ pub fn lower_unary_op(
     Ok(())
 }
 
+/// Lower an [`IrExpr::FunctionCall`] onto `sink`. Each argument is
+/// lowered in declaration order, then a `call <wasm_index>`
+/// instruction is emitted. The wasm index comes from the
+/// [`FunctionMap`] in `ctx`.
+pub fn lower_function_call(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::FunctionCall {
+        path,
+        function_id,
+        args,
+        ..
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_function_call called with non-FunctionCall expression".to_owned(),
+        });
+    };
+
+    let id =
+        function_id.ok_or_else(|| LowerError::UnresolvedFunctionCall { path: path.clone() })?;
+    let wasm_idx = ctx
+        .functions
+        .get(id)
+        .ok_or(LowerError::UnknownFunction(id))?;
+
+    for (_, arg) in args {
+        lower_expr(arg, sink, ctx)?;
+    }
+    sink.call(wasm_idx);
+    Ok(())
+}
+
 /// Lower an [`IrExpr::Block`] onto `sink`. Statements run in order;
 /// the result expression's value becomes the block's value (left on
 /// the stack).
 pub fn lower_block(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
-    bindings: &BindingMap,
+    ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::Block {
         statements, result, ..
@@ -474,24 +594,25 @@ pub fn lower_block(
     };
 
     for stmt in statements {
-        lower_block_statement(stmt, sink, bindings)?;
+        lower_block_statement(stmt, sink, ctx)?;
     }
-    lower_expr(result, sink, bindings)
+    lower_expr(result, sink, ctx)
 }
 
 fn lower_block_statement(
     stmt: &IrBlockStatement,
     sink: &mut InstructionSink<'_>,
-    bindings: &BindingMap,
+    ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     match stmt {
         IrBlockStatement::Let {
             binding_id, value, ..
         } => {
-            let idx = bindings
+            let idx = ctx
+                .bindings
                 .get(*binding_id)
                 .ok_or(LowerError::UnknownBinding(*binding_id))?;
-            lower_expr(value, sink, bindings)?;
+            lower_expr(value, sink, ctx)?;
             sink.local_set(idx);
             Ok(())
         }
@@ -500,7 +621,7 @@ fn lower_block_statement(
             // unbalance the wasm operand stack. Drop unless the type
             // is `Never` (no value flows past `unreachable`).
             let needs_drop = !matches!(e.ty(), ResolvedType::Primitive(PrimitiveType::Never));
-            lower_expr(e, sink, bindings)?;
+            lower_expr(e, sink, ctx)?;
             if needs_drop {
                 sink.drop();
             }
@@ -606,10 +727,13 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
 ///
 /// Plans the locals upfront, sets up the [`BindingMap`] so params
 /// live at indices `0..N` and `let` bindings live at `N..M`, then
-/// lowers the body and emits the closing `end`.
+/// lowers the body and emits the closing `end`. `functions` carries
+/// the module-level `FunctionId` -> wasm-index map; pass an empty
+/// [`FunctionMap`] when the body makes no calls.
 pub fn lower_function_body(
     body: &IrExpr,
     param_bindings: &[(BindingId, ValType)],
+    functions: &FunctionMap,
 ) -> Result<Function, LowerError> {
     let local_bindings = collect_local_bindings(body)?;
 
@@ -623,11 +747,12 @@ pub fn lower_function_body(
         binding_map.insert(*id, idx);
     }
 
+    let ctx = LowerContext::new(&binding_map, functions);
     let locals: Vec<(u32, ValType)> = local_bindings.iter().map(|(_, vt)| (1, *vt)).collect();
     let mut func = Function::new(locals);
     {
         let sink = &mut func.instructions();
-        lower_expr(body, sink, &binding_map)?;
+        lower_expr(body, sink, &ctx)?;
         sink.end();
     }
     Ok(func)
@@ -648,15 +773,16 @@ fn index_of(i: usize) -> Result<u32, LowerError> {
 pub fn lower_expr(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
-    bindings: &BindingMap,
+    ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     match expr {
         IrExpr::Literal { .. } => lower_literal(expr, sink),
-        IrExpr::Reference { .. } => lower_reference(expr, sink, bindings),
-        IrExpr::LetRef { .. } => lower_let_ref(expr, sink, bindings),
-        IrExpr::BinaryOp { .. } => lower_binary_op(expr, sink, bindings),
-        IrExpr::UnaryOp { .. } => lower_unary_op(expr, sink, bindings),
-        IrExpr::Block { .. } => lower_block(expr, sink, bindings),
+        IrExpr::Reference { .. } => lower_reference(expr, sink, ctx),
+        IrExpr::LetRef { .. } => lower_let_ref(expr, sink, ctx),
+        IrExpr::BinaryOp { .. } => lower_binary_op(expr, sink, ctx),
+        IrExpr::UnaryOp { .. } => lower_unary_op(expr, sink, ctx),
+        IrExpr::Block { .. } => lower_block(expr, sink, ctx),
+        IrExpr::FunctionCall { .. } => lower_function_call(expr, sink, ctx),
 
         IrExpr::SelfFieldRef { .. }
         | IrExpr::FieldAccess { .. }
@@ -667,7 +793,6 @@ pub fn lower_expr(
         | IrExpr::If { .. }
         | IrExpr::For { .. }
         | IrExpr::Match { .. }
-        | IrExpr::FunctionCall { .. }
         | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }

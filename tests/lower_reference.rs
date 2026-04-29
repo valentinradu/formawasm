@@ -6,7 +6,7 @@
 
 use formalang::ast::PrimitiveType;
 use formalang::ir::{BindingId, IrExpr, ReferenceTarget, ResolvedType};
-use formawasm::lower::{self, BindingMap, LowerError};
+use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
 use wasmparser::{Validator, WasmFeatures};
@@ -36,11 +36,13 @@ fn lowers_param_reference_to_local_get() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut builder = ModuleBuilder::new();
     let mut body = Function::new(core::iter::empty());
     {
         let sink = &mut body.instructions();
-        lower::lower_reference(&expr, sink, &bindings)?;
+        lower::lower_reference(&expr, sink, &ctx)?;
         sink.end();
     }
     builder.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
@@ -62,12 +64,14 @@ fn lowers_let_ref_to_local_get() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut builder = ModuleBuilder::new();
     // Function takes one i32 param and declares one i32 local.
     let mut body = Function::new([(1_u32, ValType::I32)]);
     {
         let sink = &mut body.instructions();
-        lower::lower_let_ref(&expr, sink, &bindings)?;
+        lower::lower_let_ref(&expr, sink, &ctx)?;
         sink.end();
     }
     builder.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
@@ -88,11 +92,13 @@ fn lowers_local_reference_to_local_get() -> TestResult {
         ty: primitive_ty(PrimitiveType::I32),
     };
 
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut builder = ModuleBuilder::new();
     let mut body = Function::new([(1_u32, ValType::I32)]);
     {
         let sink = &mut body.instructions();
-        lower::lower_reference(&expr, sink, &bindings)?;
+        lower::lower_reference(&expr, sink, &ctx)?;
         sink.end();
     }
     builder.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
@@ -107,8 +113,10 @@ fn rejects_unknown_binding_id() -> TestResult {
         binding_id: BindingId(99),
         ty: primitive_ty(PrimitiveType::I32),
     };
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_let_ref(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_let_ref(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::UnknownBinding(BindingId(99))) => Ok(()),
         other => Err(format!("expected UnknownBinding(99), got {other:?}").into()),
@@ -123,8 +131,10 @@ fn rejects_unresolved_reference_target() -> TestResult {
         target: ReferenceTarget::Unresolved,
         ty: primitive_ty(PrimitiveType::I32),
     };
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_reference(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_reference(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::UnresolvedReference) => Ok(()),
         other => Err(format!("expected UnresolvedReference, got {other:?}").into()),
@@ -139,8 +149,10 @@ fn module_let_reference_is_not_yet_implemented() -> TestResult {
         target: ReferenceTarget::ModuleLet(formalang::ir::LetId(0)),
         ty: primitive_ty(PrimitiveType::I32),
     };
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_reference(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_reference(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::NotYetImplemented { what }) if what.contains("ModuleLet") => Ok(()),
         other => Err(format!("expected NotYetImplemented(ModuleLet), got {other:?}").into()),

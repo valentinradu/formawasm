@@ -6,7 +6,7 @@ use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
 };
 use formalang::ir::{BindingId, IrExpr, ReferenceTarget, ResolvedType};
-use formawasm::lower::{self, BindingMap, LowerError};
+use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
 use wasmparser::{Validator, WasmFeatures};
@@ -63,12 +63,14 @@ fn build_binary_function(
     let mut bindings = BindingMap::new();
     bindings.insert(BindingId(0), 0);
     bindings.insert(BindingId(1), 1);
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
 
     let mut builder = ModuleBuilder::new();
     let mut body = Function::new(core::iter::empty());
     {
         let sink = &mut body.instructions();
-        lower::lower_expr(expr, sink, &bindings)?;
+        lower::lower_expr(expr, sink, &ctx)?;
         sink.end();
     }
     builder.declare_function_with_body(&[operand, operand], &[result], &body);
@@ -157,8 +159,10 @@ fn rejects_f64_mod() -> TestResult {
     let mut bindings = BindingMap::new();
     bindings.insert(BindingId(0), 0);
     bindings.insert(BindingId(1), 1);
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_expr(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_expr(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::UnsupportedOperator {
             op,
@@ -238,8 +242,10 @@ fn rejects_and_on_i32() -> TestResult {
     let mut bindings = BindingMap::new();
     bindings.insert(BindingId(0), 0);
     bindings.insert(BindingId(1), 1);
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_expr(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_expr(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::UnsupportedOperator {
             op,
@@ -293,8 +299,10 @@ fn range_is_not_yet_implemented() -> TestResult {
         PrimitiveType::I32,
     );
     let bindings = BindingMap::new();
+    let functions = FunctionMap::new();
+    let ctx = LowerContext::new(&bindings, &functions);
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_expr(&expr, &mut body.instructions(), &bindings);
+    let result = lower::lower_expr(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::NotYetImplemented { what }) if what.contains("Range") => Ok(()),
         other => Err(format!("expected NotYetImplemented(Range), got {other:?}").into()),
