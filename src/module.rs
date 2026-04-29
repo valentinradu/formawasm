@@ -8,7 +8,8 @@
 //! [`ModuleBuilder::finish`] emits the byte-encoded module.
 
 use wasm_encoder::{
-    ConstExpr, GlobalSection, GlobalType, MemorySection, MemoryType, Module, ValType,
+    CodeSection, ConstExpr, Function, FunctionSection, GlobalSection, GlobalType, MemorySection,
+    MemoryType, Module, TypeSection, ValType,
 };
 
 /// Index of the single linear memory the runtime uses for all heap
@@ -33,8 +34,11 @@ pub const INITIAL_MEMORY_PAGES: u64 = 1;
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ModuleBuilder {
+    types: TypeSection,
+    functions: FunctionSection,
     memories: MemorySection,
     globals: GlobalSection,
+    code: CodeSection,
 }
 
 impl Default for ModuleBuilder {
@@ -67,7 +71,42 @@ impl ModuleBuilder {
             &ConstExpr::i32_const(HEAP_BASE),
         );
 
-        Self { memories, globals }
+        Self {
+            types: TypeSection::new(),
+            functions: FunctionSection::new(),
+            memories,
+            globals,
+            code: CodeSection::new(),
+        }
+    }
+
+    /// Declare a function with the given param + result valtypes.
+    /// Returns the wasm function index. The body is initialised to a
+    /// single `unreachable` instruction; later lowering passes plug
+    /// in the real body.
+    pub fn declare_function(&mut self, param_types: &[ValType], result_types: &[ValType]) -> u32 {
+        let type_index = self.types.len();
+        let func_index = self.functions.len();
+
+        self.types
+            .ty()
+            .function(param_types.iter().copied(), result_types.iter().copied());
+        self.functions.function(type_index);
+
+        // Placeholder body — bodies that survive into the emitted
+        // module trap on entry until a later lowering pass overwrites
+        // them. Locals list is empty for now.
+        let mut body = Function::new(core::iter::empty());
+        body.instructions().unreachable().end();
+        self.code.function(&body);
+
+        func_index
+    }
+
+    /// Number of declared functions so far.
+    #[must_use]
+    pub fn function_count(&self) -> u32 {
+        self.functions.len()
     }
 
     /// Encode the module as a sequence of bytes ready for validation
@@ -75,8 +114,19 @@ impl ModuleBuilder {
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
         let mut module = Module::new();
+        // Section order matters for validation: type, function, memory,
+        // global, code.
+        if !self.types.is_empty() {
+            module.section(&self.types);
+        }
+        if !self.functions.is_empty() {
+            module.section(&self.functions);
+        }
         module.section(&self.memories);
         module.section(&self.globals);
+        if !self.code.is_empty() {
+            module.section(&self.code);
+        }
         module.finish()
     }
 }
