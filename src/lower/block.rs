@@ -135,19 +135,44 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
             }
             Ok(())
         }
+        IrExpr::FieldAccess { object, .. } => walk_for_locals(object, out),
+        IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
+            for (_, _, value) in fields {
+                walk_for_locals(value, out)?;
+            }
+            Ok(())
+        }
+        IrExpr::Tuple { fields, .. } => {
+            for (_, value) in fields {
+                walk_for_locals(value, out)?;
+            }
+            Ok(())
+        }
+        IrExpr::Match {
+            scrutinee, arms, ..
+        } => {
+            walk_for_locals(scrutinee, out)?;
+            for arm in arms {
+                for (name, binding_id, ty) in &arm.bindings {
+                    let vt =
+                        body_value_type(ty)?.ok_or_else(|| LowerError::ZeroSizedLetBinding {
+                            name: name.clone(),
+                            ty: ty.clone(),
+                        })?;
+                    out.push((*binding_id, vt));
+                }
+                walk_for_locals(&arm.body, out)?;
+            }
+            Ok(())
+        }
 
         // Leaves and not-yet-supported variants — no inner locals.
         IrExpr::Literal { .. }
         | IrExpr::Reference { .. }
         | IrExpr::LetRef { .. }
         | IrExpr::SelfFieldRef { .. }
-        | IrExpr::FieldAccess { .. }
-        | IrExpr::StructInst { .. }
-        | IrExpr::EnumInst { .. }
-        | IrExpr::Tuple { .. }
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
-        | IrExpr::Match { .. }
         | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }
@@ -294,6 +319,17 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
             }
         }
         IrExpr::FieldAccess { object, .. } => walk_count(object, out)?,
+        IrExpr::Match {
+            scrutinee, arms, ..
+        } => {
+            // Each `Match` reserves one scratch local for the
+            // scrutinee pointer.
+            bump_count(out)?;
+            walk_count(scrutinee, out)?;
+            for arm in arms {
+                walk_count(&arm.body, out)?;
+            }
+        }
 
         IrExpr::Literal { .. }
         | IrExpr::Reference { .. }
@@ -301,7 +337,6 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
-        | IrExpr::Match { .. }
         | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }

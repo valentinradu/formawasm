@@ -34,7 +34,7 @@ pub use aggregate::{lower_enum_inst, lower_field_access, lower_struct_inst, lowe
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
 pub use call::lower_function_call;
-pub use control::lower_if;
+pub use control::{lower_if, lower_match};
 pub use literal::lower_literal;
 pub use reference::{lower_let_ref, lower_reference};
 pub use unary_op::lower_unary_op;
@@ -417,11 +417,11 @@ pub fn lower_expr(
         IrExpr::FieldAccess { .. } => lower_field_access(expr, sink, ctx),
         IrExpr::Tuple { .. } => lower_tuple(expr, sink, ctx),
         IrExpr::EnumInst { .. } => lower_enum_inst(expr, sink, ctx),
+        IrExpr::Match { .. } => lower_match(expr, sink, ctx),
 
         IrExpr::SelfFieldRef { .. }
         | IrExpr::Array { .. }
         | IrExpr::For { .. }
-        | IrExpr::Match { .. }
         | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }
