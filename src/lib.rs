@@ -12,6 +12,7 @@ pub mod module_lowering;
 pub mod preflight;
 pub mod survey;
 pub mod types;
+pub mod wit;
 
 pub use backend::{WasmBackend, WasmBackendError};
 pub use lower::{BindingMap, FunctionMap, LowerContext, LowerError};
@@ -20,6 +21,7 @@ pub use module_lowering::{ModuleLowerError, lower_module};
 pub use preflight::PreflightError;
 pub use survey::PublicSurface;
 pub use types::TypeMapError;
+pub use wit::{WitEmitError, emit_wit};
 
 pub use formalang::ir::{
     EnumId, FunctionId, IrFunction, IrFunctionParam, IrFunctionSig, IrImport, IrImportItem,
