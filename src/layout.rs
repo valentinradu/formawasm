@@ -393,3 +393,105 @@ pub fn plan_enum(e: &IrEnum, module: &IrModule) -> Result<EnumLayout, LayoutErro
         variants,
     })
 }
+
+// ── array layout ─────────────────────────────────────────────────────
+
+/// Header size of an array value: `{ ptr: i32, len: i32, cap: i32 }`.
+pub const ARRAY_HEADER_SIZE: u32 = 12;
+
+/// Header alignment of an array value (each header field is `i32`).
+pub const ARRAY_HEADER_ALIGN: u32 = 4;
+
+/// Pointer size used for aggregate element types.
+const POINTER_SIZE: u32 = 4;
+
+/// Pointer alignment used for aggregate element types.
+const POINTER_ALIGN: u32 = 4;
+
+/// Layout decisions for an `Array<T>` value.
+///
+/// An array splits across two allocations: a fixed-size header
+/// (`{ ptr, len, cap }`) and a separately-allocated element buffer
+/// pointed to by `ptr`. The header always lives at a 4-byte alignment;
+/// the element buffer's stride/alignment depends on `T`.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain layout record consumed externally; intentionally constructible"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArrayLayout {
+    /// Bytes occupied by the header. Always [`ARRAY_HEADER_SIZE`].
+    pub header_size: u32,
+    /// Header alignment in bytes. Always [`ARRAY_HEADER_ALIGN`].
+    pub header_align: u32,
+    /// Size in bytes of one element in the buffer. Aggregate elements
+    /// are stored as `i32` pointers, so they always occupy 4 bytes
+    /// regardless of the underlying type's struct size.
+    pub element_size: u32,
+    /// Alignment in bytes of one element in the buffer.
+    pub element_align: u32,
+}
+
+/// Compute the layout of `Array<elem>`.
+///
+/// `module` is accepted for API symmetry with the struct/enum
+/// planners; the current implementation only inspects `elem`.
+///
+/// Aggregate element types (struct, enum, tuple, …) lower as `i32`
+/// pointers into the element buffer — the actual aggregate value lives
+/// in a separate bump-allocated region. Primitives are stored inline
+/// at their canonical-ABI size and alignment. `Never` and the
+/// heap-typed primitives surface as
+/// [`LayoutError::NotYetSupported`] just as they do for struct fields.
+pub fn plan_array(elem: &ResolvedType, _module: &IrModule) -> Result<ArrayLayout, LayoutError> {
+    let (element_size, element_align) = array_element_size_align(elem)?;
+    Ok(ArrayLayout {
+        header_size: ARRAY_HEADER_SIZE,
+        header_align: ARRAY_HEADER_ALIGN,
+        element_size,
+        element_align,
+    })
+}
+
+/// Return the in-buffer `(size, align)` pair for an array element.
+///
+/// Aggregate element types live as `i32` pointers, so they always
+/// report `(POINTER_SIZE, POINTER_ALIGN)` regardless of the
+/// underlying value's storage size. Primitive elements report their
+/// canonical-ABI size/align via [`primitive_size_align`].
+fn array_element_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
+    match ty {
+        ResolvedType::Primitive(p) => primitive_size_align(*p),
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Array(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
+        ResolvedType::Range(_) => Err(LayoutError::NotYetSupported {
+            kind: "Range<T>".to_owned(),
+        }),
+        ResolvedType::Optional(_) => Err(LayoutError::NotYetSupported {
+            kind: "Optional<T>".to_owned(),
+        }),
+        ResolvedType::Dictionary { .. } => Err(LayoutError::NotYetSupported {
+            kind: "Dictionary<K, V>".to_owned(),
+        }),
+        ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
+            kind: "Closure".to_owned(),
+        }),
+        ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
+            kind: "Trait".to_owned(),
+        }),
+        ResolvedType::Generic { .. } => Err(LayoutError::NotYetSupported {
+            kind: "Generic".to_owned(),
+        }),
+        ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
+            kind: format!("TypeParam({name})"),
+        }),
+        ResolvedType::External { name, .. } => Err(LayoutError::NotYetSupported {
+            kind: format!("External({name})"),
+        }),
+        ResolvedType::Error => Err(LayoutError::NotYetSupported {
+            kind: "Error".to_owned(),
+        }),
+    }
+}
