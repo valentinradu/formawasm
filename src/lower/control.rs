@@ -1,12 +1,15 @@
-//! Lowering of control-flow expressions: [`IrExpr::If`] and
-//! [`IrExpr::Match`]. [`IrExpr::For`] lands in Phase 1c.
+//! Lowering of control-flow expressions: [`IrExpr::If`],
+//! [`IrExpr::Match`], and [`IrExpr::For`].
 
+use formalang::ast::PrimitiveType;
 use formalang::ir::{IrExpr, IrMatchArm, ResolvedType};
 use wasm_encoder::{BlockType, InstructionSink, MemArg};
 
-use super::aggregate::{load_primitive, primitive_of};
+use super::aggregate::{field_mem_arg, load_primitive, primitive_of, store_primitive};
 use super::{LowerContext, LowerError, lower_expr};
-use crate::layout::{ENUM_TAG_ALIGN, plan_enum};
+use crate::layout::{
+    ARRAY_HEADER_ALIGN, ENUM_TAG_ALIGN, FieldLayout, plan_array, plan_enum, plan_range,
+};
 use crate::module::MEMORY_INDEX;
 use crate::types::{body_value_type, resolved_value_type};
 
@@ -248,5 +251,272 @@ const fn align_log2(align: u32) -> u32 {
         4 => 2,
         8 => 3,
         _ => 0,
+    }
+}
+
+/// Lower an [`IrExpr::For`] onto `sink`.
+///
+/// Phase 1c restricts the iteration source to `Range<I32>`. Iterating
+/// `Array<T>` and other primitive ranges rides later mcs.
+///
+/// Shape — `for var in start..end { body }` evaluates to
+/// `Array<body_ty>`, one entry per iteration. The lowering:
+///
+/// 1. Lowers `collection` → pointer to the range struct, parks it,
+///    then loads `start` and `end` into scratch locals.
+/// 2. Computes `len = end - start` and pre-allocates the output
+///    array's element buffer (`len * elem_size` bytes) plus its
+///    12-byte `{ ptr, len, cap }` header.
+/// 3. Loops `i = 0..len` writing `var = start + i` into the
+///    var binding's wasm-local on each entry. The body's value is
+///    stored at `out_buf + i * elem_size` using the right primitive
+///    width (or `i32_store` for aggregate body types stored as
+///    pointers).
+/// 4. After the loop, fills the output header (`ptr`, `len`, `cap`)
+///    and leaves the header pointer on the stack as the For
+///    expression's value.
+///
+/// Scratch locals reserved by the function-body pre-walk in
+/// `block::walk_count`: 7 (`range`, `start_save`, `end`, `len`,
+/// `out_buf`, `out_header`, `i`) — `walk_count` for `IrExpr::For`
+/// performs the matching count.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single-pass For lowering — splitting hides the wasm-stack discipline that ties the steps together"
+)]
+pub fn lower_for(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::For {
+        var,
+        var_ty,
+        var_binding_id,
+        collection,
+        body,
+        ty,
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_for called with non-For expression".to_owned(),
+        });
+    };
+
+    // Phase 1c mc4 only supports Range<I32> collections. Array
+    // iteration lands once index access is wired up.
+    let coll_ty = collection.ty();
+    let ResolvedType::Range(bound_box) = coll_ty else {
+        return Err(LowerError::NotYetImplemented {
+            what: format!(
+                "for-loop over collection type {coll_ty:?} (only Range<I32> supported in mc4)"
+            ),
+        });
+    };
+    let bound_ty = bound_box.as_ref();
+    if !matches!(bound_ty, ResolvedType::Primitive(PrimitiveType::I32)) {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("for-loop over Range<{bound_ty:?}> (only Range<I32> supported in mc4)"),
+        });
+    }
+    if !matches!(var_ty, ResolvedType::Primitive(PrimitiveType::I32)) {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("for-loop variable of type {var_ty:?} (only I32 supported in mc4)"),
+        });
+    }
+    let _ = var; // preserved on the IR for diagnostics only
+
+    let module = ctx.module()?;
+    let range_layout = plan_range(bound_ty, module)?;
+
+    // Output array element type — derived from the For's overall ty,
+    // which is `Array(body_ty)` per the IR contract.
+    let ResolvedType::Array(body_box) = ty else {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("for-loop carrying non-Array result type {ty:?}"),
+        });
+    };
+    let body_ty = body_box.as_ref();
+    let array_layout = plan_array(body_ty, module)?;
+
+    // Reserve the seven i32 scratch locals up-front so emission is
+    // straight-line.
+    let range_local = ctx.next_scratch_local()?;
+    let start_local = ctx.next_scratch_local()?;
+    let end_local = ctx.next_scratch_local()?;
+    let len_local = ctx.next_scratch_local()?;
+    let out_buf_local = ctx.next_scratch_local()?;
+    let out_header_local = ctx.next_scratch_local()?;
+    let i_local = ctx.next_scratch_local()?;
+    let var_local = ctx
+        .bindings
+        .get(*var_binding_id)
+        .ok_or(LowerError::UnknownBinding(*var_binding_id))?;
+
+    // ── 1. Lower the range collection and pull start / end out ──────
+    lower_expr(collection, sink, ctx)?;
+    sink.local_set(range_local);
+
+    sink.local_get(range_local);
+    sink.i32_load(MemArg {
+        offset: 0,
+        align: align_log2(range_layout.bound_align),
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_set(start_local);
+
+    sink.local_get(range_local);
+    sink.i32_load(MemArg {
+        offset: u64::from(range_layout.end_offset),
+        align: align_log2(range_layout.bound_align),
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_set(end_local);
+
+    // ── 2. len = end - start ────────────────────────────────────────
+    sink.local_get(end_local);
+    sink.local_get(start_local);
+    sink.i32_sub();
+    sink.local_set(len_local);
+
+    // ── 3. Allocate output buffer and header ───────────────────────
+    // out_buf: len * elem_size bytes through the bump allocator.
+    let alloc_idx = ctx.bump_allocator()?;
+    let elem_size_signed = i32::try_from(array_layout.element_size).map_err(|_| {
+        LowerError::Layout(crate::layout::LayoutError::SizeOverflow {
+            name: "<for-output element>".to_owned(),
+        })
+    })?;
+    sink.local_get(len_local);
+    sink.i32_const(elem_size_signed);
+    sink.i32_mul();
+    sink.call(alloc_idx);
+    sink.local_set(out_buf_local);
+
+    // out_header: 12 bytes through the bump allocator. We reuse
+    // `allocate_aggregate` for the header since it also stashes the
+    // pointer in a fresh scratch local, but here we already reserved
+    // out_header_local up-front — so call into the allocator manually.
+    sink.i32_const(i32::try_from(array_layout.header_size).map_err(|_| {
+        LowerError::Layout(crate::layout::LayoutError::SizeOverflow {
+            name: "<for-output header>".to_owned(),
+        })
+    })?);
+    sink.call(alloc_idx);
+    sink.local_set(out_header_local);
+
+    // ── 4. i = 0 ────────────────────────────────────────────────────
+    sink.i32_const(0);
+    sink.local_set(i_local);
+
+    // ── 5. Main loop ────────────────────────────────────────────────
+    sink.block(BlockType::Empty);
+    sink.loop_(BlockType::Empty);
+
+    // exit if i >= len
+    sink.local_get(i_local);
+    sink.local_get(len_local);
+    sink.i32_ge_s();
+    sink.br_if(1); // exit the surrounding $end block
+
+    // var = start + i
+    sink.local_get(start_local);
+    sink.local_get(i_local);
+    sink.i32_add();
+    sink.local_set(var_local);
+
+    // Push the address (out_buf + i * elem_size) for the upcoming
+    // body store.
+    sink.local_get(out_buf_local);
+    sink.local_get(i_local);
+    sink.i32_const(elem_size_signed);
+    sink.i32_mul();
+    sink.i32_add();
+
+    // Lower the body — leaves body_val on top of the stack.
+    lower_expr(body, sink, ctx)?;
+
+    // Store at the address computed above.
+    let body_field_layout = FieldLayout {
+        offset: 0,
+        size: array_layout.element_size,
+        align: array_layout.element_align,
+    };
+    store_for_body_value(body_ty, body_field_layout, sink)?;
+
+    // i += 1
+    sink.local_get(i_local);
+    sink.i32_const(1);
+    sink.i32_add();
+    sink.local_set(i_local);
+
+    // br to loop top
+    sink.br(0);
+    sink.end(); // close loop
+    sink.end(); // close $end block
+
+    // ── 6. Finalize header: ptr, len, cap ───────────────────────────
+    let header_align_log2 = align_log2(ARRAY_HEADER_ALIGN);
+    sink.local_get(out_header_local);
+    sink.local_get(out_buf_local);
+    sink.i32_store(MemArg {
+        offset: 0,
+        align: header_align_log2,
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_get(out_header_local);
+    sink.local_get(len_local);
+    sink.i32_store(MemArg {
+        offset: 4,
+        align: header_align_log2,
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_get(out_header_local);
+    sink.local_get(len_local);
+    sink.i32_store(MemArg {
+        offset: 8,
+        align: header_align_log2,
+        memory_index: MEMORY_INDEX,
+    });
+
+    // Leave the header pointer on the stack as the For value.
+    sink.local_get(out_header_local);
+
+    Ok(())
+}
+
+/// Emit the right `store` opcode for a For-loop body value at the
+/// pre-computed `(buf + i * elem_size)` address that's already on the
+/// stack just below the body value. Mirrors
+/// [`crate::lower::aggregate::store_array_element`] but keeps the
+/// dispatch local to the control-flow module.
+fn store_for_body_value(
+    body_ty: &ResolvedType,
+    field_layout: FieldLayout,
+    sink: &mut InstructionSink<'_>,
+) -> Result<(), LowerError> {
+    match body_ty {
+        ResolvedType::Primitive(p) => {
+            store_primitive(*p, field_layout, sink);
+            Ok(())
+        }
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_) => {
+            sink.i32_store(field_mem_arg(field_layout));
+            Ok(())
+        }
+        ResolvedType::Optional(_)
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Trait(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Error => Err(LowerError::NotYetImplemented {
+            what: format!("for-loop body of type {body_ty:?}"),
+        }),
     }
 }

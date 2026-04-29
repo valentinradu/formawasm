@@ -41,7 +41,7 @@ pub use block::{lower_block, lower_function_body, lower_function_body_in_module}
 // MethodMap is exported for the production module-lowering pass that
 // consumes it as a coordinated input alongside FunctionMap.
 pub use call::{lower_function_call, lower_method_call};
-pub use control::{lower_if, lower_match};
+pub use control::{lower_for, lower_if, lower_match};
 pub use literal::lower_literal;
 pub use reference::{lower_let_ref, lower_reference};
 pub use unary_op::lower_unary_op;
@@ -520,13 +520,13 @@ pub fn lower_expr(
         IrExpr::MethodCall { .. } => lower_method_call(expr, sink, ctx),
         IrExpr::ClosureRef { .. } => lower_closure_ref(expr, sink, ctx),
         IrExpr::Array { .. } => lower_array(expr, sink, ctx),
+        IrExpr::For { .. } => lower_for(expr, sink, ctx),
 
-        IrExpr::For { .. }
-        | IrExpr::Closure { .. }
-        | IrExpr::DictLiteral { .. }
-        | IrExpr::DictAccess { .. } => Err(LowerError::NotYetImplemented {
-            what: format!("IrExpr::{}", expr_variant_name(expr)),
-        }),
+        IrExpr::Closure { .. } | IrExpr::DictLiteral { .. } | IrExpr::DictAccess { .. } => {
+            Err(LowerError::NotYetImplemented {
+                what: format!("IrExpr::{}", expr_variant_name(expr)),
+            })
+        }
     }
 }
 

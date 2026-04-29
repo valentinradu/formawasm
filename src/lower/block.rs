@@ -268,6 +268,25 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
             }
             Ok(())
         }
+        IrExpr::For {
+            var,
+            var_ty,
+            var_binding_id,
+            collection,
+            body,
+            ..
+        } => {
+            // The loop variable acts like a let binding: register it
+            // in the binding map so body references resolve through
+            // `lower_let_ref`.
+            let vt = body_value_type(var_ty)?.ok_or_else(|| LowerError::ZeroSizedLetBinding {
+                name: var.clone(),
+                ty: var_ty.clone(),
+            })?;
+            out.push((*var_binding_id, vt));
+            walk_for_locals(collection, out)?;
+            walk_for_locals(body, out)
+        }
 
         // Leaves and not-yet-supported variants — no inner locals.
         IrExpr::Literal { .. }
@@ -275,7 +294,6 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
         | IrExpr::LetRef { .. }
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::Array { .. }
-        | IrExpr::For { .. }
         | IrExpr::Closure { .. }
         | IrExpr::DictLiteral { .. }
         | IrExpr::DictAccess { .. } => Ok(()),
@@ -467,12 +485,23 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
                 walk_count(e, out)?;
             }
         }
+        IrExpr::For {
+            collection, body, ..
+        } => {
+            // Each For loop reserves seven i32 scratch locals
+            // (range, start, end, len, out_buf, out_header, i) —
+            // see `control::lower_for` for the matching consumption.
+            for _ in 0..7 {
+                bump_count(out)?;
+            }
+            walk_count(collection, out)?;
+            walk_count(body, out)?;
+        }
 
         IrExpr::Literal { .. }
         | IrExpr::Reference { .. }
         | IrExpr::LetRef { .. }
         | IrExpr::SelfFieldRef { .. }
-        | IrExpr::For { .. }
         | IrExpr::Closure { .. }
         | IrExpr::DictLiteral { .. }
         | IrExpr::DictAccess { .. } => {}
