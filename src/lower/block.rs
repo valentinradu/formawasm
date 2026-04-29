@@ -488,10 +488,10 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         IrExpr::For {
             collection, body, ..
         } => {
-            // Each For loop reserves seven i32 scratch locals
-            // (range, start, end, len, out_buf, out_header, i) —
-            // see `control::lower_for` for the matching consumption.
-            for _ in 0..7 {
+            // Per-For scratch-local count is owned by `control` so
+            // the reservation here cannot drift from the consumption
+            // there.
+            for _ in 0..super::control::FOR_SCRATCH_LOCAL_COUNT {
                 bump_count(out)?;
             }
             walk_count(collection, out)?;

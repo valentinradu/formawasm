@@ -477,37 +477,71 @@ pub fn lower_array(
     }
 
     let header_local = allocate_aggregate(layout.header_size, sink, ctx)?;
-    let header_align_log2 = align_to_log2(ARRAY_HEADER_ALIGN);
+    finalize_array_header(header_local, buf_local, HeaderLen::Const(len_signed), sink);
+    Ok(())
+}
+
+/// Source of the `len` / `cap` values used by
+/// [`finalize_array_header`].
+///
+/// Array literals know their length statically (the IR carries the
+/// element vector), so they pass [`HeaderLen::Const`]. The For-loop
+/// comprehension computes its length at runtime as `end - start`,
+/// stashes it in a wasm local, and passes [`HeaderLen::Local`].
+#[derive(Debug, Clone, Copy)]
+pub(super) enum HeaderLen {
+    /// Statically-known length — emitted as `i32.const`.
+    Const(i32),
+    /// Length lives in the wasm local at this index — emitted as
+    /// `local.get`.
+    Local(u32),
+}
+
+/// Write the `{ ptr, len, cap }` triple into a freshly-allocated
+/// 12-byte array header.
+///
+/// `header_local` holds the header's base pointer; `buf_local` holds
+/// the element-buffer pointer that goes into the `ptr` slot. `len`
+/// drives both the `len` and `cap` slots — capacity equals length
+/// since growable arrays aren't a Phase 1c feature. Leaves the header
+/// pointer on the wasm stack as the array value.
+pub(super) fn finalize_array_header(
+    header_local: u32,
+    buf_local: u32,
+    len: HeaderLen,
+    sink: &mut InstructionSink<'_>,
+) {
+    let mem_arg = |offset: u64| MemArg {
+        offset,
+        align: align_to_log2(ARRAY_HEADER_ALIGN),
+        memory_index: MEMORY_INDEX,
+    };
+    let push_len = |sink: &mut InstructionSink<'_>| match len {
+        HeaderLen::Const(c) => {
+            sink.i32_const(c);
+        }
+        HeaderLen::Local(idx) => {
+            sink.local_get(idx);
+        }
+    };
 
     // ptr at offset 0
     sink.local_get(header_local);
     sink.local_get(buf_local);
-    sink.i32_store(MemArg {
-        offset: 0,
-        align: header_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
+    sink.i32_store(mem_arg(0));
 
     // len at offset 4
     sink.local_get(header_local);
-    sink.i32_const(len_signed);
-    sink.i32_store(MemArg {
-        offset: 4,
-        align: header_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
+    push_len(sink);
+    sink.i32_store(mem_arg(4));
 
-    // cap at offset 8 (= len for literals)
+    // cap at offset 8 (= len; growable arrays land later)
     sink.local_get(header_local);
-    sink.i32_const(len_signed);
-    sink.i32_store(MemArg {
-        offset: 8,
-        align: header_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
+    push_len(sink);
+    sink.i32_store(mem_arg(8));
 
+    // Leave the header pointer on the stack as the array value.
     sink.local_get(header_local);
-    Ok(())
 }
 
 /// Emit the `store` opcode that writes one array element to `buf +

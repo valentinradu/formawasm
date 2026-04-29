@@ -5,13 +5,19 @@ use formalang::ast::PrimitiveType;
 use formalang::ir::{IrExpr, IrMatchArm, ResolvedType};
 use wasm_encoder::{BlockType, InstructionSink, MemArg};
 
-use super::aggregate::{field_mem_arg, load_primitive, primitive_of, store_primitive};
-use super::{LowerContext, LowerError, lower_expr};
-use crate::layout::{
-    ARRAY_HEADER_ALIGN, ENUM_TAG_ALIGN, FieldLayout, plan_array, plan_enum, plan_range,
+use super::aggregate::{
+    HeaderLen, field_mem_arg, finalize_array_header, load_primitive, primitive_of, store_primitive,
 };
+use super::{LowerContext, LowerError, lower_expr};
+use crate::layout::{ENUM_TAG_ALIGN, FieldLayout, plan_array, plan_enum, plan_range};
 use crate::module::MEMORY_INDEX;
 use crate::types::{body_value_type, resolved_value_type};
+
+/// Number of i32 scratch locals each `IrExpr::For` allocates: `range`,
+/// `start`, `end`, `len`, `out_buf`, `out_header`, `i`. Shared with
+/// the function-body pre-walk in `super::block::walk_count` so the
+/// reservation count and the consumption count cannot drift apart.
+pub(super) const FOR_SCRATCH_LOCAL_COUNT: u32 = 7;
 
 /// Lower an [`IrExpr::If`] onto `sink`.
 ///
@@ -276,26 +282,43 @@ const fn align_log2(align: u32) -> u32 {
 ///    and leaves the header pointer on the stack as the For
 ///    expression's value.
 ///
-/// Scratch locals reserved by the function-body pre-walk in
-/// `block::walk_count`: 7 (`range`, `start_save`, `end`, `len`,
-/// `out_buf`, `out_header`, `i`) — `walk_count` for `IrExpr::For`
-/// performs the matching count.
-#[expect(
-    clippy::too_many_lines,
-    reason = "single-pass For lowering — splitting hides the wasm-stack discipline that ties the steps together"
-)]
+/// Per-For scratch and binding indices reserved up-front so the
+/// emitter steps are straight-line. All seven scratch slots are i32
+/// per [`FOR_SCRATCH_LOCAL_COUNT`]; `var_local` is allocated through
+/// the regular binding map at the loop variable's value type.
+struct ForLocals {
+    range: u32,
+    start: u32,
+    end: u32,
+    len: u32,
+    out_buf: u32,
+    out_header: u32,
+    i: u32,
+    var: u32,
+}
+
+/// Lower an [`IrExpr::For`] onto `sink`.
+///
+/// Phase 1c restricts the iteration source to `Range<I32>`. Iterating
+/// `Array<T>` and other primitive ranges rides later mcs.
+///
+/// Shape — `for var in start..end { body }` evaluates to
+/// `Array<body_ty>`, one entry per iteration. The lowering splits
+/// cleanly into setup (load bounds, allocate output), the main
+/// `block`/`loop` body, and a final header write — see the helpers
+/// below.
 pub fn lower_for(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::For {
-        var,
         var_ty,
         var_binding_id,
         collection,
         body,
         ty,
+        ..
     } = expr
     else {
         return Err(LowerError::NotYetImplemented {
@@ -303,8 +326,47 @@ pub fn lower_for(
         });
     };
 
-    // Phase 1c mc4 only supports Range<I32> collections. Array
-    // iteration lands once index access is wired up.
+    let (bound_ty, body_ty) = check_for_types(collection, var_ty, ty)?;
+    let module = ctx.module()?;
+    let range_layout = plan_range(bound_ty, module)?;
+    let array_layout = plan_array(body_ty, module)?;
+
+    let locals = ForLocals {
+        range: ctx.next_scratch_local()?,
+        start: ctx.next_scratch_local()?,
+        end: ctx.next_scratch_local()?,
+        len: ctx.next_scratch_local()?,
+        out_buf: ctx.next_scratch_local()?,
+        out_header: ctx.next_scratch_local()?,
+        i: ctx.next_scratch_local()?,
+        var: ctx
+            .bindings
+            .get(*var_binding_id)
+            .ok_or(LowerError::UnknownBinding(*var_binding_id))?,
+    };
+
+    emit_for_setup(collection, range_layout, array_layout, &locals, ctx, sink)?;
+    emit_for_loop(body, body_ty, array_layout, &locals, ctx, sink)?;
+    finalize_array_header(
+        locals.out_header,
+        locals.out_buf,
+        HeaderLen::Local(locals.len),
+        sink,
+    );
+
+    Ok(())
+}
+
+/// Validate the For-expression's collection / variable / result types
+/// and return the bound + output element types so [`lower_for`] can
+/// plan layouts before emitting any code. Phase 1c mc4 only accepts
+/// `Range<I32>` collections and `I32` loop variables; the result
+/// type must be `Array<body_ty>` per the IR contract.
+fn check_for_types<'a>(
+    collection: &'a IrExpr,
+    var_ty: &ResolvedType,
+    ty: &'a ResolvedType,
+) -> Result<(&'a ResolvedType, &'a ResolvedType), LowerError> {
     let coll_ty = collection.ty();
     let ResolvedType::Range(bound_box) = coll_ty else {
         return Err(LowerError::NotYetImplemented {
@@ -324,119 +386,117 @@ pub fn lower_for(
             what: format!("for-loop variable of type {var_ty:?} (only I32 supported in mc4)"),
         });
     }
-    let _ = var; // preserved on the IR for diagnostics only
-
-    let module = ctx.module()?;
-    let range_layout = plan_range(bound_ty, module)?;
-
-    // Output array element type — derived from the For's overall ty,
-    // which is `Array(body_ty)` per the IR contract.
     let ResolvedType::Array(body_box) = ty else {
         return Err(LowerError::NotYetImplemented {
             what: format!("for-loop carrying non-Array result type {ty:?}"),
         });
     };
-    let body_ty = body_box.as_ref();
-    let array_layout = plan_array(body_ty, module)?;
+    Ok((bound_ty, body_box.as_ref()))
+}
 
-    // Reserve the seven i32 scratch locals up-front so emission is
-    // straight-line.
-    let range_local = ctx.next_scratch_local()?;
-    let start_local = ctx.next_scratch_local()?;
-    let end_local = ctx.next_scratch_local()?;
-    let len_local = ctx.next_scratch_local()?;
-    let out_buf_local = ctx.next_scratch_local()?;
-    let out_header_local = ctx.next_scratch_local()?;
-    let i_local = ctx.next_scratch_local()?;
-    let var_local = ctx
-        .bindings
-        .get(*var_binding_id)
-        .ok_or(LowerError::UnknownBinding(*var_binding_id))?;
-
-    // ── 1. Lower the range collection and pull start / end out ──────
+/// Emit setup: lower `collection` to a range pointer, pull `start`
+/// and `end` into scratch locals, compute `len = end - start`, and
+/// bump-allocate the output element buffer and header. After this
+/// helper returns, `i_local` is pre-set to 0 and the wasm stack is
+/// empty.
+fn emit_for_setup(
+    collection: &IrExpr,
+    range_layout: crate::layout::RangeLayout,
+    array_layout: crate::layout::ArrayLayout,
+    locals: &ForLocals,
+    ctx: &LowerContext<'_>,
+    sink: &mut InstructionSink<'_>,
+) -> Result<(), LowerError> {
     lower_expr(collection, sink, ctx)?;
-    sink.local_set(range_local);
+    sink.local_set(locals.range);
 
-    sink.local_get(range_local);
+    let bound_align_log2 = align_log2(range_layout.bound_align);
+    sink.local_get(locals.range);
     sink.i32_load(MemArg {
         offset: 0,
-        align: align_log2(range_layout.bound_align),
+        align: bound_align_log2,
         memory_index: MEMORY_INDEX,
     });
-    sink.local_set(start_local);
+    sink.local_set(locals.start);
 
-    sink.local_get(range_local);
+    sink.local_get(locals.range);
     sink.i32_load(MemArg {
         offset: u64::from(range_layout.end_offset),
-        align: align_log2(range_layout.bound_align),
+        align: bound_align_log2,
         memory_index: MEMORY_INDEX,
     });
-    sink.local_set(end_local);
+    sink.local_set(locals.end);
 
-    // ── 2. len = end - start ────────────────────────────────────────
-    sink.local_get(end_local);
-    sink.local_get(start_local);
+    sink.local_get(locals.end);
+    sink.local_get(locals.start);
     sink.i32_sub();
-    sink.local_set(len_local);
+    sink.local_set(locals.len);
 
-    // ── 3. Allocate output buffer and header ───────────────────────
-    // out_buf: len * elem_size bytes through the bump allocator.
     let alloc_idx = ctx.bump_allocator()?;
     let elem_size_signed = i32::try_from(array_layout.element_size).map_err(|_| {
         LowerError::Layout(crate::layout::LayoutError::SizeOverflow {
             name: "<for-output element>".to_owned(),
         })
     })?;
-    sink.local_get(len_local);
+    sink.local_get(locals.len);
     sink.i32_const(elem_size_signed);
     sink.i32_mul();
     sink.call(alloc_idx);
-    sink.local_set(out_buf_local);
+    sink.local_set(locals.out_buf);
 
-    // out_header: 12 bytes through the bump allocator. We reuse
-    // `allocate_aggregate` for the header since it also stashes the
-    // pointer in a fresh scratch local, but here we already reserved
-    // out_header_local up-front — so call into the allocator manually.
     sink.i32_const(i32::try_from(array_layout.header_size).map_err(|_| {
         LowerError::Layout(crate::layout::LayoutError::SizeOverflow {
             name: "<for-output header>".to_owned(),
         })
     })?);
     sink.call(alloc_idx);
-    sink.local_set(out_header_local);
+    sink.local_set(locals.out_header);
 
-    // ── 4. i = 0 ────────────────────────────────────────────────────
     sink.i32_const(0);
-    sink.local_set(i_local);
+    sink.local_set(locals.i);
 
-    // ── 5. Main loop ────────────────────────────────────────────────
+    Ok(())
+}
+
+/// Emit the `block` / `loop` pair: per-iteration write `var = start +
+/// i`, compute the output address `out_buf + i * elem_size`, lower
+/// `body` onto that address, store the body value, then `i += 1` and
+/// branch to the loop top. Exit on `i >= len`.
+fn emit_for_loop(
+    body: &IrExpr,
+    body_ty: &ResolvedType,
+    array_layout: crate::layout::ArrayLayout,
+    locals: &ForLocals,
+    ctx: &LowerContext<'_>,
+    sink: &mut InstructionSink<'_>,
+) -> Result<(), LowerError> {
+    let elem_size_signed = i32::try_from(array_layout.element_size).map_err(|_| {
+        LowerError::Layout(crate::layout::LayoutError::SizeOverflow {
+            name: "<for-output element>".to_owned(),
+        })
+    })?;
+
     sink.block(BlockType::Empty);
     sink.loop_(BlockType::Empty);
 
-    // exit if i >= len
-    sink.local_get(i_local);
-    sink.local_get(len_local);
+    sink.local_get(locals.i);
+    sink.local_get(locals.len);
     sink.i32_ge_s();
     sink.br_if(1); // exit the surrounding $end block
 
-    // var = start + i
-    sink.local_get(start_local);
-    sink.local_get(i_local);
+    sink.local_get(locals.start);
+    sink.local_get(locals.i);
     sink.i32_add();
-    sink.local_set(var_local);
+    sink.local_set(locals.var);
 
-    // Push the address (out_buf + i * elem_size) for the upcoming
-    // body store.
-    sink.local_get(out_buf_local);
-    sink.local_get(i_local);
+    sink.local_get(locals.out_buf);
+    sink.local_get(locals.i);
     sink.i32_const(elem_size_signed);
     sink.i32_mul();
     sink.i32_add();
 
-    // Lower the body — leaves body_val on top of the stack.
     lower_expr(body, sink, ctx)?;
 
-    // Store at the address computed above.
     let body_field_layout = FieldLayout {
         offset: 0,
         size: array_layout.element_size,
@@ -444,43 +504,14 @@ pub fn lower_for(
     };
     store_for_body_value(body_ty, body_field_layout, sink)?;
 
-    // i += 1
-    sink.local_get(i_local);
+    sink.local_get(locals.i);
     sink.i32_const(1);
     sink.i32_add();
-    sink.local_set(i_local);
+    sink.local_set(locals.i);
 
-    // br to loop top
     sink.br(0);
     sink.end(); // close loop
     sink.end(); // close $end block
-
-    // ── 6. Finalize header: ptr, len, cap ───────────────────────────
-    let header_align_log2 = align_log2(ARRAY_HEADER_ALIGN);
-    sink.local_get(out_header_local);
-    sink.local_get(out_buf_local);
-    sink.i32_store(MemArg {
-        offset: 0,
-        align: header_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
-    sink.local_get(out_header_local);
-    sink.local_get(len_local);
-    sink.i32_store(MemArg {
-        offset: 4,
-        align: header_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
-    sink.local_get(out_header_local);
-    sink.local_get(len_local);
-    sink.i32_store(MemArg {
-        offset: 8,
-        align: header_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
-
-    // Leave the header pointer on the stack as the For value.
-    sink.local_get(out_header_local);
 
     Ok(())
 }
