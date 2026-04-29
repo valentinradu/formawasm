@@ -449,12 +449,21 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
             bump_count(out)?;
             walk_count(env_struct, out)?;
         }
+        IrExpr::Array { elements, .. } => {
+            // Each Array literal reserves two scratch locals — one
+            // for the element-buffer base pointer, one for the
+            // header pointer.
+            bump_count(out)?;
+            bump_count(out)?;
+            for e in elements {
+                walk_count(e, out)?;
+            }
+        }
 
         IrExpr::Literal { .. }
         | IrExpr::Reference { .. }
         | IrExpr::LetRef { .. }
         | IrExpr::SelfFieldRef { .. }
-        | IrExpr::Array { .. }
         | IrExpr::For { .. }
         | IrExpr::Closure { .. }
         | IrExpr::DictLiteral { .. }

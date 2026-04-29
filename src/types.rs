@@ -171,12 +171,10 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
         ResolvedType::Struct(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Enum(_)
+        | ResolvedType::Array(_)
         | ResolvedType::Closure { .. } => Ok(Some(ValType::I32)),
         ResolvedType::Trait(_) => Err(TypeMapError::NotYetSupported {
             kind: "Trait".to_owned(),
-        }),
-        ResolvedType::Array(_) => Err(TypeMapError::NotYetSupported {
-            kind: "Array<T>".to_owned(),
         }),
         ResolvedType::Range(_) => Err(TypeMapError::NotYetSupported {
             kind: "Range<T>".to_owned(),

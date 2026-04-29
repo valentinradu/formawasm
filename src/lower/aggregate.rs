@@ -18,7 +18,8 @@ use wasm_encoder::{InstructionSink, MemArg};
 
 use super::{LowerContext, LowerError, lower_expr};
 use crate::layout::{
-    ENUM_TAG_ALIGN, FieldLayout, StructLayout, VariantLayout, plan_enum, plan_struct,
+    ARRAY_HEADER_ALIGN, ArrayLayout, ENUM_TAG_ALIGN, FieldLayout, LayoutError, StructLayout,
+    VariantLayout, plan_array, plan_enum, plan_struct,
 };
 use crate::module::MEMORY_INDEX;
 
@@ -397,6 +398,157 @@ pub fn lower_tuple(
 
     sink.local_get(base_local);
     Ok(())
+}
+
+/// Lower [`IrExpr::Array`].
+///
+/// Materializes an array literal as a 12-byte header
+/// (`{ ptr, len, cap }`) plus a separately-allocated element buffer:
+///
+/// 1. Allocate `len * element_size` bytes for the element buffer
+///    through the bump allocator and stash the base pointer in a
+///    scratch local.
+/// 2. Walk each element expression in source order; for each one,
+///    leave the buffer pointer + element value on the stack and emit
+///    the right primitive `store` opcode at offset
+///    `i * element_size`. Aggregate elements are stored as `i32`
+///    pointers since aggregates already live elsewhere in linear
+///    memory.
+/// 3. Allocate the 12-byte header through the bump allocator and
+///    stash that pointer in a second scratch local. Store the buffer
+///    base at offset 0 (`ptr`), the length at offset 4 (`len`), and
+///    the length again at offset 8 (`cap` — capacity equals length
+///    for literals; growable arrays are a later feature).
+/// 4. Leave the header pointer on the stack as the array value.
+///
+/// Empty arrays still take both allocations; the buffer alloc with
+/// size 0 returns the current heap pointer without advancing it, so
+/// the header's `ptr` slot may coincide with the header itself —
+/// benign since nothing reads through `ptr` when `len == 0`.
+pub fn lower_array(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::Array { elements, ty } = expr else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_array called with non-Array expression".to_owned(),
+        });
+    };
+
+    let ResolvedType::Array(elem_box) = ty else {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("Array literal carrying non-Array type {ty:?}"),
+        });
+    };
+    let elem_ty = elem_box.as_ref();
+
+    let module = ctx.module()?;
+    let layout = plan_array(elem_ty, module)?;
+
+    let len_u32 = u32::try_from(elements.len()).map_err(|_| LowerError::NotYetImplemented {
+        what: "array literal with more than u32::MAX elements".to_owned(),
+    })?;
+    let len_signed = i32::try_from(len_u32).map_err(|_| LowerError::NotYetImplemented {
+        what: "array literal length exceeds i32::MAX".to_owned(),
+    })?;
+    let buffer_size =
+        layout
+            .element_size
+            .checked_mul(len_u32)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                name: "<array buffer>".to_owned(),
+            })?;
+
+    let buf_local = allocate_aggregate(buffer_size, sink, ctx)?;
+
+    for (i, element) in elements.iter().enumerate() {
+        let i_u32 = u32::try_from(i).unwrap_or(u32::MAX);
+        let offset =
+            layout
+                .element_size
+                .checked_mul(i_u32)
+                .ok_or_else(|| LayoutError::SizeOverflow {
+                    name: "<array element offset>".to_owned(),
+                })?;
+        sink.local_get(buf_local);
+        lower_expr(element, sink, ctx)?;
+        store_array_element(elem_ty, layout, offset, sink)?;
+    }
+
+    let header_local = allocate_aggregate(layout.header_size, sink, ctx)?;
+    let header_align_log2 = align_to_log2(ARRAY_HEADER_ALIGN);
+
+    // ptr at offset 0
+    sink.local_get(header_local);
+    sink.local_get(buf_local);
+    sink.i32_store(MemArg {
+        offset: 0,
+        align: header_align_log2,
+        memory_index: MEMORY_INDEX,
+    });
+
+    // len at offset 4
+    sink.local_get(header_local);
+    sink.i32_const(len_signed);
+    sink.i32_store(MemArg {
+        offset: 4,
+        align: header_align_log2,
+        memory_index: MEMORY_INDEX,
+    });
+
+    // cap at offset 8 (= len for literals)
+    sink.local_get(header_local);
+    sink.i32_const(len_signed);
+    sink.i32_store(MemArg {
+        offset: 8,
+        align: header_align_log2,
+        memory_index: MEMORY_INDEX,
+    });
+
+    sink.local_get(header_local);
+    Ok(())
+}
+
+/// Emit the `store` opcode that writes one array element to `buf +
+/// offset`, given the element's resolved type and the array's layout.
+fn store_array_element(
+    elem_ty: &ResolvedType,
+    layout: ArrayLayout,
+    offset: u32,
+    sink: &mut InstructionSink<'_>,
+) -> Result<(), LowerError> {
+    let field_layout = FieldLayout {
+        offset,
+        size: layout.element_size,
+        align: layout.element_align,
+    };
+    match elem_ty {
+        ResolvedType::Primitive(p) => {
+            store_primitive(*p, field_layout, sink);
+            Ok(())
+        }
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Array(_) => {
+            sink.i32_store(field_mem_arg(field_layout));
+            Ok(())
+        }
+        // `plan_array` rejects every other element type, so this arm
+        // is defensive only.
+        ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Trait(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Error => Err(LowerError::NotYetImplemented {
+            what: format!("array element of type {elem_ty:?}"),
+        }),
+    }
 }
 
 /// Lower [`IrExpr::SelfFieldRef`].
