@@ -13,7 +13,7 @@ use formalang::ir::{
     BindingId, FunctionId, IrBlockStatement, IrExpr, ReferenceTarget, ResolvedType,
 };
 use thiserror::Error;
-use wasm_encoder::{Function, Ieee32, Ieee64, InstructionSink, ValType};
+use wasm_encoder::{BlockType, Function, Ieee32, Ieee64, InstructionSink, ValType};
 
 use crate::types::{TypeMapError, resolved_value_type};
 
@@ -541,6 +541,48 @@ pub fn lower_unary_op(
     Ok(())
 }
 
+/// Lower an [`IrExpr::If`] onto `sink`.
+///
+/// Emits a wasm `if BLOCKTY` framed by the branches and a closing
+/// `end`. The block type is derived from the resolved `If.ty`:
+/// `Never` and unit map to `BlockType::Empty`, scalar primitives map
+/// to `BlockType::Result(ValType)`. Aggregate result types are
+/// rejected as `NotYetImplemented` until the runtime aggregate ABI
+/// lands.
+///
+/// An if without an `else` branch requires a unit/`Never` result —
+/// otherwise the wasm validator would reject the missing else arm
+/// for a non-empty block type.
+pub fn lower_if(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::If {
+        condition,
+        then_branch,
+        else_branch,
+        ty,
+    } = expr
+    else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_if called with non-If expression".to_owned(),
+        });
+    };
+
+    let block_ty = resolved_value_type(ty)?.map_or(BlockType::Empty, BlockType::Result);
+
+    lower_expr(condition, sink, ctx)?;
+    sink.if_(block_ty);
+    lower_expr(then_branch, sink, ctx)?;
+    if let Some(else_branch) = else_branch {
+        sink.else_();
+        lower_expr(else_branch, sink, ctx)?;
+    }
+    sink.end();
+    Ok(())
+}
+
 /// Lower an [`IrExpr::FunctionCall`] onto `sink`. Each argument is
 /// lowered in declaration order, then a `call <wasm_index>`
 /// instruction is emitted. The wasm index comes from the
@@ -783,6 +825,7 @@ pub fn lower_expr(
         IrExpr::UnaryOp { .. } => lower_unary_op(expr, sink, ctx),
         IrExpr::Block { .. } => lower_block(expr, sink, ctx),
         IrExpr::FunctionCall { .. } => lower_function_call(expr, sink, ctx),
+        IrExpr::If { .. } => lower_if(expr, sink, ctx),
 
         IrExpr::SelfFieldRef { .. }
         | IrExpr::FieldAccess { .. }
@@ -790,7 +833,6 @@ pub fn lower_expr(
         | IrExpr::EnumInst { .. }
         | IrExpr::Tuple { .. }
         | IrExpr::Array { .. }
-        | IrExpr::If { .. }
         | IrExpr::For { .. }
         | IrExpr::Match { .. }
         | IrExpr::MethodCall { .. }
