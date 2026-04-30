@@ -7,7 +7,7 @@ first, then come back here for the "what to do now" view.
 
 ---
 
-## Status (as of 2026-04-30)
+## Status (as of 2026-04-30 — Phase 2 in progress)
 
 **Upstream — formalang at `~/projects/formalang`:**
 
@@ -140,24 +140,56 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-## Immediate work — Phase 2: strings, optionals, dictionaries
+**Phase 2 in progress** (since 2026-04-30):
 
-Phase 1c mc8 closed Phase 1. Pick up Phase 2 from the README's
-roadmap (line 287 onward). The first commits target `Optional<T>`
-(small but well-isolated) and string memory layout, then dictionary
-support comes last:
+- ✅ mc1 (`5a0ec1b`): `plan_optional` layout planner — uniform
+  `{ tag: i32, payload: T }` record; `Optional<Never>` is the static
+  type of the `nil` literal and lays out as a tag-only 4-byte cell;
+  aggregate inner types collapse to a 4-byte pointer payload.
+- ✅ mc2 (`c1d113f`): `Literal::Nil` materializes a tag-only Optional
+  in linear memory (alloc 4 bytes, store `OPTIONAL_TAG_NIL` at offset
+  0, push pointer). `body_value_type` now maps `Optional<T>` to `i32`
+  so let-bindings / params / returns travel as pointers — same
+  convention every other aggregate uses. End-to-end coverage in
+  `tests/lower_nil.rs` verifies the tag through wasmtime, including
+  the storage-compatible "widening" `let x: I32? = nil`.
+- ✅ mc3 (`4f6d1f5`): WIT mapping `Optional<T>` → `option<inner>`.
+  Symmetric with the `Array<T>` → `list<inner>` recursion;
+  `Optional<Never>` stays rejected because WIT has no zero-payload
+  `option<>` form. Round-trips through `wit_parser::Resolve`.
 
-1. Memory-layout + lowering for `Optional<T>`; WIT mapping `option<T>`.
-2. String memory layout `{ ptr, len }`, data-section seeding for
-   literals, equality runtime helper.
-3. Lowering for `BinaryOp::Add` on `String` (concatenation runtime helper).
-4. WIT mapping `string`, plus a round-trip test through the component
-   runtime with a `string -> string` export.
-5. `Path` / `Regex` mapped to `string` at the boundary, identity
-   preserved internally.
-6. Dictionary as sorted-pairs array v1: literal lowering, lookup
-   runtime helper.
-7. WIT mapping `Dictionary<K, V>` → `list<tuple<K, V>>`.
+## Immediate work — Phase 2 continued
+
+The next mc closes the `Optional<T>` story by lifting the storage-
+compatible-widening shortcut into a proper `Some`-wrap path:
+
+1. **Some-wrapping**: when an expression of static type `T` (or any
+   `Optional<U>` strictly narrower than `Optional<T>`) flows into an
+   `Optional<T>`-typed slot, allocate a full-size `Optional<T>` value,
+   store `OPTIONAL_TAG_SOME` at offset 0, and store the payload at
+   `payload_offset`. The most natural plumbing is a coercion helper
+   the let / return / arg / arm-body sites all funnel through;
+   alternatively a pre-pass that inserts an explicit
+   `IrExpr::OptionalSome` (lift to upstream first if so).
+2. End-to-end test: a public `fn maybe(n: I32) -> I32? { if n > 0 { n }
+   else { nil } }` exported as `option<s32>` and round-tripped through
+   the component runtime — both arms exercised.
+3. Pattern-matching support: `Match` over `Optional<T>` to read back
+   the tag and bind the payload. (Or punt to a later mc if the wider
+   `Match` coverage stays focused.)
+
+After Optional closes, Phase 2 continues with the README's roadmap:
+
+- String memory layout `{ ptr, len }`, data-section seeding for
+  literals, equality runtime helper.
+- Lowering for `BinaryOp::Add` on `String` (concatenation runtime helper).
+- WIT mapping `string`, plus a round-trip test through the component
+  runtime with a `string -> string` export.
+- `Path` / `Regex` mapped to `string` at the boundary, identity
+  preserved internally.
+- Dictionary as sorted-pairs array v1: literal lowering, lookup
+  runtime helper.
+- WIT mapping `Dictionary<K, V>` → `list<tuple<K, V>>`.
 
 The convenience cleanups from "Known restrictions" can land
 opportunistically alongside whichever Phase 2 mc touches the same
