@@ -43,7 +43,7 @@ above into one program. Each mc has its own end-to-end test under
 program test is straightforward to add but not currently committed.
 Indirect closure invocation also remains for Phase 1c.
 
-**Phase 1c progress** (in flight):
+**Phase 1c is COMPLETE** (closed out 2026-04-30):
 
 - ✅ mc1 (`da90a70`): `plan_array` layout planner — `{ ptr, len, cap }` header + per-element stride.
 - ✅ mc2 (`4f15613`): `lower_array` materializes the literal end-to-end, validated under wasmtime for I32 / I64 / Boolean / struct-pointer arrays.
@@ -52,11 +52,14 @@ Indirect closure invocation also remains for Phase 1c.
 - ✅ mc5 (`4be409b`): index access (`arr[i]`) reads through the array header to the element buffer.
 - ✅ mc6: For over `Array<T>` lowers as a direct loop — read `in_buf` and `len` from the array header, load each element into the loop variable per iteration, store body values into a fresh `Array<body_ty>`. Implemented as a separate `lower_for_array` arm in `src/lower/control.rs` so the per-source scratch-local layout stays explicit; the seventh scratch slot (`end` in the Range path) is intentionally skipped to keep the per-For reservation count uniform with `walk_count`.
 - ✅ mc7: WIT `list<T>` mapping. `resolved_wit_type` now returns owned `String`s and recurses on `ResolvedType::Array(elem)` to emit `list<inner>`. Records and function signatures pick this up for free; nested lists (`list<list<s32>>`) compose. Unsupported element types (`Never`, `Struct`, …) propagate the existing `NotYetSupported` error. Round-trips through `wit_parser::Resolve`.
-- ⏳ **mc8 next**: Sieve-of-Eratosthenes end-to-end test — the Phase 1c milestone.
+- ✅ mc8: **Phase 1c milestone hit**: Sieve of Eratosthenes runs under wasmtime's component runtime. `tests/sieve.rs` hand-builds a 3-function `IrModule` (`check-divisor` self-recursive trial-division helper, `is-prime`, and `sieve(limit) -> Array<Boolean>` collecting `is-prime(p)` for `p in 0..limit`), runs it through `Pipeline::emit(module, &WasmBackend::new())`, validates the component-model artifact, instantiates under wasmtime's component runtime, and compares the returned `list<bool>` against the expected primality vector for `limit = 30`. The internal `{ ptr, len, cap }` array-header layout turns out to be canonical-ABI-compatible because `wit-component` reads only `ptr` at offset 0 and `len` at offset 4 when lifting `list<T>` returns — `cap` at offset 8 is benign extra data.
 
-**Known restrictions to lift later in Phase 1c:**
+**Known restrictions carried forward from Phase 1c:**
 
-- `lower_for` only handles `Range<I32>`; wider numeric ranges (`Range<I64>`, `Range<F32>`, `Range<F64>`) need a typed scratch-local mechanism in the function-body planner — currently scratch locals are all i32. Bounded by mc beyond the sieve milestone.
+- `lower_for` only handles `Range<I32>` for the range-source path; wider numeric ranges (`Range<I64>`, `Range<F32>`, `Range<F64>`) need a typed scratch-local mechanism in the function-body planner — currently scratch locals are all i32. Lift in a Phase 2+ mc.
+- WIT identifiers are kebab-case but the emitter does not yet kebab-case function names (it does for struct fields, struct names, and enum variants). Functions whose IR names contain underscores currently surface as a `wit-parser` syntax error. Workaround: name functions with hyphens in the IR. Lift when convenient.
+- Indirect closure invocation (calling a `ClosureRef` value through a funcref table) is still deferred from Phase 1b mc11.
+- No formal Phase 1b milestone test combining structs/enums/methods/closures — each mc has its own test, but no unified program. Straightforward to add when needed.
 
 > **Quality bar.** This repo mirrors the lint / CI / build setup at
 > `~/projects/smid/smid-ws0` — strict clippy (deny `unwrap_used`,
@@ -130,22 +133,29 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-## Immediate work — Phase 1c mc8: Sieve-of-Eratosthenes milestone
+## Immediate work — Phase 2: strings, optionals, dictionaries
 
-Phase 1c mc1–mc7 are committed (see Status above). The final mc
-composes everything that's landed since mc1 into one program — the
-classical Sieve of Eratosthenes — and exercises it end-to-end through
-the public `Backend::generate` entry point.
+Phase 1c mc8 closed Phase 1. Pick up Phase 2 from the README's
+roadmap (line 287 onward). The first commits target `Optional<T>`
+(small but well-isolated) and string memory layout, then dictionary
+support comes last:
 
-**Scope**
+1. Memory-layout + lowering for `Optional<T>`; WIT mapping `option<T>`.
+2. String memory layout `{ ptr, len }`, data-section seeding for
+   literals, equality runtime helper.
+3. Lowering for `BinaryOp::Add` on `String` (concatenation runtime helper).
+4. WIT mapping `string`, plus a round-trip test through the component
+   runtime with a `string -> string` export.
+5. `Path` / `Regex` mapped to `string` at the boundary, identity
+   preserved internally.
+6. Dictionary as sorted-pairs array v1: literal lowering, lookup
+   runtime helper.
+7. WIT mapping `Dictionary<K, V>` → `list<tuple<K, V>>`.
 
-- New test under `tests/` (e.g. `sieve.rs`) that hand-builds an `IrModule` for the sieve: takes `limit: I32`, returns `Array<I32>` of primes ≤ limit. Build the candidate `Array<Boolean>`, run the outer `for p in 2..limit` and inner `for m in (p*p)..limit` loops to mark composites, then collect the surviving indices into the result array.
-- Run the full pipeline (`Pipeline::new().pass(MonomorphisePass).pass(ClosureConversionPass).pass(DeadCodeEliminationPass).emit(module, &WasmBackend::new())`) — this is the first test that hits the `Backend::generate` entry point with an `Array<I32>` return crossing the WIT boundary.
-- Validate the emitted bytes through the component-model validator (not just `wasmparser`'s core-module path).
-- Instantiate under wasmtime's component runtime and compare against the expected primes for a couple of fixed limits (e.g. 30 → [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]).
-
-After mc8 lands, Phase 1c is closed and we move to Phase 2 (strings,
-optionals, dictionaries) per the README roadmap.
+The convenience cleanups from "Known restrictions" can land
+opportunistically alongside whichever Phase 2 mc touches the same
+area (e.g. kebab-case the function-name path the next time `wit.rs`
+gets meaningful changes).
 
 ---
 
