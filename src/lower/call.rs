@@ -40,8 +40,27 @@ pub fn lower_function_call(
         .get(id)
         .ok_or(LowerError::UnknownFunction(id))?;
 
-    for (_, arg) in args {
-        lower_expr(arg, sink, ctx)?;
+    // Look up the callee in the IR module so each argument can coerce
+    // to its parameter's declared type (Some-wrap widens a plain T
+    // into an Optional<T> param at the call site).
+    let callee = ctx
+        .module()
+        .ok()
+        .and_then(|m| m.functions.get(id.0 as usize));
+    for (param_name, arg) in args {
+        let target = callee.and_then(|f| {
+            param_name.as_ref().and_then(|n| {
+                f.params
+                    .iter()
+                    .find(|p| p.name == *n)
+                    .and_then(|p| p.ty.as_ref())
+            })
+        });
+        if let Some(t) = target {
+            super::optional::lower_coerced(arg, t, sink, ctx)?;
+        } else {
+            lower_expr(arg, sink, ctx)?;
+        }
     }
     sink.call(wasm_idx);
     Ok(())
@@ -156,8 +175,27 @@ pub fn lower_method_call(
         })?;
 
     lower_expr(receiver, sink, ctx)?;
-    for (_, arg) in args {
-        lower_expr(arg, sink, ctx)?;
+    // Look up the method's signature in the impl block so each argument
+    // can coerce to its parameter's declared type.
+    let method_sig = ctx
+        .module()
+        .ok()
+        .and_then(|m| m.impls.get(impl_id.0 as usize))
+        .and_then(|i| i.functions.get(method_idx.0 as usize));
+    for (param_name, arg) in args {
+        let target = method_sig.and_then(|sig| {
+            param_name.as_ref().and_then(|n| {
+                sig.params
+                    .iter()
+                    .find(|p| p.name == *n)
+                    .and_then(|p| p.ty.as_ref())
+            })
+        });
+        if let Some(t) = target {
+            super::optional::lower_coerced(arg, t, sink, ctx)?;
+        } else {
+            lower_expr(arg, sink, ctx)?;
+        }
     }
     sink.call(wasm_idx);
     Ok(())

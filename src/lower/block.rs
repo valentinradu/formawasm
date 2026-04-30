@@ -378,7 +378,7 @@ pub fn lower_function_body_in_module(
     closure_ctx: Option<&ClosureCallContext<'_>>,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
-    let counts = count_scratch_locals(body, return_ty)?;
+    let counts = count_scratch_locals(body, return_ty, Some(module))?;
     let scratch_offset = scratch_locals_offset(param_bindings.len(), plan.locals.len())?;
 
     let mut locals = plan.locals;
@@ -450,6 +450,7 @@ pub(super) struct ScratchCounts {
 fn count_scratch_locals(
     expr: &IrExpr,
     return_ty: Option<&ResolvedType>,
+    module: Option<&IrModule>,
 ) -> Result<ScratchCounts, LowerError> {
     let mut counts = ScratchCounts::default();
     // The function's body value gets coerced to `return_ty` at the
@@ -458,7 +459,7 @@ fn count_scratch_locals(
     if let Some(target) = return_ty {
         super::optional::coercion_scratch_counts(target, expr.ty(), &mut counts)?;
     }
-    walk_count(expr, &mut counts)?;
+    walk_count(expr, module, &mut counts)?;
     Ok(counts)
 }
 
@@ -473,6 +474,7 @@ pub(super) fn bump_count(field: &mut u32) -> Result<(), LowerError> {
 
 fn walk_count_block_statement(
     stmt: &IrBlockStatement,
+    module: Option<&IrModule>,
     out: &mut ScratchCounts,
 ) -> Result<(), LowerError> {
     match stmt {
@@ -480,13 +482,13 @@ fn walk_count_block_statement(
             if let Some(target) = ty.as_ref() {
                 super::optional::coercion_scratch_counts(target, value.ty(), out)?;
             }
-            walk_count(value, out)
+            walk_count(value, module, out)
         }
         IrBlockStatement::Assign { target, value } => {
-            walk_count(target, out)?;
-            walk_count(value, out)
+            walk_count(target, module, out)?;
+            walk_count(value, module, out)
         }
-        IrBlockStatement::Expr(e) => walk_count(e, out),
+        IrBlockStatement::Expr(e) => walk_count(e, module, out),
     }
 }
 
@@ -494,27 +496,72 @@ fn walk_count_block_statement(
     clippy::too_many_lines,
     reason = "exhaustive walk over every IrExpr variant; splitting hides which variants reserve which scratch slots"
 )]
-fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> {
+fn walk_count(
+    expr: &IrExpr,
+    module: Option<&IrModule>,
+    out: &mut ScratchCounts,
+) -> Result<(), LowerError> {
     match expr {
-        IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
+        IrExpr::StructInst {
+            struct_id, fields, ..
+        } => {
             bump_count(&mut out.i32)?;
-            for (_, _, e) in fields {
-                walk_count(e, out)?;
+            // Each field initializer flows into the struct field's
+            // declared type — Some-wrap widens a plain T into an
+            // Optional<T> field.
+            if let Some(id) = struct_id
+                && let Some(m) = module
+                && let Some(s) = m.structs.get(id.0 as usize)
+            {
+                for (name, _idx, e) in fields {
+                    if let Some(decl) = s.fields.iter().find(|f| f.name == *name) {
+                        super::optional::coercion_scratch_counts(&decl.ty, e.ty(), out)?;
+                    }
+                    walk_count(e, module, out)?;
+                }
+            } else {
+                for (_, _, e) in fields {
+                    walk_count(e, module, out)?;
+                }
+            }
+        }
+        IrExpr::EnumInst {
+            enum_id,
+            variant_idx,
+            fields,
+            ..
+        } => {
+            bump_count(&mut out.i32)?;
+            if let Some(id) = enum_id
+                && let Some(m) = module
+                && let Some(e) = m.enums.get(id.0 as usize)
+                && let Some(v) = e.variants.get(variant_idx.0 as usize)
+            {
+                for (name, _idx, value) in fields {
+                    if let Some(decl) = v.fields.iter().find(|f| f.name == *name) {
+                        super::optional::coercion_scratch_counts(&decl.ty, value.ty(), out)?;
+                    }
+                    walk_count(value, module, out)?;
+                }
+            } else {
+                for (_, _, value) in fields {
+                    walk_count(value, module, out)?;
+                }
             }
         }
         IrExpr::Tuple { fields, .. } => {
             bump_count(&mut out.i32)?;
             for (_, e) in fields {
-                walk_count(e, out)?;
+                walk_count(e, module, out)?;
             }
         }
         IrExpr::Block {
             statements, result, ..
         } => {
             for stmt in statements {
-                walk_count_block_statement(stmt, out)?;
+                walk_count_block_statement(stmt, module, out)?;
             }
-            walk_count(result, out)?;
+            walk_count(result, module, out)?;
         }
         IrExpr::BinaryOp {
             left, right, op, ..
@@ -525,31 +572,54 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             if matches!(op, formalang::ast::BinaryOperator::Range) {
                 bump_count(&mut out.i32)?;
             }
-            walk_count(left, out)?;
-            walk_count(right, out)?;
+            walk_count(left, module, out)?;
+            walk_count(right, module, out)?;
         }
-        IrExpr::UnaryOp { operand, .. } => walk_count(operand, out)?,
+        IrExpr::UnaryOp { operand, .. } => walk_count(operand, module, out)?,
         IrExpr::If {
             condition,
             then_branch,
             else_branch,
             ty,
         } => {
-            walk_count(condition, out)?;
+            walk_count(condition, module, out)?;
             // Each branch's value is coerced to the if's overall type
             // (`Optional` widening only — every other type combination
             // contributes nothing). Count those wraps so the pre-walk's
             // totals match the lowering walker.
             super::optional::coercion_scratch_counts(ty, then_branch.ty(), out)?;
-            walk_count(then_branch, out)?;
+            walk_count(then_branch, module, out)?;
             if let Some(else_branch) = else_branch {
                 super::optional::coercion_scratch_counts(ty, else_branch.ty(), out)?;
-                walk_count(else_branch, out)?;
+                walk_count(else_branch, module, out)?;
             }
         }
-        IrExpr::FunctionCall { args, .. } => {
-            for (_, arg) in args {
-                walk_count(arg, out)?;
+        IrExpr::FunctionCall {
+            function_id, args, ..
+        } => {
+            // Each call argument flows into the callee's declared
+            // parameter type. Look the function up in the module so
+            // Some-wrap widening counts at the call site too.
+            if let Some(id) = function_id
+                && let Some(m) = module
+                && let Some(f) = m.functions.get(id.0 as usize)
+            {
+                for (param_name, arg) in args {
+                    let target = param_name.as_ref().and_then(|n| {
+                        f.params
+                            .iter()
+                            .find(|p| p.name == *n)
+                            .and_then(|p| p.ty.as_ref())
+                    });
+                    if let Some(t) = target {
+                        super::optional::coercion_scratch_counts(t, arg.ty(), out)?;
+                    }
+                    walk_count(arg, module, out)?;
+                }
+            } else {
+                for (_, arg) in args {
+                    walk_count(arg, module, out)?;
+                }
             }
         }
         IrExpr::CallClosure { closure, args, .. } => {
@@ -557,21 +627,46 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             // pointer — re-read from once for env_ptr and once for the
             // funcref index inside `lower_call_closure`.
             bump_count(&mut out.i32)?;
-            walk_count(closure, out)?;
+            walk_count(closure, module, out)?;
             for (_, arg) in args {
-                walk_count(arg, out)?;
+                walk_count(arg, module, out)?;
             }
         }
-        IrExpr::MethodCall { receiver, args, .. } => {
-            walk_count(receiver, out)?;
-            for (_, arg) in args {
-                walk_count(arg, out)?;
+        IrExpr::MethodCall {
+            receiver,
+            method_idx,
+            args,
+            dispatch,
+            ..
+        } => {
+            walk_count(receiver, module, out)?;
+            // Static-dispatch method args coerce to their declared
+            // parameter types; virtual dispatch isn't supported yet.
+            let method_sig = match dispatch {
+                formalang::ir::DispatchKind::Static { impl_id } => module
+                    .and_then(|m| m.impls.get(impl_id.0 as usize))
+                    .and_then(|i| i.functions.get(method_idx.0 as usize)),
+                formalang::ir::DispatchKind::Virtual { .. } => None,
+            };
+            for (param_name, arg) in args {
+                let target = method_sig.and_then(|sig| {
+                    param_name.as_ref().and_then(|n| {
+                        sig.params
+                            .iter()
+                            .find(|p| p.name == *n)
+                            .and_then(|p| p.ty.as_ref())
+                    })
+                });
+                if let Some(t) = target {
+                    super::optional::coercion_scratch_counts(t, arg.ty(), out)?;
+                }
+                walk_count(arg, module, out)?;
             }
         }
-        IrExpr::FieldAccess { object, .. } => walk_count(object, out)?,
+        IrExpr::FieldAccess { object, .. } => walk_count(object, module, out)?,
         IrExpr::DictAccess { dict, key, .. } => {
-            walk_count(dict, out)?;
-            walk_count(key, out)?;
+            walk_count(dict, module, out)?;
+            walk_count(key, module, out)?;
         }
         IrExpr::Match {
             scrutinee,
@@ -581,17 +676,17 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             // Each `Match` reserves one i32 scratch local for the
             // scrutinee pointer.
             bump_count(&mut out.i32)?;
-            walk_count(scrutinee, out)?;
+            walk_count(scrutinee, module, out)?;
             for arm in arms {
                 super::optional::coercion_scratch_counts(ty, arm.body.ty(), out)?;
-                walk_count(&arm.body, out)?;
+                walk_count(&arm.body, module, out)?;
             }
         }
         IrExpr::ClosureRef { env_struct, .. } => {
             // Each ClosureRef reserves a scratch local for the
             // (funcref, env_ptr) pair's base pointer.
             bump_count(&mut out.i32)?;
-            walk_count(env_struct, out)?;
+            walk_count(env_struct, module, out)?;
         }
         IrExpr::Array { elements, .. } => {
             // Each Array literal reserves two i32 scratch locals — one
@@ -600,7 +695,7 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             bump_count(&mut out.i32)?;
             bump_count(&mut out.i32)?;
             for e in elements {
-                walk_count(e, out)?;
+                walk_count(e, module, out)?;
             }
         }
         IrExpr::For {
@@ -611,8 +706,8 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             // there. The Range path reserves typed `start` / `end`
             // slots whose width depends on the bound type.
             super::control::for_scratch_counts(collection.ty(), out)?;
-            walk_count(collection, out)?;
-            walk_count(body, out)?;
+            walk_count(collection, module, out)?;
+            walk_count(body, module, out)?;
         }
 
         IrExpr::Literal { value, .. } => {
