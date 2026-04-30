@@ -527,6 +527,66 @@ pub fn plan_range(bound: &ResolvedType, _module: &IrModule) -> Result<RangeLayou
     })
 }
 
+// ── string layout ────────────────────────────────────────────────────
+
+/// Header size of a string value: `{ ptr: i32, len: i32 }`.
+///
+/// Strings are immutable in formalang — there is no `cap` slot.
+/// Concatenation always allocates a fresh header pointing at a freshly
+/// allocated byte buffer; Phase 2's literal-seeding path points the
+/// header at a data-section offset.
+pub const STRING_HEADER_SIZE: u32 = 8;
+
+/// Header alignment of a string value (each header field is `i32`).
+pub const STRING_HEADER_ALIGN: u32 = 4;
+
+/// Byte offset of the buffer pointer inside a string header.
+pub const STRING_PTR_OFFSET: u32 = 0;
+
+/// Byte offset of the byte-length field inside a string header.
+pub const STRING_LEN_OFFSET: u32 = 4;
+
+/// Layout decisions for a `String` value.
+///
+/// A string splits across two allocations: a fixed-size header
+/// (`{ ptr, len }`) and a separately-stored byte buffer pointed to by
+/// `ptr`. Literals seed their bytes into the data section and the
+/// header points at the data-section offset; runtime-built strings
+/// (concatenation results, host inputs lifted at the boundary) bump-
+/// allocate the buffer.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain layout record consumed externally; intentionally constructible"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StringLayout {
+    /// Bytes occupied by the header. Always [`STRING_HEADER_SIZE`].
+    pub header_size: u32,
+    /// Header alignment in bytes. Always [`STRING_HEADER_ALIGN`].
+    pub header_align: u32,
+    /// Byte offset of the buffer pointer field (always
+    /// [`STRING_PTR_OFFSET`]).
+    pub ptr_offset: u32,
+    /// Byte offset of the byte-length field (always
+    /// [`STRING_LEN_OFFSET`]).
+    pub len_offset: u32,
+}
+
+/// Compute the layout of a `String` value.
+///
+/// `module` is accepted for API symmetry with the other layout
+/// planners; the current implementation produces the same fixed
+/// layout for every string and ignores it.
+#[must_use]
+pub const fn plan_string(_module: &IrModule) -> StringLayout {
+    StringLayout {
+        header_size: STRING_HEADER_SIZE,
+        header_align: STRING_HEADER_ALIGN,
+        ptr_offset: STRING_PTR_OFFSET,
+        len_offset: STRING_LEN_OFFSET,
+    }
+}
+
 // ── optional layout ──────────────────────────────────────────────────
 
 /// Discriminant-tag size in bytes for an `Optional<T>` value. The tag
