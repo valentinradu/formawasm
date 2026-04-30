@@ -16,6 +16,7 @@ mod block;
 mod call;
 mod control;
 mod literal;
+mod optional;
 mod reference;
 mod unary_op;
 

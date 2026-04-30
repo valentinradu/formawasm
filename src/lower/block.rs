@@ -41,13 +41,27 @@ fn lower_block_statement(
 ) -> Result<(), LowerError> {
     match stmt {
         IrBlockStatement::Let {
-            binding_id, value, ..
+            binding_id,
+            ty,
+            value,
+            ..
         } => {
             let idx = ctx
                 .bindings
                 .get(*binding_id)
                 .ok_or(LowerError::UnknownBinding(*binding_id))?;
-            lower_expr(value, sink, ctx)?;
+            // If the binding's annotated type is `Optional<T>` and the
+            // value's static type is exactly `T`, wrap as Some before
+            // storing into the local. Other type combinations
+            // (Optional<Never> -> Optional<T>, exact match) flow
+            // through as plain pointers via the regular lowering path.
+            if let Some(target) = ty.as_ref()
+                && let Some(payload_ty) = super::optional::some_wrap_payload(target, value.ty())
+            {
+                super::optional::lower_some_wrap(value, payload_ty, sink, ctx)?;
+            } else {
+                lower_expr(value, sink, ctx)?;
+            }
             sink.local_set(idx);
             Ok(())
         }
@@ -454,7 +468,31 @@ fn walk_count_block_statement(
     out: &mut ScratchCounts,
 ) -> Result<(), LowerError> {
     match stmt {
-        IrBlockStatement::Let { value, .. } => walk_count(value, out),
+        IrBlockStatement::Let { ty, value, .. } => {
+            // Some-wrap of a primitive payload reserves one i32 slot
+            // (for the allocated cell's base pointer) plus one typed
+            // slot matching the payload's wasm value type (so the
+            // payload survives the bump-allocator call without
+            // stomping on the operand stack).
+            if let Some(target) = ty.as_ref()
+                && let Some(payload_ty) = super::optional::some_wrap_payload(target, value.ty())
+            {
+                bump_count(&mut out.i32)?;
+                let value_vt = super::optional::some_wrap_scratch_valtype(payload_ty)?;
+                match value_vt {
+                    ValType::I32 => bump_count(&mut out.i32)?,
+                    ValType::I64 => bump_count(&mut out.i64)?,
+                    ValType::F32 => bump_count(&mut out.f32)?,
+                    ValType::F64 => bump_count(&mut out.f64)?,
+                    ValType::V128 | ValType::Ref(_) => {
+                        return Err(LowerError::NotYetImplemented {
+                            what: format!("Some-wrap scratch slot of value type {value_vt:?}"),
+                        });
+                    }
+                }
+            }
+            walk_count(value, out)
+        }
         IrBlockStatement::Assign { target, value } => {
             walk_count(target, out)?;
             walk_count(value, out)
