@@ -7,7 +7,7 @@ first, then come back here for the "what to do now" view.
 
 ---
 
-## Status (as of 2026-04-29)
+## Status (as of 2026-04-30)
 
 **Upstream — formalang at `~/projects/formalang`:**
 
@@ -49,9 +49,9 @@ Indirect closure invocation also remains for Phase 1c.
 - ✅ mc2 (`4f15613`): `lower_array` materializes the literal end-to-end, validated under wasmtime for I32 / I64 / Boolean / struct-pointer arrays.
 - ✅ mc3 (`d513052`): `Range<T>` planner + lowering for the `BinaryOperator::Range` form (`lo..hi`).
 - ✅ mc4 (`c349117` + cleanup `25d6c92`): For-loop comprehension over `Range<I32>` collecting body values into a fresh `Array<body_ty>`. Loop variable threaded via the new upstream `var_binding_id` field on `IrExpr::For` (formalang `8cfe909`). Cleanup commit deduplicates array-header writes between `lower_array` / `lower_for` and replaces the silent scratch-local count with a shared constant.
-- ⏳ **mc5 next**: index access (`a[i]`) so loop bodies can read array elements.
-- ⏳ mc6: For over `Array<T>` (likely close to free once index access lands — desugars to `for i in 0..len { let elem = arr[i]; … }`).
-- ⏳ mc7: WIT `list<T>` mapping so public `Array<I32>` signatures cross the WIT boundary.
+- ✅ mc5 (`4be409b`): index access (`arr[i]`) reads through the array header to the element buffer.
+- ✅ mc6: For over `Array<T>` lowers as a direct loop — read `in_buf` and `len` from the array header, load each element into the loop variable per iteration, store body values into a fresh `Array<body_ty>`. Implemented as a separate `lower_for_array` arm in `src/lower/control.rs` so the per-source scratch-local layout stays explicit; the seventh scratch slot (`end` in the Range path) is intentionally skipped to keep the per-For reservation count uniform with `walk_count`.
+- ⏳ **mc7 next**: WIT `list<T>` mapping so public `Array<I32>` signatures cross the WIT boundary.
 - ⏳ mc8: Sieve-of-Eratosthenes end-to-end test — the Phase 1c milestone.
 
 **Known restrictions to lift later in Phase 1c:**
@@ -130,30 +130,21 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-## Immediate work — Phase 1c mc5: index access (`a[i]`)
+## Immediate work — Phase 1c mc7: WIT `list<T>` mapping
 
-Phase 1c mc1–mc4 are committed (see Status above). The next mc lands
-indexed read access so loop bodies can pull individual array elements
-out of `Array<T>` values.
+Phase 1c mc1–mc6 are committed (see Status above). The next mc lands
+the WIT-side type mapping so `Array<T>` can flow across the component
+boundary on `pub` signatures.
 
 **Scope**
 
-- `IrExpr::Index { collection, index, ty }` — verify the IR shape in `~/projects/formalang/src/ir/expr/mod.rs` first; the variant name and field layout may differ.
-- New helper in `src/lower/aggregate.rs` (or a new `index.rs`): allocate no scratch, just emit `collection_ptr.ptr + index * elem_size` then the right `load` opcode for the element type. Aggregate elements (struct, enum, tuple, array, range) load as `i32` pointers since the value behind them already lives in linear memory.
-- Wire the dispatch in `lower_expr`. Update `walk_count` to pass through the children (no scratch locals needed for index access itself).
-- Bounds checking: out-of-scope for mc5. The emitted code does pointer arithmetic only; out-of-bounds reads land wherever the multiply takes them. Add a `panic` / trap path in a later mc once the language has a panicking-runtime story.
+- `src/wit.rs` — extend the `ResolvedType` → WIT-type emitter so `ResolvedType::Array(elem)` becomes `list<elem-wit>`. Reuse the existing primitive / record / variant emitters for the element type.
+- Boundary policy: `list<closure>` and friends should still be rejected upstream by pre-flight checks; only types already in the WIT-expressible subset cross.
+- Update `tests/wit.rs` to round-trip a `list<s32>` / `list<bool>` signature through `wit_parser::Resolve` and assert the export reads back as a list type.
 
-**Tests**
-
-- Build a literal `[10, 20, 30]`, index at 0, 1, 2; assert each via wasmtime round-trip.
-- Same for `Array<I64>` (different stride / load opcode).
-- For-over-Range body that reads through an outer `let arr = [...]`, returns `arr[p % 3]`. Confirms index access composes with the existing For-loop infra.
-
-After mc5, mc6 wires the For-over-`Array<T>` form (likely a desugar to
-`for i in 0..len { let elem = arr[i]; … }`), then mc7 maps `Array<T>`
-to WIT `list<T>` so the sieve's `Array<I32>` return type crosses the
-component boundary, and mc8 commits the sieve-of-Eratosthenes
-end-to-end test as the Phase 1c milestone.
+After mc7, mc8 commits the sieve-of-Eratosthenes end-to-end test as
+the Phase 1c milestone — it composes everything that's landed since
+mc1 and is the gate for declaring Phase 1c done.
 
 ---
 
