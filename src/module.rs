@@ -10,9 +10,9 @@
 use std::borrow::Cow;
 
 use wasm_encoder::{
-    CodeSection, ConstExpr, DataSection, ElementSection, Elements, ExportKind, ExportSection,
-    Function, FunctionSection, GlobalSection, GlobalType, MemorySection, MemoryType, Module,
-    RefType, TableSection, TableType, TypeSection, ValType,
+    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, ExportKind,
+    ExportSection, Function, FunctionSection, GlobalSection, GlobalType, MemArg, MemorySection,
+    MemoryType, Module, RefType, TableSection, TableType, TypeSection, ValType,
 };
 
 /// Alignment, in bytes, the bump allocator rounds every returned address up to.
@@ -26,6 +26,11 @@ pub const BUMP_ALLOCATOR_ALIGN: u32 = 8;
 /// Source-level name we assign to the bump-allocator helper. Not
 /// exported, but kept stable so debug tooling can identify it.
 pub const BUMP_ALLOCATOR_NAME: &str = "__alloc";
+
+/// Source-level name for the byte-by-byte string-equality helper.
+/// Returns 1 if both inputs (each an `{ ptr, len }` header pointer)
+/// describe identical byte sequences, 0 otherwise.
+pub const STR_EQ_NAME: &str = "__str_eq";
 
 /// Export name under which the runtime memory is published. Required
 /// by `wit-component`'s canonical-ABI lifting/lowering and useful for
@@ -84,6 +89,9 @@ pub struct ModuleBuilder {
     elements: ElementSection,
     code: CodeSection,
     bump_allocator: Option<u32>,
+    /// Index of the byte-by-byte string-equality helper. Lazily
+    /// declared by [`Self::declare_str_eq`].
+    str_eq: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -129,6 +137,7 @@ impl ModuleBuilder {
             elements: ElementSection::new(),
             code: CodeSection::new(),
             bump_allocator: None,
+            str_eq: None,
             closure_table_idx: None,
             string_data: Vec::new(),
         }
@@ -277,6 +286,135 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn bump_allocator_index(&self) -> Option<u32> {
         self.bump_allocator
+    }
+
+    /// Declare and emit the `__str_eq` runtime helper, returning its
+    /// wasm function index. Subsequent calls return the same index.
+    ///
+    /// Signature: `__str_eq(a: i32, b: i32) -> i32`. Each input is a
+    /// pointer to an `{ ptr, len }` string header. Returns 1 when the
+    /// two strings have identical byte sequences, 0 otherwise.
+    ///
+    /// Implementation: load both `len` slots; if they differ, return
+    /// 0. Otherwise loop over the bytes pointed at by each `ptr`,
+    /// comparing one byte at a time. Returns 1 once the loop runs to
+    /// completion without finding a mismatch.
+    pub fn declare_str_eq(&mut self) -> u32 {
+        if let Some(idx) = self.str_eq {
+            return idx;
+        }
+
+        // Locals: 2 i32 — local 2 = len, local 3 = i (loop counter).
+        // Params live at locals 0 / 1 (a, b).
+        let mut body = Function::new(core::iter::once((2, ValType::I32)));
+        let mut i = body.instructions();
+
+        // local.get a; i32.load offset=4   ;; a.len
+        // local.get b; i32.load offset=4   ;; b.len
+        // i32.ne                            ;; lengths differ?
+        // if -> i32.const 0; return ; end
+        i.local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+                align: 2, // log2(4)
+                memory_index: MEMORY_INDEX,
+            })
+            .local_tee(2) // stash a.len in local 2
+            .local_get(1)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_ne()
+            .if_(BlockType::Empty)
+            .i32_const(0)
+            .return_()
+            .end();
+
+        // local.set i = 0
+        i.i32_const(0).local_set(3);
+
+        // Replace param locals 0, 1 with their `ptr` slots so the
+        // byte loop indexes off ptr + i directly.
+        i.local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::STRING_PTR_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .local_set(0);
+        i.local_get(1)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::STRING_PTR_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .local_set(1);
+
+        // block $done
+        //   loop $cmp
+        //     local.get i; local.get len; i32.ge_u; br_if $done
+        //     local.get a_ptr; local.get i; i32.add; i32.load8_u
+        //     local.get b_ptr; local.get i; i32.add; i32.load8_u
+        //     i32.ne
+        //     if -> i32.const 0; return ; end
+        //     local.get i; i32.const 1; i32.add; local.set i
+        //     br $cmp
+        //   end
+        // end
+        i.block(BlockType::Empty)
+            .loop_(BlockType::Empty)
+            .local_get(3)
+            .local_get(2)
+            .i32_ge_u()
+            .br_if(1)
+            // a_ptr + i
+            .local_get(0)
+            .local_get(3)
+            .i32_add()
+            .i32_load8_u(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: MEMORY_INDEX,
+            })
+            // b_ptr + i
+            .local_get(1)
+            .local_get(3)
+            .i32_add()
+            .i32_load8_u(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_ne()
+            .if_(BlockType::Empty)
+            .i32_const(0)
+            .return_()
+            .end()
+            // i = i + 1
+            .local_get(3)
+            .i32_const(1)
+            .i32_add()
+            .local_set(3)
+            .br(0)
+            .end() // close loop
+            .end(); // close block
+
+        // All bytes equal — return 1.
+        i.i32_const(1).end();
+
+        let idx =
+            self.declare_function_with_body(&[ValType::I32, ValType::I32], &[ValType::I32], &body);
+        self.str_eq = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_eq` helper if it has been
+    /// declared, else `None`.
+    #[must_use]
+    pub const fn str_eq_index(&self) -> Option<u32> {
+        self.str_eq
     }
 
     /// Number of declared functions so far.

@@ -61,9 +61,60 @@ pub fn lower_binary_op(
         }
     };
 
+    // String operands route through the `__str_eq` runtime helper.
+    // `Eq` calls it directly; `Ne` follows with `i32.eqz` to flip
+    // the result. Other operators on strings are still
+    // unimplemented.
+    if matches!(operand_prim, PrimitiveType::String) {
+        return lower_string_binary_op(*op, left, right, sink, ctx);
+    }
+
     lower_expr(left, sink, ctx)?;
     lower_expr(right, sink, ctx)?;
     emit_binary_op(*op, operand_prim, sink)
+}
+
+/// Lower a `BinaryOp` whose operands are both `String`-typed.
+///
+/// `Eq` evaluates both header pointers, hands them to `__str_eq`,
+/// and leaves the helper's `i32` result on the stack. `Ne` follows
+/// with `i32.eqz` to flip the boolean. Any other operator is rejected
+/// here — string concatenation lives in mc11.
+fn lower_string_binary_op(
+    op: BinaryOperator,
+    left: &IrExpr,
+    right: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    match op {
+        BinaryOperator::Eq | BinaryOperator::Ne => {
+            let helper_idx = ctx.str_eq_index()?;
+            lower_expr(left, sink, ctx)?;
+            lower_expr(right, sink, ctx)?;
+            sink.call(helper_idx);
+            if matches!(op, BinaryOperator::Ne) {
+                sink.i32_eqz();
+            }
+            Ok(())
+        }
+        BinaryOperator::Add
+        | BinaryOperator::Sub
+        | BinaryOperator::Mul
+        | BinaryOperator::Div
+        | BinaryOperator::Mod
+        | BinaryOperator::Lt
+        | BinaryOperator::Gt
+        | BinaryOperator::Le
+        | BinaryOperator::Ge
+        | BinaryOperator::And
+        | BinaryOperator::Or
+        | BinaryOperator::Range
+        | _ => Err(LowerError::UnsupportedOperator {
+            op: format!("{op:?}"),
+            operand: PrimitiveType::String,
+        }),
+    }
 }
 
 #[expect(

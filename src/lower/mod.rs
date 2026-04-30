@@ -426,6 +426,10 @@ pub struct LowerContext<'a> {
     /// — the runtime value of a string literal is just a pointer to
     /// its static header.
     pub string_pool: Option<&'a HashMap<String, u32>>,
+    /// Wasm function index of the `__str_eq` runtime helper. Routed
+    /// through here so `BinaryOp::Eq` / `Ne` lowerings on `String`
+    /// operands can `call` it without a separate module-aware lookup.
+    pub str_eq: Option<u32>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -447,6 +451,7 @@ impl<'a> LowerContext<'a> {
             closure_funcref_indices: None,
             closure_type_indices: None,
             string_pool: None,
+            str_eq: None,
         }
     }
 
@@ -527,6 +532,22 @@ impl<'a> LowerContext<'a> {
     pub const fn with_string_pool(mut self, pool: &'a HashMap<String, u32>) -> Self {
         self.string_pool = Some(pool);
         self
+    }
+
+    /// Attach the wasm function index of the `__str_eq` runtime
+    /// helper. Required for lowering `BinaryOp::Eq` / `Ne` on
+    /// `String` operands.
+    #[must_use]
+    pub const fn with_str_eq(mut self, idx: u32) -> Self {
+        self.str_eq = Some(idx);
+        self
+    }
+
+    /// Wasm function index of the `__str_eq` helper or surface
+    /// [`LowerError::MissingContext`] if unset.
+    pub fn str_eq_index(&self) -> Result<u32, LowerError> {
+        self.str_eq
+            .ok_or(LowerError::MissingContext { what: "str_eq" })
     }
 
     /// Look up the header offset of an interned string literal, or

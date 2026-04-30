@@ -93,7 +93,13 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     collect_string_literals(module, &mut string_pool)?;
 
     let bump_idx = builder.declare_bump_allocator();
-    let user_offset = bump_idx
+    // The string-equality helper is unconditionally declared after
+    // the bump allocator so its wasm index is known before any
+    // function body is emitted. Bodies that never compare strings
+    // pay the dead-code cost (one ~30-instruction helper) — small
+    // enough to keep the plumbing simple.
+    let str_eq_idx = builder.declare_str_eq();
+    let user_offset = str_eq_idx
         .checked_add(1)
         .ok_or(ModuleLowerError::TooManyFunctions)?;
 
@@ -152,6 +158,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             None,
             closure_ctx.as_ref(),
             string_pool.lookup_map(),
+            str_eq_idx,
         )?;
     }
     for (i, imp) in module.impls.iter().enumerate() {
@@ -169,6 +176,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             bump_idx,
             closure_ctx.as_ref(),
             string_pool.lookup_map(),
+            str_eq_idx,
         )?;
     }
     builder.set_string_data(string_pool.data().to_vec());
@@ -580,6 +588,7 @@ fn emit_impl(
     bump_allocator: u32,
     closure_ctx: Option<&ClosureCallContext<'_>>,
     string_pool: &HashMap<String, u32>,
+    str_eq: u32,
 ) -> Result<(), ModuleLowerError> {
     let self_struct_id = match imp.target {
         ImplTarget::Struct(id) => Some(id),
@@ -596,6 +605,7 @@ fn emit_impl(
             self_struct_id,
             closure_ctx,
             string_pool,
+            str_eq,
         )?;
     }
     Ok(())
@@ -615,6 +625,7 @@ fn emit_function(
     impl_self_struct_id: Option<StructId>,
     closure_ctx: Option<&ClosureCallContext<'_>>,
     string_pool: &HashMap<String, u32>,
+    str_eq: u32,
 ) -> Result<(), ModuleLowerError> {
     if f.is_extern() {
         return Err(ModuleLowerError::ExternFunction {
@@ -643,6 +654,7 @@ fn emit_function(
         self_struct_id,
         closure_ctx,
         string_pool,
+        str_eq,
     )?;
     let wasm_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
     // Phase 1a: every non-extern top-level function is exported by
