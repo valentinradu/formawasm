@@ -235,9 +235,13 @@ fn write_export(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
 /// `func(...)` signature, or `Ok(None)` for `Never` (no value, omit
 /// the result clause when this is a return type — caller's choice).
 ///
-/// `Array<T>` recurses on its element to compose `list<inner>`; the
-/// element type must itself be WIT-expressible — `Never` and other
-/// non-mappable element types surface as `NotYetSupported`.
+/// `Array<T>` recurses on its element to compose `list<inner>`;
+/// `Optional<T>` recurses on its inner to compose `option<inner>`. The
+/// element / inner type must itself be WIT-expressible — `Never` and
+/// other non-mappable types surface as `NotYetSupported`. The
+/// `Optional<Never>` case (the static type of the `nil` literal) is
+/// rejected here because WIT has no `option<>`-with-no-payload form;
+/// values of that type stay strictly internal.
 fn resolved_wit_type(ty: &ResolvedType) -> Result<Option<String>, WitEmitError> {
     match ty {
         ResolvedType::Primitive(p) => primitive_wit_type(*p),
@@ -249,11 +253,18 @@ fn resolved_wit_type(ty: &ResolvedType) -> Result<Option<String>, WitEmitError> 
             })?;
             Ok(Some(format!("list<{inner}>")))
         }
+        ResolvedType::Optional(inner) => {
+            let inner_name = resolved_wit_type(inner)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Optional<Never>".to_owned(),
+                })
+            })?;
+            Ok(Some(format!("option<{inner_name}>")))
+        }
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)

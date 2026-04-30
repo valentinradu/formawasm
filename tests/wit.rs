@@ -383,6 +383,10 @@ fn array_ty(elem: ResolvedType) -> ResolvedType {
     ResolvedType::Array(Box::new(elem))
 }
 
+fn optional_ty(inner: ResolvedType) -> ResolvedType {
+    ResolvedType::Optional(Box::new(inner))
+}
+
 #[test]
 fn array_parameter_emits_list_of_element_wit_type() -> TestResult {
     let mut module = IrModule::new();
@@ -484,6 +488,109 @@ fn nested_list_of_list_emits_nested_list_type() -> TestResult {
         return Err(format!("missing `{expected}` in:\n{wit}").into());
     }
     Ok(())
+}
+
+#[test]
+fn optional_parameter_emits_option_of_inner_wit_type() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "set",
+        vec![(
+            BindingId(0),
+            "v",
+            optional_ty(primitive(PrimitiveType::I32)),
+        )],
+        Some(primitive(PrimitiveType::Boolean)),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export set: func(v: option<s32>) -> bool;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn optional_return_type_emits_option_in_result_clause() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "lookup",
+        vec![(BindingId(0), "key", primitive(PrimitiveType::I64))],
+        Some(optional_ty(primitive(PrimitiveType::I64))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export lookup: func(key: s64) -> option<s64>;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn optional_signature_round_trips_through_wit_parser() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "find",
+        vec![(BindingId(0), "needle", primitive(PrimitiveType::I32))],
+        Some(optional_ty(primitive(PrimitiveType::I32))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    Ok(())
+}
+
+#[test]
+fn list_of_optional_emits_nested_option_in_list() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "rows",
+        vec![],
+        Some(array_ty(optional_ty(primitive(PrimitiveType::I32)))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export rows: func() -> list<option<s32>>;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn optional_of_never_is_rejected() -> TestResult {
+    // `Optional<Never>` is the static type of the `nil` literal —
+    // legitimate inside the module, but WIT has no zero-payload
+    // option<> form, so a public function exporting it stays
+    // unsupported.
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "nothing",
+        vec![],
+        Some(optional_ty(primitive(PrimitiveType::Never))),
+    ));
+
+    let surface = survey::survey(&module);
+    match wit::emit_wit(&module, &surface) {
+        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
+            if kind == "Optional<Never>" =>
+        {
+            Ok(())
+        }
+        other => Err(format!("expected NotYetSupported(Optional<Never>), got {other:?}").into()),
+    }
 }
 
 #[test]
