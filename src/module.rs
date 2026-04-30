@@ -37,6 +37,11 @@ pub const STR_EQ_NAME: &str = "__str_eq";
 /// (each an `{ ptr, len }` header pointer) into the new buffer.
 pub const STR_CONCAT_NAME: &str = "__str_concat";
 
+/// Canonical-ABI export name the host calls when it needs to allocate
+/// (or grow) a buffer in our linear memory before passing a `string`
+/// or `list<T>` argument across the component boundary.
+pub const CABI_REALLOC_NAME: &str = "cabi_realloc";
+
 /// Export name under which the runtime memory is published. Required
 /// by `wit-component`'s canonical-ABI lifting/lowering and useful for
 /// tests that need to peek at constructed aggregates.
@@ -523,6 +528,33 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_concat_index(&self) -> Option<u32> {
         self.str_concat
+    }
+
+    /// Declare and export `cabi_realloc`, the canonical-ABI hook the
+    /// component runtime calls to allocate buffers in our linear
+    /// memory before passing `string` / `list<T>` arguments in. The
+    /// bump allocator is declared lazily if needed.
+    ///
+    /// Signature: `cabi_realloc(orig_ptr: i32, orig_size: i32, align:
+    /// i32, new_size: i32) -> i32`. Our bump allocator can't actually
+    /// resize an existing region, so we always hand back a fresh
+    /// `__alloc(new_size)` allocation — the orig_* / align inputs are
+    /// ignored. That's correct for the canonical-ABI cases we hit
+    /// today (fresh allocations during string / list lowering): the
+    /// host writes the bytes into the freshly-allocated region and
+    /// then hands us the (ptr, len) pair.
+    pub fn declare_cabi_realloc(&mut self) -> u32 {
+        let alloc_idx = self.declare_bump_allocator();
+        let mut body = Function::new(core::iter::empty());
+        // Params: orig_ptr (0), orig_size (1), align (2), new_size (3).
+        body.instructions().local_get(3).call(alloc_idx).end();
+        let idx = self.declare_function_with_body(
+            &[ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+            &[ValType::I32],
+            &body,
+        );
+        self.export_function(CABI_REALLOC_NAME, idx);
+        idx
     }
 
     /// Number of declared functions so far.

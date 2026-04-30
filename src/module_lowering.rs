@@ -99,7 +99,12 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     // Bodies that never touch strings pay a small dead-code cost.
     let str_eq_idx = builder.declare_str_eq();
     let str_concat_idx = builder.declare_str_concat();
-    let user_offset = str_concat_idx
+    // `cabi_realloc` is exported so the component runtime can
+    // allocate buffers in our linear memory when lowering `string`
+    // / `list<T>` arguments. Always declared so any public function
+    // that takes one of those types lands an export-ready module.
+    let cabi_realloc_idx = builder.declare_cabi_realloc();
+    let user_offset = cabi_realloc_idx
         .checked_add(1)
         .ok_or(ModuleLowerError::TooManyFunctions)?;
 
@@ -669,9 +674,173 @@ fn emit_function(
     // get exported — name collisions between different impls would
     // otherwise produce a malformed module.
     if impl_self_struct_id.is_none() {
-        builder.export_function(&kebab_case(&f.name), wasm_idx);
+        // Public functions whose signatures carry types whose
+        // canonical-ABI lowering differs from our internal pointer
+        // convention need a thin trampoline: the trampoline matches
+        // the canonical-ABI shape the host sees, while the inner
+        // function keeps using the internal header-pointer
+        // convention so intra-module callers don't need to change.
+        let export_idx = if needs_canonical_abi_wrapper(f) {
+            emit_canonical_abi_wrapper(f, wasm_idx, builder)?
+        } else {
+            wasm_idx
+        };
+        builder.export_function(&kebab_case(&f.name), export_idx);
     }
     Ok(())
+}
+
+/// Whether `f`'s public signature lowers to a different core-wasm
+/// shape than its internal one.
+///
+/// Today this is exactly the case where any `String` / `Path` /
+/// `Regex` / `list<T>` reaches the function boundary as a parameter.
+/// Returns of those types match the internal i32-pointer return
+/// directly because the canonical ABI's "return area pointer"
+/// convention coincides with our header layout.
+fn needs_canonical_abi_wrapper(f: &IrFunction) -> bool {
+    f.params
+        .iter()
+        .any(|p| p.ty.as_ref().is_some_and(param_needs_split))
+}
+
+/// Whether a parameter type lowers to multiple core-wasm i32 values
+/// at the canonical-ABI boundary. `string` / `Path` / `Regex` / list
+/// pass as `(ptr, len)`; everything else stays as a single value.
+const fn param_needs_split(ty: &ResolvedType) -> bool {
+    matches!(
+        ty,
+        ResolvedType::Primitive(
+            formalang::ast::PrimitiveType::String
+                | formalang::ast::PrimitiveType::Path
+                | formalang::ast::PrimitiveType::Regex
+        ) | ResolvedType::Array(_)
+    )
+}
+
+/// Build a thin trampoline matching the canonical-ABI signature of
+/// `f` and forwarding to the inner function at `inner_idx`.
+///
+/// For each parameter that lifts to `(ptr, len)` at the boundary
+/// (`String` and friends, `list<T>`), the wrapper accepts two i32s
+/// directly, allocates an 8-byte header in linear memory, stores
+/// `(ptr, len)` into it, and pushes the header pointer in place of
+/// the original single-i32 param. Other parameters pass through
+/// unchanged.
+///
+/// Returns the wasm function index of the wrapper.
+fn emit_canonical_abi_wrapper(
+    f: &IrFunction,
+    inner_idx: u32,
+    builder: &mut ModuleBuilder,
+) -> Result<u32, ModuleLowerError> {
+    use crate::layout::{STRING_HEADER_SIZE, STRING_LEN_OFFSET, STRING_PTR_OFFSET};
+    use crate::module::MEMORY_INDEX;
+    use wasm_encoder::{Function, MemArg};
+
+    // Build the canonical-ABI parameter list and remember each split
+    // param's (ptr_index, len_index) so the wrapper body can read
+    // both back when assembling the header.
+    let mut param_valtypes: Vec<ValType> = Vec::with_capacity(f.params.len());
+    let mut split_params: Vec<(u32, u32)> = Vec::new();
+    let mut single_params: Vec<u32> = Vec::new();
+
+    for p in &f.params {
+        let ty =
+            p.ty.as_ref()
+                .ok_or_else(|| ModuleLowerError::MissingParamType {
+                    function: f.name.clone(),
+                    name: p.name.clone(),
+                })?;
+        if param_needs_split(ty) {
+            let ptr_idx = u32::try_from(param_valtypes.len())
+                .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            param_valtypes.push(ValType::I32);
+            param_valtypes.push(ValType::I32);
+            let len_idx = ptr_idx.saturating_add(1);
+            split_params.push((ptr_idx, len_idx));
+        } else {
+            let single_idx = u32::try_from(param_valtypes.len())
+                .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            let vt = body_value_type(ty)?.ok_or_else(|| {
+                ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Never-typed parameter on public function".to_owned(),
+                })
+            })?;
+            param_valtypes.push(vt);
+            single_params.push(single_idx);
+        }
+    }
+
+    let result_valtypes = body_result_types(f.return_type.as_ref())?;
+
+    // The wrapper needs one i32 scratch local per split param to
+    // hold the freshly-allocated header pointer between the
+    // allocator call and the forwarded `call` to the inner.
+    let scratch_count =
+        u32::try_from(split_params.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+    let scratch_base =
+        u32::try_from(param_valtypes.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+    let alloc_idx = builder.declare_bump_allocator();
+
+    let mut body = Function::new(if scratch_count > 0 {
+        vec![(scratch_count, ValType::I32)]
+    } else {
+        Vec::new()
+    });
+    let header_size_signed = i32::try_from(STRING_HEADER_SIZE).unwrap_or(8);
+    let mem_arg = |offset: u64| MemArg {
+        offset,
+        align: 2, // log2(4)
+        memory_index: MEMORY_INDEX,
+    };
+    {
+        let mut i = body.instructions();
+
+        // For each split param: alloc 8 bytes, store ptr/len, stash
+        // the header pointer in the wrapper's scratch local.
+        for (slot, (ptr_idx, len_idx)) in split_params.iter().enumerate() {
+            let scratch_idx = scratch_base.saturating_add(
+                u32::try_from(slot).map_err(|_| ModuleLowerError::TooManyFunctions)?,
+            );
+            i.i32_const(header_size_signed)
+                .call(alloc_idx)
+                .local_set(scratch_idx);
+            i.local_get(scratch_idx)
+                .local_get(*ptr_idx)
+                .i32_store(mem_arg(u64::from(STRING_PTR_OFFSET)));
+            i.local_get(scratch_idx)
+                .local_get(*len_idx)
+                .i32_store(mem_arg(u64::from(STRING_LEN_OFFSET)));
+        }
+
+        // Push every parameter onto the stack in declaration order:
+        // each split param contributes its scratch (header pointer);
+        // each single param contributes its raw local. Both
+        // iterators were sized in the loop above to exactly match
+        // each `f.params` entry's classification, so the index
+        // arithmetic below cannot overflow.
+        let mut split_iter = (0u32..).map(|s| scratch_base.saturating_add(s));
+        let mut single_iter = single_params.iter().copied();
+        for p in &f.params {
+            // `param_needs_split` is total over `Option<&ResolvedType>`
+            // when treating `None` as not-split (matches the missing-
+            // type path the loop above flagged as MissingParamType).
+            let split = p.ty.as_ref().is_some_and(param_needs_split);
+            if split {
+                let scratch_idx = split_iter.next().unwrap_or(scratch_base);
+                i.local_get(scratch_idx);
+            } else {
+                let single_idx = single_iter.next().unwrap_or(0);
+                i.local_get(single_idx);
+            }
+        }
+
+        i.call(inner_idx).end();
+    }
+
+    let wrapper_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
+    Ok(wrapper_idx)
 }
 
 /// Identify the enclosing impl's struct id when `f` is a method.

@@ -288,10 +288,13 @@ fn primitive_wit_type(p: PrimitiveType) -> Result<Option<String>, WitEmitError> 
         PrimitiveType::F64 => Ok(Some("f64".to_owned())),
         PrimitiveType::Boolean => Ok(Some("bool".to_owned())),
         PrimitiveType::Never => Ok(None),
+        // `String` / `Path` / `Regex` all share the canonical-ABI
+        // `string` representation at the WIT boundary. Internally they
+        // stay distinct (a `Path` value is still a `Path` inside the
+        // component), but every public signature exposes them as
+        // `string` since WIT has no native `path` / `regex` types.
         PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
-            Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                kind: format!("{p:?}"),
-            }))
+            Ok(Some("string".to_owned()))
         }
         _ => Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
             kind: format!("{p:?}"),

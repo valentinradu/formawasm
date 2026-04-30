@@ -388,6 +388,114 @@ fn optional_ty(inner: ResolvedType) -> ResolvedType {
 }
 
 #[test]
+fn string_parameter_emits_string_wit_type() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "echo",
+        vec![(BindingId(0), "s", primitive(PrimitiveType::String))],
+        Some(primitive(PrimitiveType::String)),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export echo: func(s: string) -> string;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn path_and_regex_map_to_string_at_the_boundary() -> TestResult {
+    // Path / Regex are distinct primitive types inside the component
+    // but lower to the same canonical-ABI `string` shape at the WIT
+    // boundary — there's no native WIT type for either, and tooling
+    // that consumes the generated component sees them as plain
+    // strings.
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "use-path",
+        vec![(BindingId(0), "p", primitive(PrimitiveType::Path))],
+        Some(primitive(PrimitiveType::String)),
+    ));
+    module.functions.push(function(
+        "use-regex",
+        vec![(BindingId(0), "r", primitive(PrimitiveType::Regex))],
+        Some(primitive(PrimitiveType::Boolean)),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    for needle in [
+        "export use-path: func(p: string) -> string;",
+        "export use-regex: func(r: string) -> bool;",
+    ] {
+        if !wit.contains(needle) {
+            return Err(format!("missing `{needle}` in:\n{wit}").into());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn list_of_string_emits_list_string() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "lines",
+        vec![],
+        Some(array_ty(primitive(PrimitiveType::String))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export lines: func() -> list<string>;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn option_of_string_emits_option_string() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "find",
+        vec![(BindingId(0), "needle", primitive(PrimitiveType::String))],
+        Some(optional_ty(primitive(PrimitiveType::String))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export find: func(needle: string) -> option<string>;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn string_signature_round_trips_through_wit_parser() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "greet",
+        vec![(BindingId(0), "name", primitive(PrimitiveType::String))],
+        Some(primitive(PrimitiveType::String)),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    Ok(())
+}
+
+#[test]
 fn array_parameter_emits_list_of_element_wit_type() -> TestResult {
     let mut module = IrModule::new();
     module.functions.push(function(
