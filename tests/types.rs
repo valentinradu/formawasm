@@ -42,26 +42,30 @@ fn never_maps_to_no_value() -> TestResult {
 }
 
 #[test]
-fn string_is_not_yet_supported() -> TestResult {
+fn string_maps_to_i32_pointer() -> TestResult {
+    // Phase 2 mc9: strings live in linear memory as `{ ptr, len }`
+    // headers, so the wasm value type is i32. Path / Regex share the
+    // same in-body representation; the WIT boundary is what
+    // distinguishes them.
     match types::primitive_value_type(PrimitiveType::String) {
-        Err(TypeMapError::NotYetSupported { kind }) if kind == "String" => Ok(()),
-        other => Err(format!("expected NotYetSupported(String), got {other:?}").into()),
+        Ok(Some(ValType::I32)) => Ok(()),
+        other => Err(format!("expected Ok(Some(I32)) for String, got {other:?}").into()),
     }
 }
 
 #[test]
-fn path_is_not_yet_supported() -> TestResult {
+fn path_maps_to_i32_pointer() -> TestResult {
     match types::primitive_value_type(PrimitiveType::Path) {
-        Err(TypeMapError::NotYetSupported { kind }) if kind == "Path" => Ok(()),
-        other => Err(format!("expected NotYetSupported(Path), got {other:?}").into()),
+        Ok(Some(ValType::I32)) => Ok(()),
+        other => Err(format!("expected Ok(Some(I32)) for Path, got {other:?}").into()),
     }
 }
 
 #[test]
-fn regex_is_not_yet_supported() -> TestResult {
+fn regex_maps_to_i32_pointer() -> TestResult {
     match types::primitive_value_type(PrimitiveType::Regex) {
-        Err(TypeMapError::NotYetSupported { kind }) if kind == "Regex" => Ok(()),
-        other => Err(format!("expected NotYetSupported(Regex), got {other:?}").into()),
+        Ok(Some(ValType::I32)) => Ok(()),
+        other => Err(format!("expected Ok(Some(I32)) for Regex, got {other:?}").into()),
     }
 }
 

@@ -419,6 +419,13 @@ pub struct LowerContext<'a> {
     /// declared parameters; the lifted top-level function takes the
     /// env struct as its first argument.
     pub closure_type_indices: Option<&'a HashMap<ResolvedType, u32>>,
+    /// Compile-time string-literal pool. Maps each interned literal
+    /// to the byte offset of its 8-byte `{ ptr, len }` header inside
+    /// the wasm data segment. `lower_literal` for `Literal::String`
+    /// reads the offset from this map and emits an `i32.const` of it
+    /// — the runtime value of a string literal is just a pointer to
+    /// its static header.
+    pub string_pool: Option<&'a HashMap<String, u32>>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -439,6 +446,7 @@ impl<'a> LowerContext<'a> {
             closure_table: None,
             closure_funcref_indices: None,
             closure_type_indices: None,
+            string_pool: None,
         }
     }
 
@@ -509,6 +517,31 @@ impl<'a> LowerContext<'a> {
     ) -> Self {
         self.closure_type_indices = Some(indices);
         self
+    }
+
+    /// Attach the compile-time string-literal pool. Required for
+    /// lowering `Literal::String` — each literal's runtime value is
+    /// a `i32.const` of its header offset, which the pool's lookup
+    /// table provides.
+    #[must_use]
+    pub const fn with_string_pool(mut self, pool: &'a HashMap<String, u32>) -> Self {
+        self.string_pool = Some(pool);
+        self
+    }
+
+    /// Look up the header offset of an interned string literal, or
+    /// surface [`LowerError::MissingContext`] when the pool is unset
+    /// and [`LowerError::NotYetImplemented`] when the literal is not
+    /// pre-registered.
+    pub fn string_header_offset(&self, text: &str) -> Result<u32, LowerError> {
+        let pool = self.string_pool.ok_or(LowerError::MissingContext {
+            what: "string_pool",
+        })?;
+        pool.get(text)
+            .copied()
+            .ok_or_else(|| LowerError::NotYetImplemented {
+                what: format!("string literal {text:?} was not pre-interned"),
+            })
     }
 
     /// Wasm-table index of the closure funcref table or surface

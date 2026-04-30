@@ -10,9 +10,9 @@
 use std::borrow::Cow;
 
 use wasm_encoder::{
-    CodeSection, ConstExpr, ElementSection, Elements, ExportKind, ExportSection, Function,
-    FunctionSection, GlobalSection, GlobalType, MemorySection, MemoryType, Module, RefType,
-    TableSection, TableType, TypeSection, ValType,
+    CodeSection, ConstExpr, DataSection, ElementSection, Elements, ExportKind, ExportSection,
+    Function, FunctionSection, GlobalSection, GlobalType, MemorySection, MemoryType, Module,
+    RefType, TableSection, TableType, TypeSection, ValType,
 };
 
 /// Alignment, in bytes, the bump allocator rounds every returned address up to.
@@ -66,9 +66,13 @@ pub const HEAP_BASE: i32 = 0;
 /// Initial size of the linear memory, in 64-`KiB` Wasm pages.
 pub const INITIAL_MEMORY_PAGES: u64 = 1;
 
-/// In-progress core-Wasm module. Currently carries the runtime memory
-/// and heap-pointer global; later phases plug type, function, code,
-/// and export sections into the same builder.
+/// In-progress core-Wasm module.
+///
+/// Carries the runtime memory plus every wasm section the backend
+/// assembles; the heap-pointer global and the data section are
+/// emitted at [`Self::finish`] time so the initial heap-pointer value
+/// can be relocated past whatever string-literal data has been seeded
+/// in the meantime.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ModuleBuilder {
@@ -76,7 +80,6 @@ pub struct ModuleBuilder {
     functions: FunctionSection,
     tables: TableSection,
     memories: MemorySection,
-    globals: GlobalSection,
     exports: ExportSection,
     elements: ElementSection,
     code: CodeSection,
@@ -86,6 +89,10 @@ pub struct ModuleBuilder {
     /// `ElementSection` populates it with concrete `wasm` function
     /// indices via [`Self::populate_closure_table`].
     closure_table_idx: Option<u32>,
+    /// Static data segment seeded with string-literal bytes + headers.
+    /// Lives at offset 0 in linear memory; the bump-allocator's heap
+    /// starts immediately after this region.
+    string_data: Vec<u8>,
 }
 
 impl Default for ModuleBuilder {
@@ -95,8 +102,10 @@ impl Default for ModuleBuilder {
 }
 
 impl ModuleBuilder {
-    /// Build an empty validating module with the runtime memory +
-    /// heap-pointer global already in place.
+    /// Build an empty validating module with the runtime memory in
+    /// place. The heap-pointer global is materialized at
+    /// [`Self::finish`] time so its initial value can reflect any
+    /// static data segments accumulated meanwhile.
     #[must_use]
     pub fn new() -> Self {
         let mut memories = MemorySection::new();
@@ -108,16 +117,6 @@ impl ModuleBuilder {
             page_size_log2: None,
         });
 
-        let mut globals = GlobalSection::new();
-        globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(HEAP_BASE),
-        );
-
         let mut exports = ExportSection::new();
         exports.export(MEMORY_EXPORT_NAME, ExportKind::Memory, MEMORY_INDEX);
 
@@ -126,13 +125,25 @@ impl ModuleBuilder {
             functions: FunctionSection::new(),
             tables: TableSection::new(),
             memories,
-            globals,
             exports,
             elements: ElementSection::new(),
             code: CodeSection::new(),
             bump_allocator: None,
             closure_table_idx: None,
+            string_data: Vec::new(),
         }
+    }
+
+    /// Install `bytes` as the contents of the static data segment.
+    ///
+    /// The segment is emitted as an active data segment at offset 0 of
+    /// linear memory at [`Self::finish`] time; the heap-pointer
+    /// global's initial value is bumped past the end of the segment
+    /// (rounded up to [`BUMP_ALLOCATOR_ALIGN`]) so subsequent bump-
+    /// allocator calls cannot trample the data. Calling repeatedly
+    /// replaces the previously-installed contents.
+    pub fn set_string_data(&mut self, bytes: Vec<u8>) {
+        self.string_data = bytes;
     }
 
     /// Declare a wasm function-type signature without attaching a
@@ -278,9 +289,30 @@ impl ModuleBuilder {
     /// or component wrapping.
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
+        let heap_base = compute_heap_base(self.string_data.len());
+
+        let mut globals = GlobalSection::new();
+        globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(heap_base),
+        );
+
+        let mut data = DataSection::new();
+        if !self.string_data.is_empty() {
+            data.active(
+                MEMORY_INDEX,
+                &ConstExpr::i32_const(HEAP_BASE),
+                self.string_data.iter().copied(),
+            );
+        }
+
         let mut module = Module::new();
         // Section order is fixed by the wasm spec: type, function,
-        // table, memory, global, export, element, code.
+        // table, memory, global, export, element, code, data.
         if !self.types.is_empty() {
             module.section(&self.types);
         }
@@ -291,7 +323,7 @@ impl ModuleBuilder {
             module.section(&self.tables);
         }
         module.section(&self.memories);
-        module.section(&self.globals);
+        module.section(&globals);
         if !self.exports.is_empty() {
             module.section(&self.exports);
         }
@@ -301,6 +333,27 @@ impl ModuleBuilder {
         if !self.code.is_empty() {
             module.section(&self.code);
         }
+        if !self.string_data.is_empty() {
+            module.section(&data);
+        }
         module.finish()
     }
+}
+
+/// Compute the bump-allocator's initial heap-pointer value given the
+/// size of the static data segment.
+///
+/// The heap starts at [`HEAP_BASE`] when the data segment is empty
+/// (the legacy default for tests that build modules without literals).
+/// Once the data segment carries bytes, the heap pointer rounds up to
+/// the bump allocator's alignment so the first allocation cannot
+/// straddle the boundary.
+fn compute_heap_base(data_len: usize) -> i32 {
+    if data_len == 0 {
+        return HEAP_BASE;
+    }
+    let raw = u32::try_from(data_len).unwrap_or(u32::MAX);
+    let mask = BUMP_ALLOCATOR_ALIGN.saturating_sub(1);
+    let aligned = raw.saturating_add(mask) & !mask;
+    i32::try_from(aligned).unwrap_or(i32::MAX)
 }

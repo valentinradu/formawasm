@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use formalang::ast::Literal;
 use formalang::ir::{
     BindingId, FunctionId, ImplId, ImplTarget, IrBlockStatement, IrExpr, IrFunction,
     IrFunctionParam, IrImpl, IrModule, MethodIdx, ResolvedType, StructId,
@@ -19,6 +20,7 @@ use crate::lower::{
     ClosureCallContext, FunctionMap, LowerError, MethodMap, lower_function_body_in_module,
 };
 use crate::module::ModuleBuilder;
+use crate::string_pool::{StringPool, StringPoolError};
 use crate::types::{TypeMapError, body_result_types, body_value_type};
 
 /// `(BindingId, ValType)` pair recording one function parameter's
@@ -62,6 +64,12 @@ pub enum ModuleLowerError {
     /// limit, not a realistic case for hand-written code.
     #[error("module has more than u32::MAX functions")]
     TooManyFunctions,
+
+    /// String-pool population failed during the pre-walk that
+    /// collects string literals — typically because the cumulative
+    /// data size would exceed `u32::MAX`.
+    #[error(transparent)]
+    StringPool(#[from] StringPoolError),
 }
 
 /// Walk `module` and return the encoded core-Wasm bytes.
@@ -76,6 +84,14 @@ pub enum ModuleLowerError {
 /// Nested `module.modules` are still not walked.
 pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     let mut builder = ModuleBuilder::new();
+
+    // Pre-walk every function body and impl method to intern the
+    // string literals each one references. The pool seeds the data
+    // segment that gets emitted at finish() time, and its lookup
+    // table feeds `lower_literal` for `Literal::String`.
+    let mut string_pool = StringPool::new();
+    collect_string_literals(module, &mut string_pool)?;
+
     let bump_idx = builder.declare_bump_allocator();
     let user_offset = bump_idx
         .checked_add(1)
@@ -135,6 +151,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             bump_idx,
             None,
             closure_ctx.as_ref(),
+            string_pool.lookup_map(),
         )?;
     }
     for (i, imp) in module.impls.iter().enumerate() {
@@ -151,9 +168,140 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             module,
             bump_idx,
             closure_ctx.as_ref(),
+            string_pool.lookup_map(),
         )?;
     }
+    builder.set_string_data(string_pool.data().to_vec());
     Ok(builder.finish())
+}
+
+/// Walk every function body / impl method body in `module` and intern
+/// each `Literal::String` into `pool`.
+fn collect_string_literals(
+    module: &IrModule,
+    pool: &mut StringPool,
+) -> Result<(), ModuleLowerError> {
+    for f in &module.functions {
+        if let Some(body) = &f.body {
+            walk_for_strings(body, pool)?;
+        }
+    }
+    for imp in &module.impls {
+        if imp.is_extern {
+            continue;
+        }
+        for f in &imp.functions {
+            if let Some(body) = &f.body {
+                walk_for_strings(body, pool)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn walk_block_statement_for_strings(
+    stmt: &IrBlockStatement,
+    pool: &mut StringPool,
+) -> Result<(), ModuleLowerError> {
+    match stmt {
+        IrBlockStatement::Let { value, .. } | IrBlockStatement::Expr(value) => {
+            walk_for_strings(value, pool)
+        }
+        IrBlockStatement::Assign { target, value } => {
+            walk_for_strings(target, pool)?;
+            walk_for_strings(value, pool)
+        }
+    }
+}
+
+fn walk_for_strings(expr: &IrExpr, pool: &mut StringPool) -> Result<(), ModuleLowerError> {
+    match expr {
+        IrExpr::Literal { value, .. } => {
+            if let Literal::String(text) = value {
+                pool.intern(text)?;
+            }
+        }
+        IrExpr::Block {
+            statements, result, ..
+        } => {
+            for stmt in statements {
+                walk_block_statement_for_strings(stmt, pool)?;
+            }
+            walk_for_strings(result, pool)?;
+        }
+        IrExpr::BinaryOp { left, right, .. } => {
+            walk_for_strings(left, pool)?;
+            walk_for_strings(right, pool)?;
+        }
+        IrExpr::UnaryOp { operand, .. } => walk_for_strings(operand, pool)?,
+        IrExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            walk_for_strings(condition, pool)?;
+            walk_for_strings(then_branch, pool)?;
+            if let Some(else_branch) = else_branch {
+                walk_for_strings(else_branch, pool)?;
+            }
+        }
+        IrExpr::FunctionCall { args, .. } | IrExpr::CallClosure { args, .. } => {
+            for (_, arg) in args {
+                walk_for_strings(arg, pool)?;
+            }
+        }
+        IrExpr::MethodCall { receiver, args, .. } => {
+            walk_for_strings(receiver, pool)?;
+            for (_, arg) in args {
+                walk_for_strings(arg, pool)?;
+            }
+        }
+        IrExpr::FieldAccess { object, .. } => walk_for_strings(object, pool)?,
+        IrExpr::DictAccess { dict, key, .. } => {
+            walk_for_strings(dict, pool)?;
+            walk_for_strings(key, pool)?;
+        }
+        IrExpr::Match {
+            scrutinee, arms, ..
+        } => {
+            walk_for_strings(scrutinee, pool)?;
+            for arm in arms {
+                walk_for_strings(&arm.body, pool)?;
+            }
+        }
+        IrExpr::For {
+            collection, body, ..
+        } => {
+            walk_for_strings(collection, pool)?;
+            walk_for_strings(body, pool)?;
+        }
+        IrExpr::ClosureRef { env_struct, .. } => walk_for_strings(env_struct, pool)?,
+        IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
+            for (_, _, value) in fields {
+                walk_for_strings(value, pool)?;
+            }
+        }
+        IrExpr::Tuple { fields, .. } => {
+            for (_, value) in fields {
+                walk_for_strings(value, pool)?;
+            }
+        }
+        IrExpr::Array { elements, .. } => {
+            for e in elements {
+                walk_for_strings(e, pool)?;
+            }
+        }
+        IrExpr::DictLiteral { entries, .. } => {
+            for (k, v) in entries {
+                walk_for_strings(k, pool)?;
+                walk_for_strings(v, pool)?;
+            }
+        }
+        IrExpr::Closure { body, .. } => walk_for_strings(body, pool)?,
+        IrExpr::Reference { .. } | IrExpr::LetRef { .. } | IrExpr::SelfFieldRef { .. } => {}
+    }
+    Ok(())
 }
 
 /// Owned plumbing for indirect closure invocation.
@@ -431,6 +579,7 @@ fn emit_impl(
     module: &IrModule,
     bump_allocator: u32,
     closure_ctx: Option<&ClosureCallContext<'_>>,
+    string_pool: &HashMap<String, u32>,
 ) -> Result<(), ModuleLowerError> {
     let self_struct_id = match imp.target {
         ImplTarget::Struct(id) => Some(id),
@@ -446,6 +595,7 @@ fn emit_impl(
             bump_allocator,
             self_struct_id,
             closure_ctx,
+            string_pool,
         )?;
     }
     Ok(())
@@ -464,6 +614,7 @@ fn emit_function(
     bump_allocator: u32,
     impl_self_struct_id: Option<StructId>,
     closure_ctx: Option<&ClosureCallContext<'_>>,
+    string_pool: &HashMap<String, u32>,
 ) -> Result<(), ModuleLowerError> {
     if f.is_extern() {
         return Err(ModuleLowerError::ExternFunction {
@@ -491,6 +642,7 @@ fn emit_function(
         bump_allocator,
         self_struct_id,
         closure_ctx,
+        string_pool,
     )?;
     let wasm_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
     // Phase 1a: every non-extern top-level function is exported by

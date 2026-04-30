@@ -366,6 +366,10 @@ pub fn lower_function_body(
     clippy::too_many_arguments,
     reason = "module-aware body lowering needs every map and table-context input the called expression lowerings can possibly read; bundling into a struct hides the contract"
 )]
+#[expect(
+    clippy::implicit_hasher,
+    reason = "string_pool comes from the module-lowering pass and always uses the default hasher"
+)]
 pub fn lower_function_body_in_module(
     body: &IrExpr,
     return_ty: Option<&ResolvedType>,
@@ -376,6 +380,7 @@ pub fn lower_function_body_in_module(
     bump_allocator: u32,
     self_struct_id: Option<StructId>,
     closure_ctx: Option<&ClosureCallContext<'_>>,
+    string_pool: &std::collections::HashMap<String, u32>,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
     let counts = count_scratch_locals(body, return_ty, Some(module))?;
@@ -410,7 +415,8 @@ pub fn lower_function_body_in_module(
         .with_methods(methods)
         .with_module(module)
         .with_bump_allocator(bump_allocator)
-        .with_scratch_locals(&allocator);
+        .with_scratch_locals(&allocator)
+        .with_string_pool(string_pool);
     if let Some(id) = self_struct_id {
         ctx = ctx.with_self_struct_id(id);
     }

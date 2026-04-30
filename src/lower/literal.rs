@@ -15,6 +15,10 @@ use crate::module::MEMORY_INDEX;
 /// a tag-only `Optional<Never>` value in linear memory, which needs the
 /// bump-allocator function index and a fresh i32 scratch local. The
 /// other literal kinds are pure stack pushes and ignore `ctx`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive match over every primitive / non-primitive Literal arm; splitting out one helper per arm hides the dispatch"
+)]
 pub fn lower_literal(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
@@ -32,6 +36,14 @@ pub fn lower_literal(
     // in that match doesn't reject it.
     if matches!(value, Literal::Nil) {
         return lower_nil(ty, sink, ctx);
+    }
+
+    // String literals carry primitive `String` typing and resolve to
+    // a static-data pointer rather than a stack-pushed constant. Like
+    // `Nil`, intercept before the primitive-only `prim` extraction so
+    // the type-mismatch arm doesn't reject the heap-typed primitive.
+    if matches!(value, Literal::String(_)) {
+        return lower_string_literal(value, ty, sink, ctx);
     }
 
     let prim = match ty {
@@ -104,10 +116,14 @@ pub fn lower_literal(
             });
         }
 
-        // String / Path / Regex live in Phase 2 alongside heap layouts.
+        // String literals dispatch through `lower_string_literal`
+        // above; reaching this arm means the carried `ty` was a
+        // primitive other than `String`, which the frontend never
+        // emits.
         (Literal::String(_), _) => {
-            return Err(LowerError::NotYetImplemented {
-                what: "Literal::String (Phase 2)".to_owned(),
+            return Err(LowerError::LiteralTypeMismatch {
+                kind: "String".to_owned(),
+                ty: ty.clone(),
             });
         }
         (Literal::Path(_), _) => {
@@ -137,6 +153,43 @@ pub fn lower_literal(
         }
     }
 
+    Ok(())
+}
+
+/// Lower a `Literal::String`.
+///
+/// String literals are seeded into the wasm data segment ahead of any
+/// function-body lowering by [`crate::module_lowering::lower_module`].
+/// Each unique literal lives at a fixed byte offset in linear memory
+/// — its 8-byte `{ ptr, len }` header at one offset and its raw bytes
+/// at another, both inside the static data segment. The literal's
+/// runtime value is a pointer to the header, which the lowering pass
+/// emits as a single `i32.const`.
+///
+/// The compile-time string pool (threaded into `ctx.string_pool`) owns
+/// the text-to-header-offset mapping; lowering looks the offset up
+/// without touching the data buffer itself.
+fn lower_string_literal(
+    value: &Literal,
+    ty: &ResolvedType,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let Literal::String(text) = value else {
+        return Err(LowerError::LiteralTypeMismatch {
+            kind: literal_kind_tag(value),
+            ty: ty.clone(),
+        });
+    };
+    if !matches!(ty, ResolvedType::Primitive(PrimitiveType::String)) {
+        return Err(LowerError::LiteralTypeMismatch {
+            kind: "String".to_owned(),
+            ty: ty.clone(),
+        });
+    }
+    let header_offset = ctx.string_header_offset(text)?;
+    let signed = i32::try_from(header_offset).unwrap_or(i32::MAX);
+    sink.i32_const(signed);
     Ok(())
 }
 

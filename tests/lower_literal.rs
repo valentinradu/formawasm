@@ -149,7 +149,11 @@ fn rejects_i32_literal_out_of_range() -> TestResult {
 }
 
 #[test]
-fn rejects_string_literal_in_phase_1a() -> TestResult {
+fn string_literal_without_pool_surfaces_missing_context() -> TestResult {
+    // Phase 2 mc9 wires `Literal::String` lowering through the
+    // compile-time string pool; lowering against a context that has
+    // no pool attached must surface `MissingContext` rather than
+    // emitting a stray instruction or panicking.
     let expr = IrExpr::Literal {
         value: Literal::String("hi".to_owned()),
         ty: primitive_ty(PrimitiveType::String),
@@ -160,8 +164,10 @@ fn rejects_string_literal_in_phase_1a() -> TestResult {
     let ctx = dummy_ctx(&bindings, &functions);
     let result = lower::lower_literal(&expr, &mut body.instructions(), &ctx);
     match result {
-        Err(LowerError::NotYetImplemented { what }) if what.contains("String") => Ok(()),
-        other => Err(format!("expected NotYetImplemented(String), got {other:?}").into()),
+        Err(LowerError::MissingContext {
+            what: "string_pool",
+        }) => Ok(()),
+        other => Err(format!("expected MissingContext(string_pool), got {other:?}").into()),
     }
 }
 

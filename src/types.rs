@@ -48,11 +48,12 @@ pub fn primitive_value_type(p: PrimitiveType) -> Result<Option<ValType>, TypeMap
         // Zero-sized; functions returning Never emit `unreachable` and
         // declare an empty result list.
         PrimitiveType::Never => Ok(None),
-        // String / Path / Regex land in Phase 2 alongside heap layouts.
+        // Strings live in linear memory as an `{ ptr, len }` header
+        // pointer; the wasm value type is i32. `Path` and `Regex` use
+        // the same representation internally — the WIT boundary is
+        // what distinguishes them.
         PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
-            Err(TypeMapError::NotYetSupported {
-                kind: format!("{p:?}"),
-            })
+            Ok(Some(ValType::I32))
         }
         // Future #[non_exhaustive] variants ride this arm.
         _ => Err(TypeMapError::NotYetSupported {
