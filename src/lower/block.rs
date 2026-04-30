@@ -579,8 +579,16 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             walk_count(body, out)?;
         }
 
-        IrExpr::Literal { .. }
-        | IrExpr::Reference { .. }
+        IrExpr::Literal { value, .. } => {
+            // Literal::Nil allocates a tag-only Optional value in
+            // linear memory and stashes the base pointer in a fresh
+            // i32 scratch slot before storing the tag. Other literal
+            // kinds are pure stack pushes and need no scratch.
+            if matches!(value, formalang::ast::Literal::Nil) {
+                bump_count(&mut out.i32)?;
+            }
+        }
+        IrExpr::Reference { .. }
         | IrExpr::LetRef { .. }
         | IrExpr::SelfFieldRef { .. }
         | IrExpr::Closure { .. }

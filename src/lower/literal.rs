@@ -2,18 +2,37 @@
 
 use formalang::ast::{Literal, NumberValue, PrimitiveType};
 use formalang::ir::{IrExpr, ResolvedType};
-use wasm_encoder::{Ieee32, Ieee64, InstructionSink};
+use wasm_encoder::{Ieee32, Ieee64, InstructionSink, MemArg, ValType};
 
-use super::LowerError;
+use super::{LowerContext, LowerError};
+use crate::layout::{OPTIONAL_TAG_ALIGN, OPTIONAL_TAG_NIL, OPTIONAL_TAG_SIZE};
+use crate::module::MEMORY_INDEX;
 
 /// Lower an [`IrExpr::Literal`] onto `sink`. The resolved type carried
 /// on the expression decides which `*.const` instruction is emitted.
-pub fn lower_literal(expr: &IrExpr, sink: &mut InstructionSink<'_>) -> Result<(), LowerError> {
+///
+/// `ctx` is required only for `Literal::Nil` — that variant allocates
+/// a tag-only `Optional<Never>` value in linear memory, which needs the
+/// bump-allocator function index and a fresh i32 scratch local. The
+/// other literal kinds are pure stack pushes and ignore `ctx`.
+pub fn lower_literal(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
     let IrExpr::Literal { value, ty } = expr else {
         return Err(LowerError::NotYetImplemented {
             what: "lower_literal called with non-literal expression".to_owned(),
         });
     };
+
+    // `Literal::Nil` is the one literal whose static type is non-
+    // primitive (`Optional<Never>`). Handle it before the
+    // primitive-only `prim` extraction below so the type-mismatch arm
+    // in that match doesn't reject it.
+    if matches!(value, Literal::Nil) {
+        return lower_nil(ty, sink, ctx);
+    }
 
     let prim = match ty {
         ResolvedType::Primitive(p) => *p,
@@ -102,8 +121,12 @@ pub fn lower_literal(expr: &IrExpr, sink: &mut InstructionSink<'_>) -> Result<()
             });
         }
         (Literal::Nil, _) => {
-            return Err(LowerError::NotYetImplemented {
-                what: "Literal::Nil (Phase 2)".to_owned(),
+            // The early-return above intercepts the Nil case; reaching
+            // this arm would mean the carried `ty` is `Primitive(_)`,
+            // which the frontend never emits.
+            return Err(LowerError::LiteralTypeMismatch {
+                kind: "Nil".to_owned(),
+                ty: ty.clone(),
             });
         }
         // Future #[non_exhaustive] Literal variants ride this arm.
@@ -114,6 +137,50 @@ pub fn lower_literal(expr: &IrExpr, sink: &mut InstructionSink<'_>) -> Result<()
         }
     }
 
+    Ok(())
+}
+
+/// Lower a `Literal::Nil`.
+///
+/// Allocates a tag-only `Optional<Never>` value via the bump
+/// allocator: 4 bytes, with the discriminant tag set to
+/// [`OPTIONAL_TAG_NIL`] at offset 0. The pointer to that allocation is
+/// left on the wasm operand stack as the literal's value.
+///
+/// `nil` carries the static type `Optional<Never>` (so the layout is
+/// the same regardless of the surrounding `Optional<T>` slot it flows
+/// into — consumers only ever read the tag because it is always 0).
+/// We accept any `Optional<_>` shape here for flexibility, and reject
+/// non-Optional `ty` as a type-mismatch since the frontend never emits
+/// that form.
+fn lower_nil(
+    ty: &ResolvedType,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    if !matches!(ty, ResolvedType::Optional(_)) {
+        return Err(LowerError::LiteralTypeMismatch {
+            kind: "Nil".to_owned(),
+            ty: ty.clone(),
+        });
+    }
+
+    let alloc_idx = ctx.bump_allocator()?;
+    let base_local = ctx.next_scratch_local(ValType::I32)?;
+
+    sink.i32_const(i32::try_from(OPTIONAL_TAG_SIZE).unwrap_or(i32::MAX));
+    sink.call(alloc_idx);
+    sink.local_set(base_local);
+
+    sink.local_get(base_local);
+    sink.i32_const(i32::try_from(OPTIONAL_TAG_NIL).unwrap_or(0));
+    sink.i32_store(MemArg {
+        offset: 0,
+        align: OPTIONAL_TAG_ALIGN.trailing_zeros(),
+        memory_index: MEMORY_INDEX,
+    });
+
+    sink.local_get(base_local);
     Ok(())
 }
 

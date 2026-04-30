@@ -6,10 +6,14 @@
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
 use formalang::ir::{IrExpr, ResolvedType};
-use formawasm::lower::{self, LowerError};
+use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
 use wasmparser::{Validator, WasmFeatures};
+
+const fn dummy_ctx<'a>(bindings: &'a BindingMap, functions: &'a FunctionMap) -> LowerContext<'a> {
+    LowerContext::new(bindings, functions)
+}
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
 type TestResult = Result<(), TestError>;
@@ -26,9 +30,12 @@ fn validate(bytes: &[u8]) -> Result<(), TestError> {
 fn build_module_with_literal_body(expr: &IrExpr, result: ValType) -> Result<Vec<u8>, TestError> {
     let mut builder = ModuleBuilder::new();
     let mut body = Function::new(core::iter::empty());
+    let bindings = BindingMap::new();
+    let functions = FunctionMap::new();
+    let ctx = dummy_ctx(&bindings, &functions);
     {
         let sink = &mut body.instructions();
-        lower::lower_literal(expr, sink)?;
+        lower::lower_literal(expr, sink, &ctx)?;
         sink.end();
     }
     builder.declare_function_with_body(&[], &[result], &body);
@@ -128,7 +135,10 @@ fn rejects_i32_literal_out_of_range() -> TestResult {
         primitive_ty(PrimitiveType::I32),
     );
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_literal(&expr, &mut body.instructions());
+    let bindings = BindingMap::new();
+    let functions = FunctionMap::new();
+    let ctx = dummy_ctx(&bindings, &functions);
+    let result = lower::lower_literal(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::LiteralOutOfRange {
             target: PrimitiveType::I32,
@@ -145,7 +155,10 @@ fn rejects_string_literal_in_phase_1a() -> TestResult {
         ty: primitive_ty(PrimitiveType::String),
     };
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_literal(&expr, &mut body.instructions());
+    let bindings = BindingMap::new();
+    let functions = FunctionMap::new();
+    let ctx = dummy_ctx(&bindings, &functions);
+    let result = lower::lower_literal(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::NotYetImplemented { what }) if what.contains("String") => Ok(()),
         other => Err(format!("expected NotYetImplemented(String), got {other:?}").into()),
@@ -159,7 +172,10 @@ fn rejects_boolean_with_non_boolean_type() -> TestResult {
         ty: primitive_ty(PrimitiveType::I64),
     };
     let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_literal(&expr, &mut body.instructions());
+    let bindings = BindingMap::new();
+    let functions = FunctionMap::new();
+    let ctx = dummy_ctx(&bindings, &functions);
+    let result = lower::lower_literal(&expr, &mut body.instructions(), &ctx);
     match result {
         Err(LowerError::LiteralTypeMismatch { kind, .. }) if kind == "Boolean" => Ok(()),
         other => Err(format!("expected LiteralTypeMismatch(Boolean), got {other:?}").into()),

@@ -705,7 +705,7 @@ pub fn lower_expr(
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     match expr {
-        IrExpr::Literal { .. } => lower_literal(expr, sink),
+        IrExpr::Literal { .. } => lower_literal(expr, sink, ctx),
         IrExpr::Reference { .. } => lower_reference(expr, sink, ctx),
         IrExpr::LetRef { .. } => lower_let_ref(expr, sink, ctx),
         IrExpr::BinaryOp { .. } => lower_binary_op(expr, sink, ctx),
