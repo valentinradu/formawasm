@@ -63,7 +63,10 @@ here; see "Known restrictions" below.
 **Known restrictions carried forward from Phase 1c:**
 
 - `lower_for` accepts `Range<I32>` and `Range<I64>` (`tests/lower_for.rs::for_over_i64_range_uses_typed_loop_arithmetic`); `Range<F32>` / `Range<F64>` stay rejected. The typed-scratch-local infrastructure is in place — extending the For-Range emitter to floats is straightforward once iterate-by-1.0 semantics are wanted.
-- Indirect closure invocation (calling a `ClosureRef` value through a funcref table) is **blocked on upstream**. The language has no closure-application syntax yet: `f(x)` lowers to `IrExpr::FunctionCall` whose `path` resolves to a top-level function, never to a closure-typed local binding (see formalang's `closure_conv/mod.rs` lines 60–69 — "When the language gains closure-application, the conversion will need a callsite-rewrite step that targets this pass"). Once formalang adds the IR variant, formawasm can wire the funcref table + `call_indirect` lowering.
+
+**Closed (post-Phase-1c housekeeping, 2026-04-30):**
+
+- ✅ Indirect closure invocation. Upstream landed `IrExpr::CallClosure` (formalang `2550391`); formawasm wires a funcref `Table`, populates it with every `__closure*` lifted function, registers per-closure-type `call_indirect` signatures (env_ptr prepended), and emits `local.get base; i32_load env; <args>; i32_load funcref; call_indirect`. End-to-end coverage in `tests/lower_call_closure.rs` runs both a no-capture closure and a `make_adder` capture-closing closure under wasmtime.
 
 > **Quality bar.** This repo mirrors the lint / CI / build setup at
 > `~/projects/smid/smid-ws0` — strict clippy (deny `unwrap_used`,
