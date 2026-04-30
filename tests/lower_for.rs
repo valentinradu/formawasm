@@ -244,6 +244,71 @@ fn empty_range_for_loop_returns_empty_array() -> TestResult {
 }
 
 #[test]
+fn for_over_i64_range_uses_typed_loop_arithmetic() -> TestResult {
+    // for p in 100I64..103I64 { p } -> [100, 101, 102]
+    let mut module = IrModule::new();
+    let var_id = BindingId(11);
+    let i64_ty = primitive(PrimitiveType::I64);
+
+    let lo = IrExpr::Literal {
+        value: Literal::Number(NumberLiteral::suffixed(
+            NumberValue::Integer(100),
+            NumericSuffix::I64,
+        )),
+        ty: i64_ty.clone(),
+    };
+    let hi = IrExpr::Literal {
+        value: Literal::Number(NumberLiteral::suffixed(
+            NumberValue::Integer(103),
+            NumericSuffix::I64,
+        )),
+        ty: i64_ty.clone(),
+    };
+    let range = IrExpr::BinaryOp {
+        left: Box::new(lo),
+        right: Box::new(hi),
+        op: BinaryOperator::Range,
+        ty: range_ty(i64_ty.clone()),
+    };
+    let body = typed_let_ref(var_id, "p", i64_ty.clone());
+    let for_loop = IrExpr::For {
+        var: "p".to_owned(),
+        var_ty: i64_ty.clone(),
+        var_binding_id: var_id,
+        collection: Box::new(range),
+        body: Box::new(body),
+        ty: array_ty(i64_ty.clone()),
+    };
+    module
+        .functions
+        .push(function("longs", array_ty(i64_ty), for_loop));
+
+    let bytes = module_lowering::lower_module(&module)?;
+    validate(&bytes)?;
+
+    let (mut store, instance) = instantiate(&bytes)?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "longs")?;
+    let header_ptr = f.call(&mut store, ())?;
+
+    let (buf_ptr, len, cap) = read_header(&mut store, &instance, header_ptr)?;
+    if (len, cap) != (3, 3) {
+        return Err(format!("len/cap: got ({len}, {cap}), want (3, 3)").into());
+    }
+    let buf: [u8; 24] = read_memory(&mut store, &instance, buf_ptr)?;
+    let mut vals = [0_i64; 3];
+    for (slot, chunk) in vals.iter_mut().zip(buf.chunks_exact(8)) {
+        let bytes: [u8; 8] = chunk
+            .try_into()
+            .map_err(|_| -> TestError { "chunk length not 8".into() })?;
+        *slot = i64::from_le_bytes(bytes);
+    }
+    if vals != [100, 101, 102] {
+        return Err(format!("got {vals:?}, want [100, 101, 102]").into());
+    }
+    Ok(())
+}
+
+#[test]
 fn for_with_body_arithmetic_collects_squared_values() -> TestResult {
     // for p in 2..6 { p * p } -> [4, 9, 16, 25]
     let mut module = IrModule::new();

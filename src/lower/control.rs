@@ -3,7 +3,7 @@
 
 use formalang::ast::PrimitiveType;
 use formalang::ir::{IrExpr, IrMatchArm, ResolvedType};
-use wasm_encoder::{BlockType, InstructionSink, MemArg};
+use wasm_encoder::{BlockType, InstructionSink, MemArg, ValType};
 
 use super::aggregate::{
     HeaderLen, field_mem_arg, finalize_array_header, load_primitive, primitive_of, store_primitive,
@@ -15,18 +15,98 @@ use crate::layout::{
 use crate::module::MEMORY_INDEX;
 use crate::types::{body_value_type, resolved_value_type};
 
-/// Number of i32 scratch locals each `IrExpr::For` allocates. Both
-/// the `Range<I32>` and `Array<T>` source paths reserve the same count
-/// so [`super::block::walk_count`] stays source-agnostic — the array
-/// path uses six and intentionally skips the seventh slot to keep
-/// reservation and consumption uniform across both shapes.
+/// Per-source-shape scratch-slot counts for an `IrExpr::For`. Called
+/// from [`super::block::walk_count`] before any code is emitted, so
+/// the function's wasm-locals table reserves exactly enough slots of
+/// each type for what the lowering walker later requests.
 ///
-/// Range layout (all seven consumed): `range`, `start`, `end`, `len`,
-/// `out_buf`, `out_header`, `i`.
+/// Range layout: 4 i32 (`range`, `out_buf`, `out_header`, `len_i32`)
+/// plus `start` / `end` / `i` typed at the bound's wasm valtype. The
+/// loop compares `i < end` directly so no typed `len` slot is
+/// needed; an i32 mirror of `len = end - start` is kept around for
+/// buffer allocation and header writes.
 ///
-/// Array layout (six consumed, one skipped): `arr`, `in_buf`,
-/// `<skipped>`, `len`, `out_buf`, `out_header`, `i`.
-pub(super) const FOR_SCRATCH_LOCAL_COUNT: u32 = 7;
+/// Array layout: 6 i32 (`arr`, `in_buf`, `len`, `out_buf`,
+/// `out_header`, `i`).
+pub(super) fn for_scratch_counts(
+    coll_ty: &ResolvedType,
+    counts: &mut super::block::ScratchCounts,
+) -> Result<(), LowerError> {
+    match coll_ty {
+        ResolvedType::Range(bound_box) => {
+            let bound_ty = bound_box.as_ref();
+            // range pointer + out_buf + out_header + len_i32
+            for _ in 0..4 {
+                super::block::bump_count(&mut counts.i32)?;
+            }
+            // start / end / i — three slots in the bound's wasm valtype
+            let bound_field = match range_bound_valtype(bound_ty)? {
+                ValType::I32 => &mut counts.i32,
+                ValType::I64 => &mut counts.i64,
+                ValType::F32 => &mut counts.f32,
+                ValType::F64 => &mut counts.f64,
+                ValType::V128 | ValType::Ref(_) => {
+                    return Err(LowerError::NotYetImplemented {
+                        what: format!("for-loop over Range<{bound_ty:?}>"),
+                    });
+                }
+            };
+            for _ in 0..3 {
+                super::block::bump_count(bound_field)?;
+            }
+            Ok(())
+        }
+        ResolvedType::Array(_) => {
+            // arr + in_buf + len + out_buf + out_header + i
+            for _ in 0..6 {
+                super::block::bump_count(&mut counts.i32)?;
+            }
+            Ok(())
+        }
+        // Malformed For shapes get rejected by `check_for_types`
+        // during emission; reserve nothing extra here so the walk
+        // doesn't poison adjacent function-body counts.
+        ResolvedType::Primitive(_)
+        | ResolvedType::Struct(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => Ok(()),
+    }
+}
+
+/// Wasm value type used for one bound of a `Range<T>` and for the
+/// loop-counter scratch slots that derive from it. Only types whose
+/// `For` lowering is wired up surface here — F32/F64 ranges are
+/// rejected explicitly until their iteration semantics get wired in.
+fn range_bound_valtype(bound_ty: &ResolvedType) -> Result<ValType, LowerError> {
+    match bound_ty {
+        ResolvedType::Primitive(PrimitiveType::I32) => Ok(ValType::I32),
+        ResolvedType::Primitive(PrimitiveType::I64) => Ok(ValType::I64),
+        ResolvedType::Primitive(_)
+        | ResolvedType::Struct(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => Err(LowerError::NotYetImplemented {
+            what: format!("for-loop over Range<{bound_ty:?}> (only I32 / I64 supported)"),
+        }),
+    }
+}
 
 /// Lower an [`IrExpr::If`] onto `sink`.
 ///
@@ -129,7 +209,7 @@ pub fn lower_match(
     // Save scrutinee pointer in a scratch local so each arm can re-
     // read fields from it without re-evaluating the scrutinee
     // expression.
-    let scrutinee_local = ctx.next_scratch_local()?;
+    let scrutinee_local = ctx.next_scratch_local(ValType::I32)?;
     lower_expr(scrutinee, sink, ctx)?;
     sink.local_set(scrutinee_local);
 
@@ -284,23 +364,26 @@ enum ForSource<'a> {
 }
 
 /// Scratch + binding locals reserved up-front for a Range-sourced
-/// For loop. All seven scratch slots are i32; `var` is allocated
-/// through the binding map at the loop variable's value type.
+/// For loop. The pointer / output slots and `len_i32` are i32;
+/// `start` / `end` / `i` are typed at the range bound's wasm valtype
+/// so the loop arithmetic uses native opcodes for that type. `var`
+/// is allocated through the binding map at the loop variable's value
+/// type.
 struct RangeForLocals {
     range: u32,
-    start: u32,
-    end: u32,
-    len: u32,
     out_buf: u32,
     out_header: u32,
+    len_i32: u32,
+    start: u32,
+    end: u32,
     i: u32,
     var: u32,
+    bound_vt: ValType,
 }
 
 /// Scratch + binding locals reserved for an Array-sourced For loop.
-/// Six scratch slots consumed; the seventh is intentionally skipped
-/// (see [`FOR_SCRATCH_LOCAL_COUNT`]) so the reservation count stays
-/// uniform across both source shapes.
+/// All six slots are i32; `var` is allocated through the binding map
+/// at the loop variable's value type.
 struct ArrayForLocals {
     arr: u32,
     in_buf: u32,
@@ -364,7 +447,9 @@ pub fn lower_for(
 /// and return the iteration source plus the output element type so
 /// [`lower_for`] can dispatch and plan layouts before emitting any
 /// code. The result type must be `Array<body_ty>` per the IR
-/// contract.
+/// contract. Range bounds restricted to I32 / I64 — wider integer
+/// types and floats stay rejected until their iteration semantics
+/// land alongside the matching wasm-opcode dispatch.
 fn check_for_types<'a>(
     collection: &'a IrExpr,
     var_ty: &ResolvedType,
@@ -380,17 +465,13 @@ fn check_for_types<'a>(
     match coll_ty {
         ResolvedType::Range(bound_box) => {
             let bound_ty = bound_box.as_ref();
-            if !matches!(bound_ty, ResolvedType::Primitive(PrimitiveType::I32)) {
+            // Reject early on bound types we don't lower; matching also
+            // forces var_ty to agree.
+            range_bound_valtype(bound_ty)?;
+            if var_ty != bound_ty {
                 return Err(LowerError::NotYetImplemented {
                     what: format!(
-                        "for-loop over Range<{bound_ty:?}> (only Range<I32> supported in Phase 1c)"
-                    ),
-                });
-            }
-            if !matches!(var_ty, ResolvedType::Primitive(PrimitiveType::I32)) {
-                return Err(LowerError::NotYetImplemented {
-                    what: format!(
-                        "for-loop variable of type {var_ty:?} for Range<I32> (only I32 supported)"
+                        "for-loop variable {var_ty:?} disagrees with range bound {bound_ty:?}"
                     ),
                 });
             }
@@ -414,9 +495,10 @@ fn check_for_types<'a>(
     }
 }
 
-/// Range-sourced For-loop: allocate seven scratch locals, lower
-/// `collection` to a range pointer, compute `len = end - start`, then
-/// loop with `var = start + i`.
+/// Range-sourced For-loop: allocate scratch locals (3 i32 + 4 typed
+/// at the bound's wasm valtype), lower `collection` to a range
+/// pointer, compute `len = end - start`, then loop with
+/// `var = start + i`.
 fn lower_for_range(
     collection: &IrExpr,
     body: &IrExpr,
@@ -429,16 +511,18 @@ fn lower_for_range(
     let module = ctx.module()?;
     let range_layout = plan_range(bound_ty, module)?;
     let array_layout = plan_array(body_ty, module)?;
+    let bound_vt = range_bound_valtype(bound_ty)?;
 
     let locals = RangeForLocals {
-        range: ctx.next_scratch_local()?,
-        start: ctx.next_scratch_local()?,
-        end: ctx.next_scratch_local()?,
-        len: ctx.next_scratch_local()?,
-        out_buf: ctx.next_scratch_local()?,
-        out_header: ctx.next_scratch_local()?,
-        i: ctx.next_scratch_local()?,
+        range: ctx.next_scratch_local(ValType::I32)?,
+        out_buf: ctx.next_scratch_local(ValType::I32)?,
+        out_header: ctx.next_scratch_local(ValType::I32)?,
+        len_i32: ctx.next_scratch_local(ValType::I32)?,
+        start: ctx.next_scratch_local(bound_vt)?,
+        end: ctx.next_scratch_local(bound_vt)?,
+        i: ctx.next_scratch_local(bound_vt)?,
         var: var_local,
+        bound_vt,
     };
 
     emit_for_range_setup(collection, range_layout, array_layout, &locals, ctx, sink)?;
@@ -446,7 +530,7 @@ fn lower_for_range(
     finalize_array_header(
         locals.out_header,
         locals.out_buf,
-        HeaderLen::Local(locals.len),
+        HeaderLen::Local(locals.len_i32),
         sink,
     );
     Ok(())
@@ -469,18 +553,13 @@ fn lower_for_array(
     let in_layout = plan_array(elem_ty, module)?;
     let out_layout = plan_array(body_ty, module)?;
 
-    let arr = ctx.next_scratch_local()?;
-    let in_buf = ctx.next_scratch_local()?;
-    // Skip one scratch slot to keep the per-For reservation count
-    // uniform with the Range path; see FOR_SCRATCH_LOCAL_COUNT.
-    let _skipped = ctx.next_scratch_local()?;
     let locals = ArrayForLocals {
-        arr,
-        in_buf,
-        len: ctx.next_scratch_local()?,
-        out_buf: ctx.next_scratch_local()?,
-        out_header: ctx.next_scratch_local()?,
-        i: ctx.next_scratch_local()?,
+        arr: ctx.next_scratch_local(ValType::I32)?,
+        in_buf: ctx.next_scratch_local(ValType::I32)?,
+        len: ctx.next_scratch_local(ValType::I32)?,
+        out_buf: ctx.next_scratch_local(ValType::I32)?,
+        out_header: ctx.next_scratch_local(ValType::I32)?,
+        i: ctx.next_scratch_local(ValType::I32)?,
         var: var_local,
     };
 
@@ -499,9 +578,9 @@ fn lower_for_array(
 
 /// Emit setup for the Range path: lower `collection` to a range
 /// pointer, pull `start` and `end` into scratch locals, compute
-/// `len = end - start`, and bump-allocate the output element buffer
-/// and header. After this helper returns, `i` is pre-set to 0 and the
-/// wasm stack is empty.
+/// `len = end - start`, allocate the output element buffer + header,
+/// and zero `i`. All loads and arithmetic go through type-dispatched
+/// helpers so I32 and I64 ranges share the same shape.
 fn emit_for_range_setup(
     collection: &IrExpr,
     range_layout: crate::layout::RangeLayout,
@@ -514,37 +593,59 @@ fn emit_for_range_setup(
     sink.local_set(locals.range);
 
     let bound_align_log2 = align_log2(range_layout.bound_align);
+
     sink.local_get(locals.range);
-    sink.i32_load(MemArg {
-        offset: 0,
-        align: bound_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
+    typed_load(
+        locals.bound_vt,
+        MemArg {
+            offset: 0,
+            align: bound_align_log2,
+            memory_index: MEMORY_INDEX,
+        },
+        sink,
+    );
     sink.local_set(locals.start);
 
     sink.local_get(locals.range);
-    sink.i32_load(MemArg {
-        offset: u64::from(range_layout.end_offset),
-        align: bound_align_log2,
-        memory_index: MEMORY_INDEX,
-    });
+    typed_load(
+        locals.bound_vt,
+        MemArg {
+            offset: u64::from(range_layout.end_offset),
+            align: bound_align_log2,
+            memory_index: MEMORY_INDEX,
+        },
+        sink,
+    );
     sink.local_set(locals.end);
 
+    // Compute `len_i32 = (end - start)` (wrapping i64 to i32 if the
+    // bound is i64). Linear-memory allocations are i32-addressed so
+    // the wrap is safe — the bump-allocator call traps if the multi-
+    // plication still overflows.
     sink.local_get(locals.end);
     sink.local_get(locals.start);
-    sink.i32_sub();
-    sink.local_set(locals.len);
+    typed_sub(locals.bound_vt, sink);
+    if matches!(locals.bound_vt, ValType::I64) {
+        sink.i32_wrap_i64();
+    }
+    sink.local_set(locals.len_i32);
 
-    allocate_for_output(
-        array_layout,
-        locals.out_buf,
-        locals.out_header,
-        locals.len,
-        ctx,
-        sink,
-    )?;
+    let alloc_idx = ctx.bump_allocator()?;
+    sink.local_get(locals.len_i32);
+    sink.i32_const(elem_size_signed(array_layout)?);
+    sink.i32_mul();
+    sink.call(alloc_idx);
+    sink.local_set(locals.out_buf);
 
-    sink.i32_const(0);
+    sink.i32_const(i32::try_from(array_layout.header_size).map_err(|_| {
+        LowerError::Layout(crate::layout::LayoutError::SizeOverflow {
+            name: "<for-output header>".to_owned(),
+        })
+    })?);
+    sink.call(alloc_idx);
+    sink.local_set(locals.out_header);
+
+    typed_const_zero(locals.bound_vt, sink);
     sink.local_set(locals.i);
 
     Ok(())
@@ -567,18 +668,26 @@ fn emit_for_range_loop(
     sink.block(BlockType::Empty);
     sink.loop_(BlockType::Empty);
 
+    // Loop comparison `i + start >= end` keeps `i` zero-based for the
+    // buffer-offset compute below while sharing the typed arithmetic
+    // with the `var = start + i` write.
+    sink.local_get(locals.start);
     sink.local_get(locals.i);
-    sink.local_get(locals.len);
-    sink.i32_ge_s();
+    typed_add(locals.bound_vt, sink);
+    sink.local_get(locals.end);
+    typed_ge_s(locals.bound_vt, sink);
     sink.br_if(1); // exit the surrounding $end block
 
     sink.local_get(locals.start);
     sink.local_get(locals.i);
-    sink.i32_add();
+    typed_add(locals.bound_vt, sink);
     sink.local_set(locals.var);
 
     sink.local_get(locals.out_buf);
     sink.local_get(locals.i);
+    if matches!(locals.bound_vt, ValType::I64) {
+        sink.i32_wrap_i64();
+    }
     sink.i32_const(elem_size_signed);
     sink.i32_mul();
     sink.i32_add();
@@ -586,13 +695,142 @@ fn emit_for_range_loop(
     lower_expr(body, sink, ctx)?;
     store_for_body_value(body_ty, output_field_layout(array_layout), sink)?;
 
-    advance_index(locals.i, sink);
+    typed_advance_index(locals.bound_vt, locals.i, sink);
 
     sink.br(0);
     sink.end(); // close loop
     sink.end(); // close $end block
 
     Ok(())
+}
+
+/// `local.get(i); typed_const_one(); typed_add(); local.set(i);` — `i += 1`
+/// in the bound's wasm valtype.
+fn typed_advance_index(vt: ValType, i: u32, sink: &mut InstructionSink<'_>) {
+    sink.local_get(i);
+    typed_const_one(vt, sink);
+    typed_add(vt, sink);
+    sink.local_set(i);
+}
+
+fn typed_load(vt: ValType, mem_arg: MemArg, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {
+            sink.i32_load(mem_arg);
+        }
+        ValType::I64 => {
+            sink.i64_load(mem_arg);
+        }
+        ValType::F32 => {
+            sink.f32_load(mem_arg);
+        }
+        ValType::F64 => {
+            sink.f64_load(mem_arg);
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
+}
+
+fn typed_sub(vt: ValType, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {
+            sink.i32_sub();
+        }
+        ValType::I64 => {
+            sink.i64_sub();
+        }
+        ValType::F32 => {
+            sink.f32_sub();
+        }
+        ValType::F64 => {
+            sink.f64_sub();
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
+}
+
+fn typed_add(vt: ValType, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {
+            sink.i32_add();
+        }
+        ValType::I64 => {
+            sink.i64_add();
+        }
+        ValType::F32 => {
+            sink.f32_add();
+        }
+        ValType::F64 => {
+            sink.f64_add();
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
+}
+
+fn typed_ge_s(vt: ValType, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {
+            sink.i32_ge_s();
+        }
+        ValType::I64 => {
+            sink.i64_ge_s();
+        }
+        ValType::F32 => {
+            sink.f32_ge();
+        }
+        ValType::F64 => {
+            sink.f64_ge();
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
+}
+
+fn typed_const_zero(vt: ValType, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {
+            sink.i32_const(0);
+        }
+        ValType::I64 => {
+            sink.i64_const(0);
+        }
+        ValType::F32 => {
+            sink.f32_const(0.0_f32.into());
+        }
+        ValType::F64 => {
+            sink.f64_const(0.0_f64.into());
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
+}
+
+fn typed_const_one(vt: ValType, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {
+            sink.i32_const(1);
+        }
+        ValType::I64 => {
+            sink.i64_const(1);
+        }
+        ValType::F32 => {
+            sink.f32_const(1.0_f32.into());
+        }
+        ValType::F64 => {
+            sink.f64_const(1.0_f64.into());
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
 }
 
 /// Emit setup for the Array path: lower `collection` to the input

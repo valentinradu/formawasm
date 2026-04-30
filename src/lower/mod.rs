@@ -27,7 +27,7 @@ use formalang::ir::{
     BindingId, FunctionId, ImplId, IrExpr, IrModule, MethodIdx, ResolvedType, StructId,
 };
 use thiserror::Error;
-use wasm_encoder::InstructionSink;
+use wasm_encoder::{InstructionSink, ValType};
 
 use crate::layout::LayoutError;
 use crate::types::TypeMapError;
@@ -386,13 +386,13 @@ pub struct LowerContext<'a> {
     /// Wasm function index of the bump-allocator helper. Aggregate
     /// constructors call this to reserve linear-memory bytes.
     pub bump_allocator: Option<u32>,
-    /// Counter that hands out fresh wasm-local indices reserved as
-    /// scratch slots for aggregate base pointers. The function-body
-    /// pre-walk has already extended `Function::new(locals)` to
-    /// include these; the counter starts past the params + lets and
-    /// increments per aggregate construction visited in lowering
-    /// order.
-    pub scratch_locals: Option<&'a Cell<u32>>,
+    /// Per-type counters that hand out fresh wasm-local indices
+    /// reserved as scratch slots. The function-body pre-walk has
+    /// already extended `Function::new(locals)` to include these
+    /// regions, one per wasm value type; the counters start at each
+    /// region's base and increment per scratch slot consumed in
+    /// lowering order.
+    pub scratch_locals: Option<&'a ScratchAllocator>,
     /// Struct that defines the enclosing impl, if the function being
     /// lowered is a method. `SelfFieldRef` lowering plans this
     /// struct's layout to translate field-name accesses into linear-
@@ -440,10 +440,10 @@ impl<'a> LowerContext<'a> {
         self
     }
 
-    /// Attach the scratch-local counter.
+    /// Attach the typed scratch-local allocator.
     #[must_use]
-    pub const fn with_scratch_locals(mut self, counter: &'a Cell<u32>) -> Self {
-        self.scratch_locals = Some(counter);
+    pub const fn with_scratch_locals(mut self, allocator: &'a ScratchAllocator) -> Self {
+        self.scratch_locals = Some(allocator);
         self
     }
 
@@ -470,23 +470,110 @@ impl<'a> LowerContext<'a> {
         })
     }
 
-    /// Hand out the next scratch wasm-local index. The pre-walk that
-    /// reserved these locals must have counted at least as many
-    /// aggregate constructions as the lowering walker actually visits;
-    /// otherwise we'd be pointing past the end of the function's
-    /// locals table.
-    pub fn next_scratch_local(&self) -> Result<u32, LowerError> {
-        let counter = self.scratch_locals.ok_or(LowerError::MissingContext {
+    /// Hand out the next scratch wasm-local index for a slot of type
+    /// `ty`. The pre-walk that reserved these locals must have counted
+    /// at least as many scratch slots of each type as the lowering
+    /// walker actually visits; otherwise we'd be pointing past the end
+    /// of the function's locals table.
+    pub fn next_scratch_local(&self, ty: ValType) -> Result<u32, LowerError> {
+        let allocator = self.scratch_locals.ok_or(LowerError::MissingContext {
             what: "scratch_locals",
         })?;
-        let idx = counter.get();
-        let next = idx
-            .checked_add(1)
+        allocator.allocate(ty)
+    }
+}
+
+/// Per-type scratch-local allocator passed by reference into [`LowerContext`].
+///
+/// The pre-walk reserves four contiguous regions in the wasm-locals
+/// table — one per supported value type — and feeds each region's
+/// `(base, count)` pair in here. `allocate(ty)` returns the next free
+/// index inside the appropriate region, advancing its counter.
+#[derive(Debug)]
+pub struct ScratchAllocator {
+    i32_base: u32,
+    i32_next: Cell<u32>,
+    i32_count: u32,
+    i64_base: u32,
+    i64_next: Cell<u32>,
+    i64_count: u32,
+    f32_base: u32,
+    f32_next: Cell<u32>,
+    f32_count: u32,
+    f64_base: u32,
+    f64_next: Cell<u32>,
+    f64_count: u32,
+}
+
+/// Per-type `(base_index, slot_count)` pairs handed to
+/// [`ScratchAllocator::new`].
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain layout record consumed by the function-body planner"
+)]
+#[derive(Debug, Clone, Copy)]
+pub struct ScratchRegions {
+    pub i32: (u32, u32),
+    pub i64: (u32, u32),
+    pub f32: (u32, u32),
+    pub f64: (u32, u32),
+}
+
+impl ScratchAllocator {
+    /// Build an allocator from per-type `(base, count)` regions. The
+    /// caller is responsible for laying these regions out contiguously
+    /// in the function's wasm-locals table.
+    #[must_use]
+    pub const fn new(regions: ScratchRegions) -> Self {
+        let (i32_base, i32_count) = regions.i32;
+        let (i64_base, i64_count) = regions.i64;
+        let (f32_base, f32_count) = regions.f32;
+        let (f64_base, f64_count) = regions.f64;
+        Self {
+            i32_base,
+            i32_next: Cell::new(0),
+            i32_count,
+            i64_base,
+            i64_next: Cell::new(0),
+            i64_count,
+            f32_base,
+            f32_next: Cell::new(0),
+            f32_count,
+            f64_base,
+            f64_next: Cell::new(0),
+            f64_count,
+        }
+    }
+
+    /// Hand out the next index for a scratch slot of type `ty`.
+    pub fn allocate(&self, ty: ValType) -> Result<u32, LowerError> {
+        let (next, base, capacity, tag) = match ty {
+            ValType::I32 => (&self.i32_next, self.i32_base, self.i32_count, "i32"),
+            ValType::I64 => (&self.i64_next, self.i64_base, self.i64_count, "i64"),
+            ValType::F32 => (&self.f32_next, self.f32_base, self.f32_count, "f32"),
+            ValType::F64 => (&self.f64_next, self.f64_base, self.f64_count, "f64"),
+            ValType::V128 | ValType::Ref(_) => {
+                return Err(LowerError::NotYetImplemented {
+                    what: format!("scratch local of type {ty:?}"),
+                });
+            }
+        };
+        let used = next.get();
+        if used >= capacity {
+            return Err(LowerError::NotYetImplemented {
+                what: format!(
+                    "scratch-local pre-walk under-counted {tag} slots (reserved {capacity}, asked for {})",
+                    used.saturating_add(1)
+                ),
+            });
+        }
+        let local_index = base
+            .checked_add(used)
             .ok_or_else(|| LowerError::NotYetImplemented {
-                what: "more than u32::MAX scratch locals in a single function".to_owned(),
+                what: format!("scratch local index overflow for {tag}"),
             })?;
-        counter.set(next);
-        Ok(idx)
+        next.set(used.saturating_add(1));
+        Ok(local_index)
     }
 }
 

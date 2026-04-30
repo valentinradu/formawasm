@@ -14,7 +14,7 @@
 
 use formalang::ast::PrimitiveType;
 use formalang::ir::{IrEnum, IrEnumVariant, IrExpr, IrField, IrModule, IrStruct, ResolvedType};
-use wasm_encoder::{InstructionSink, MemArg};
+use wasm_encoder::{InstructionSink, MemArg, ValType};
 
 use super::{LowerContext, LowerError, lower_expr};
 use crate::layout::{
@@ -79,7 +79,7 @@ pub(super) fn allocate_aggregate(
             name: "<aggregate>".to_owned(),
         })
     })?;
-    let base_local = ctx.next_scratch_local()?;
+    let base_local = ctx.next_scratch_local(ValType::I32)?;
     sink.i32_const(size_i32);
     sink.call(alloc_idx);
     sink.local_set(base_local);

@@ -1,13 +1,13 @@
 //! Lowering of [`IrExpr::Block`] and the function-body assembler
 //! that plans wasm locals before instruction emission.
 
-use std::cell::Cell;
-
 use formalang::ast::PrimitiveType;
 use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrModule, ResolvedType, StructId};
 use wasm_encoder::{Function, InstructionSink, ValType};
 
-use super::{BindingMap, FunctionMap, LowerContext, LowerError, MethodMap, lower_expr};
+use super::{
+    BindingMap, FunctionMap, LowerContext, LowerError, MethodMap, ScratchAllocator, lower_expr,
+};
 use crate::types::body_value_type;
 
 /// Lower an [`IrExpr::Block`] onto `sink`. Statements run in order;
@@ -347,20 +347,39 @@ pub fn lower_function_body_in_module(
     self_struct_id: Option<StructId>,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
-    let scratch_count = count_aggregates(body)?;
+    let counts = count_scratch_locals(body)?;
     let scratch_offset = scratch_locals_offset(param_bindings.len(), plan.locals.len())?;
 
     let mut locals = plan.locals;
-    if scratch_count > 0 {
-        locals.push((scratch_count, ValType::I32));
-    }
+    let mut running = scratch_offset;
+    let mut next_region = |count: u32, ty: ValType| -> Result<u32, LowerError> {
+        let base = running;
+        if count > 0 {
+            locals.push((count, ty));
+            running = running
+                .checked_add(count)
+                .ok_or_else(|| LowerError::NotYetImplemented {
+                    what: "scratch-local layout overflows u32".to_owned(),
+                })?;
+        }
+        Ok(base)
+    };
+    let i32_base = next_region(counts.i32, ValType::I32)?;
+    let i64_base = next_region(counts.i64, ValType::I64)?;
+    let f32_base = next_region(counts.f32, ValType::F32)?;
+    let f64_base = next_region(counts.f64, ValType::F64)?;
 
-    let scratch_counter = Cell::new(scratch_offset);
+    let allocator = ScratchAllocator::new(super::ScratchRegions {
+        i32: (i32_base, counts.i32),
+        i64: (i64_base, counts.i64),
+        f32: (f32_base, counts.f32),
+        f64: (f64_base, counts.f64),
+    });
     let mut ctx = LowerContext::new(&plan.bindings, functions)
         .with_methods(methods)
         .with_module(module)
         .with_bump_allocator(bump_allocator)
-        .with_scratch_locals(&scratch_counter);
+        .with_scratch_locals(&allocator);
     if let Some(id) = self_struct_id {
         ctx = ctx.with_self_struct_id(id);
     }
@@ -380,22 +399,36 @@ fn scratch_locals_offset(params: usize, lets: usize) -> Result<u32, LowerError> 
         })
 }
 
-fn count_aggregates(expr: &IrExpr) -> Result<u32, LowerError> {
-    let mut n: u32 = 0;
-    walk_count(expr, &mut n)?;
-    Ok(n)
+/// Per-wasm-value-type scratch-local counts a function body needs. The
+/// pre-walk in [`walk_count`] populates this; [`lower_function_body_in_module`]
+/// turns it into reserved local-vector ranges and a [`ScratchAllocator`].
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct ScratchCounts {
+    pub i32: u32,
+    pub i64: u32,
+    pub f32: u32,
+    pub f64: u32,
 }
 
-fn bump_count(n: &mut u32) -> Result<(), LowerError> {
-    *n = n
+fn count_scratch_locals(expr: &IrExpr) -> Result<ScratchCounts, LowerError> {
+    let mut counts = ScratchCounts::default();
+    walk_count(expr, &mut counts)?;
+    Ok(counts)
+}
+
+pub(super) fn bump_count(field: &mut u32) -> Result<(), LowerError> {
+    *field = field
         .checked_add(1)
         .ok_or_else(|| LowerError::NotYetImplemented {
-            what: "more than u32::MAX aggregate constructions in a single function".to_owned(),
+            what: "more than u32::MAX scratch slots of one type in a single function".to_owned(),
         })?;
     Ok(())
 }
 
-fn walk_count_block_statement(stmt: &IrBlockStatement, out: &mut u32) -> Result<(), LowerError> {
+fn walk_count_block_statement(
+    stmt: &IrBlockStatement,
+    out: &mut ScratchCounts,
+) -> Result<(), LowerError> {
     match stmt {
         IrBlockStatement::Let { value, .. } => walk_count(value, out),
         IrBlockStatement::Assign { target, value } => {
@@ -406,16 +439,16 @@ fn walk_count_block_statement(stmt: &IrBlockStatement, out: &mut u32) -> Result<
     }
 }
 
-fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
+fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> {
     match expr {
         IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
-            bump_count(out)?;
+            bump_count(&mut out.i32)?;
             for (_, _, e) in fields {
                 walk_count(e, out)?;
             }
         }
         IrExpr::Tuple { fields, .. } => {
-            bump_count(out)?;
+            bump_count(&mut out.i32)?;
             for (_, e) in fields {
                 walk_count(e, out)?;
             }
@@ -432,10 +465,10 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
             left, right, op, ..
         } => {
             // `BinaryOperator::Range` allocates a `{ start, end }`
-            // aggregate in linear memory and reserves one scratch
+            // aggregate in linear memory and reserves one i32 scratch
             // local for the base pointer.
             if matches!(op, formalang::ast::BinaryOperator::Range) {
-                bump_count(out)?;
+                bump_count(&mut out.i32)?;
             }
             walk_count(left, out)?;
             walk_count(right, out)?;
@@ -472,9 +505,9 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         IrExpr::Match {
             scrutinee, arms, ..
         } => {
-            // Each `Match` reserves one scratch local for the
+            // Each `Match` reserves one i32 scratch local for the
             // scrutinee pointer.
-            bump_count(out)?;
+            bump_count(&mut out.i32)?;
             walk_count(scrutinee, out)?;
             for arm in arms {
                 walk_count(&arm.body, out)?;
@@ -483,15 +516,15 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         IrExpr::ClosureRef { env_struct, .. } => {
             // Each ClosureRef reserves a scratch local for the
             // (funcref, env_ptr) pair's base pointer.
-            bump_count(out)?;
+            bump_count(&mut out.i32)?;
             walk_count(env_struct, out)?;
         }
         IrExpr::Array { elements, .. } => {
-            // Each Array literal reserves two scratch locals — one
+            // Each Array literal reserves two i32 scratch locals — one
             // for the element-buffer base pointer, one for the
             // header pointer.
-            bump_count(out)?;
-            bump_count(out)?;
+            bump_count(&mut out.i32)?;
+            bump_count(&mut out.i32)?;
             for e in elements {
                 walk_count(e, out)?;
             }
@@ -499,12 +532,11 @@ fn walk_count(expr: &IrExpr, out: &mut u32) -> Result<(), LowerError> {
         IrExpr::For {
             collection, body, ..
         } => {
-            // Per-For scratch-local count is owned by `control` so
+            // Per-For scratch-local layout is owned by `control` so
             // the reservation here cannot drift from the consumption
-            // there.
-            for _ in 0..super::control::FOR_SCRATCH_LOCAL_COUNT {
-                bump_count(out)?;
-            }
+            // there. The Range path reserves typed `start` / `end`
+            // slots whose width depends on the bound type.
+            super::control::for_scratch_counts(collection.ty(), out)?;
             walk_count(collection, out)?;
             walk_count(body, out)?;
         }
