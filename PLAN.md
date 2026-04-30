@@ -37,11 +37,17 @@ first, then come back here for the "what to do now" view.
 - ✅ mc11: `ClosureRef` materializes a `(i32 funcref, i32 env_ptr)` pair in linear memory. Indirect invocation via a funcref table is still deferred — Phase 1c+.
 - ✅ mc12: WIT mapping `IrStruct` → `record`, `IrEnum` → `variant` (kebab-cased identifiers, unit and single-payload arms, multi-field variants surface as `NotYetSupported`). Round-trips through `wit_parser::Resolve`.
 
-**Phase 1b deferred:** the formal "milestone test" combining all of the
-above into one program. Each mc has its own end-to-end test under
-`tests/`, so the composition is exercised piecewise; a unified
-program test is straightforward to add but not currently committed.
-Indirect closure invocation also remains for Phase 1c.
+**Phase 1b unified milestone test:** committed as
+`tests/milestone_1b.rs` — a `Counter` struct with a mutable `value`
+field, an `Action` enum (`Inc`, `Add(I32)`, `Reset`), an inherent
+impl with an `apply` method (Match over Action with payload binding
++ unit arms, returns a fresh Counter) and a `double` method
+(mut-self via `IrBlockStatement::Assign` on `SelfFieldRef`),
+exercised end-to-end through `WasmBackend::generate` and wasmtime's
+component runtime.
+
+Indirect closure invocation is the only Phase 1b mc not exercised
+here; see "Known restrictions" below.
 
 **Phase 1c is COMPLETE** (closed out 2026-04-30):
 
@@ -56,10 +62,8 @@ Indirect closure invocation also remains for Phase 1c.
 
 **Known restrictions carried forward from Phase 1c:**
 
-- `lower_for` only handles `Range<I32>` for the range-source path; wider numeric ranges (`Range<I64>`, `Range<F32>`, `Range<F64>`) need a typed scratch-local mechanism in the function-body planner — currently scratch locals are all i32. Lift in a Phase 2+ mc.
-- WIT identifiers are kebab-case but the emitter does not yet kebab-case function names (it does for struct fields, struct names, and enum variants). Functions whose IR names contain underscores currently surface as a `wit-parser` syntax error. Workaround: name functions with hyphens in the IR. Lift when convenient.
-- Indirect closure invocation (calling a `ClosureRef` value through a funcref table) is still deferred from Phase 1b mc11.
-- No formal Phase 1b milestone test combining structs/enums/methods/closures — each mc has its own test, but no unified program. Straightforward to add when needed.
+- `lower_for` accepts `Range<I32>` and `Range<I64>` (`tests/lower_for.rs::for_over_i64_range_uses_typed_loop_arithmetic`); `Range<F32>` / `Range<F64>` stay rejected. The typed-scratch-local infrastructure is in place — extending the For-Range emitter to floats is straightforward once iterate-by-1.0 semantics are wanted.
+- Indirect closure invocation (calling a `ClosureRef` value through a funcref table) is **blocked on upstream**. The language has no closure-application syntax yet: `f(x)` lowers to `IrExpr::FunctionCall` whose `path` resolves to a top-level function, never to a closure-typed local binding (see formalang's `closure_conv/mod.rs` lines 60–69 — "When the language gains closure-application, the conversion will need a callsite-rewrite step that targets this pass"). Once formalang adds the IR variant, formawasm can wire the funcref table + `call_indirect` lowering.
 
 > **Quality bar.** This repo mirrors the lint / CI / build setup at
 > `~/projects/smid/smid-ws0` — strict clippy (deny `unwrap_used`,
