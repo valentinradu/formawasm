@@ -382,6 +382,7 @@ pub fn lower_function_body_in_module(
     closure_ctx: Option<&ClosureCallContext<'_>>,
     string_pool: &std::collections::HashMap<String, u32>,
     str_eq: u32,
+    str_concat: u32,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
     let counts = count_scratch_locals(body, return_ty, Some(module))?;
@@ -418,7 +419,8 @@ pub fn lower_function_body_in_module(
         .with_bump_allocator(bump_allocator)
         .with_scratch_locals(&allocator)
         .with_string_pool(string_pool)
-        .with_str_eq(str_eq);
+        .with_str_eq(str_eq)
+        .with_str_concat(str_concat);
     if let Some(id) = self_struct_id {
         ctx = ctx.with_self_struct_id(id);
     }

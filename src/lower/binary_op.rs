@@ -98,8 +98,17 @@ fn lower_string_binary_op(
             }
             Ok(())
         }
-        BinaryOperator::Add
-        | BinaryOperator::Sub
+        BinaryOperator::Add => {
+            // String concatenation: hand both header pointers to
+            // `__str_concat`, which allocates a fresh buffer + header
+            // and returns the new header pointer.
+            let helper_idx = ctx.str_concat_index()?;
+            lower_expr(left, sink, ctx)?;
+            lower_expr(right, sink, ctx)?;
+            sink.call(helper_idx);
+            Ok(())
+        }
+        BinaryOperator::Sub
         | BinaryOperator::Mul
         | BinaryOperator::Div
         | BinaryOperator::Mod

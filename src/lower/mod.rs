@@ -430,6 +430,9 @@ pub struct LowerContext<'a> {
     /// through here so `BinaryOp::Eq` / `Ne` lowerings on `String`
     /// operands can `call` it without a separate module-aware lookup.
     pub str_eq: Option<u32>,
+    /// Wasm function index of the `__str_concat` runtime helper. Used
+    /// by `BinaryOp::Add` lowerings on `String` operands.
+    pub str_concat: Option<u32>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -452,6 +455,7 @@ impl<'a> LowerContext<'a> {
             closure_type_indices: None,
             string_pool: None,
             str_eq: None,
+            str_concat: None,
         }
     }
 
@@ -548,6 +552,22 @@ impl<'a> LowerContext<'a> {
     pub fn str_eq_index(&self) -> Result<u32, LowerError> {
         self.str_eq
             .ok_or(LowerError::MissingContext { what: "str_eq" })
+    }
+
+    /// Attach the wasm function index of the `__str_concat` runtime
+    /// helper. Required for lowering `BinaryOp::Add` on `String`
+    /// operands.
+    #[must_use]
+    pub const fn with_str_concat(mut self, idx: u32) -> Self {
+        self.str_concat = Some(idx);
+        self
+    }
+
+    /// Wasm function index of the `__str_concat` helper or surface
+    /// [`LowerError::MissingContext`] if unset.
+    pub fn str_concat_index(&self) -> Result<u32, LowerError> {
+        self.str_concat
+            .ok_or(LowerError::MissingContext { what: "str_concat" })
     }
 
     /// Look up the header offset of an interned string literal, or

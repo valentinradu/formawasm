@@ -32,6 +32,11 @@ pub const BUMP_ALLOCATOR_NAME: &str = "__alloc";
 /// describe identical byte sequences, 0 otherwise.
 pub const STR_EQ_NAME: &str = "__str_eq";
 
+/// Source-level name for the string-concatenation helper. Allocates a
+/// fresh byte buffer plus an 8-byte header and copies both inputs
+/// (each an `{ ptr, len }` header pointer) into the new buffer.
+pub const STR_CONCAT_NAME: &str = "__str_concat";
+
 /// Export name under which the runtime memory is published. Required
 /// by `wit-component`'s canonical-ABI lifting/lowering and useful for
 /// tests that need to peek at constructed aggregates.
@@ -92,6 +97,9 @@ pub struct ModuleBuilder {
     /// Index of the byte-by-byte string-equality helper. Lazily
     /// declared by [`Self::declare_str_eq`].
     str_eq: Option<u32>,
+    /// Index of the string-concatenation helper. Lazily declared by
+    /// [`Self::declare_str_concat`].
+    str_concat: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -138,6 +146,7 @@ impl ModuleBuilder {
             code: CodeSection::new(),
             bump_allocator: None,
             str_eq: None,
+            str_concat: None,
             closure_table_idx: None,
             string_data: Vec::new(),
         }
@@ -415,6 +424,105 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_eq_index(&self) -> Option<u32> {
         self.str_eq
+    }
+
+    /// Declare and emit the `__str_concat` runtime helper, returning
+    /// its wasm function index. Subsequent calls return the same
+    /// index. The bump allocator must already be declared (we
+    /// re-declare it lazily here if needed since the helper calls
+    /// it twice).
+    ///
+    /// Signature: `__str_concat(a: i32, b: i32) -> i32`. Each input
+    /// is a string-header pointer; the result is a freshly-allocated
+    /// header pointing at a freshly-allocated byte buffer that
+    /// contains the concatenation of `a`'s bytes followed by `b`'s
+    /// bytes.
+    ///
+    /// Implementation: allocate `a.len + b.len` bytes for the buffer,
+    /// `memory.copy` each input into place, allocate an 8-byte header,
+    /// store `(buffer_ptr, total_len)`, and return the header pointer.
+    pub fn declare_str_concat(&mut self) -> u32 {
+        if let Some(idx) = self.str_concat {
+            return idx;
+        }
+        let alloc_idx = self.declare_bump_allocator();
+
+        // Locals: 4 i32 — local 2 = a_len, 3 = b_len, 4 = total_len,
+        // 5 = buffer_ptr, 6 = header_ptr. (Params live at 0/1.)
+        let mut body = Function::new(core::iter::once((5, ValType::I32)));
+        let len_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+            align: 2, // log2(4)
+            memory_index: MEMORY_INDEX,
+        };
+        let ptr_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_PTR_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let header_mem_arg = |offset: u64| MemArg {
+            offset,
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let mut i = body.instructions();
+
+        // a_len = a.len
+        i.local_get(0).i32_load(len_mem_arg).local_set(2);
+        // b_len = b.len
+        i.local_get(1).i32_load(len_mem_arg).local_set(3);
+
+        // total_len = a_len + b_len
+        i.local_get(2).local_get(3).i32_add().local_set(4);
+
+        // buffer_ptr = __alloc(total_len)
+        i.local_get(4).call(alloc_idx).local_set(5);
+
+        // memory.copy(buffer_ptr, a.ptr, a_len)
+        // wasm `memory.copy` takes [dest, src, n] on the stack with
+        // dest pushed first.
+        i.local_get(5)
+            .local_get(0)
+            .i32_load(ptr_mem_arg)
+            .local_get(2)
+            .memory_copy(MEMORY_INDEX, MEMORY_INDEX);
+
+        // memory.copy(buffer_ptr + a_len, b.ptr, b_len)
+        i.local_get(5)
+            .local_get(2)
+            .i32_add()
+            .local_get(1)
+            .i32_load(ptr_mem_arg)
+            .local_get(3)
+            .memory_copy(MEMORY_INDEX, MEMORY_INDEX);
+
+        // header_ptr = __alloc(STRING_HEADER_SIZE)
+        i.i32_const(i32::try_from(crate::layout::STRING_HEADER_SIZE).unwrap_or(8))
+            .call(alloc_idx)
+            .local_set(6);
+
+        // header.ptr = buffer_ptr
+        i.local_get(6)
+            .local_get(5)
+            .i32_store(header_mem_arg(u64::from(crate::layout::STRING_PTR_OFFSET)));
+        // header.len = total_len
+        i.local_get(6)
+            .local_get(4)
+            .i32_store(header_mem_arg(u64::from(crate::layout::STRING_LEN_OFFSET)));
+
+        // Return header_ptr.
+        i.local_get(6).end();
+
+        let idx =
+            self.declare_function_with_body(&[ValType::I32, ValType::I32], &[ValType::I32], &body);
+        self.str_concat = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_concat` helper if declared.
+    #[must_use]
+    pub const fn str_concat_index(&self) -> Option<u32> {
+        self.str_concat
     }
 
     /// Number of declared functions so far.
