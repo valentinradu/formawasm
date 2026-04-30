@@ -379,6 +379,186 @@ fn record_and_variant_round_trip_through_wit_parser() -> TestResult {
     Ok(())
 }
 
+fn array_ty(elem: ResolvedType) -> ResolvedType {
+    ResolvedType::Array(Box::new(elem))
+}
+
+#[test]
+fn array_parameter_emits_list_of_element_wit_type() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "sum",
+        vec![(BindingId(0), "xs", array_ty(primitive(PrimitiveType::I32)))],
+        Some(primitive(PrimitiveType::I32)),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export sum: func(xs: list<s32>) -> s32;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn array_return_type_emits_list_in_result_clause() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "ones",
+        vec![(BindingId(0), "n", primitive(PrimitiveType::I32))],
+        Some(array_ty(primitive(PrimitiveType::I32))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export ones: func(n: s32) -> list<s32>;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn array_of_bool_and_i64_use_correct_wit_element_names() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "checks",
+        vec![],
+        Some(array_ty(primitive(PrimitiveType::Boolean))),
+    ));
+    module.functions.push(function(
+        "bigs",
+        vec![],
+        Some(array_ty(primitive(PrimitiveType::I64))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    for needle in [
+        "export checks: func() -> list<bool>;",
+        "export bigs: func() -> list<s64>;",
+    ] {
+        if !wit.contains(needle) {
+            return Err(format!("missing `{needle}` in:\n{wit}").into());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn list_signature_round_trips_through_wit_parser() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "primes",
+        vec![(BindingId(0), "limit", primitive(PrimitiveType::I32))],
+        Some(array_ty(primitive(PrimitiveType::I32))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    Ok(())
+}
+
+#[test]
+fn nested_list_of_list_emits_nested_list_type() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "matrix",
+        vec![],
+        Some(array_ty(array_ty(primitive(PrimitiveType::I32)))),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export matrix: func() -> list<list<s32>>;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn array_of_never_element_is_rejected() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "bad",
+        vec![],
+        Some(array_ty(primitive(PrimitiveType::Never))),
+    ));
+
+    let surface = survey::survey(&module);
+    match wit::emit_wit(&module, &surface) {
+        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
+            if kind == "Array<Never>" =>
+        {
+            Ok(())
+        }
+        other => Err(format!("expected NotYetSupported(Array<Never>), got {other:?}").into()),
+    }
+}
+
+#[test]
+fn array_of_struct_element_is_rejected_until_aggregate_support_lands() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "rows",
+        vec![],
+        Some(array_ty(ResolvedType::Struct(StructId(0)))),
+    ));
+
+    let surface = survey::survey(&module);
+    match wit::emit_wit(&module, &surface) {
+        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind })) if kind == "Struct" => {
+            Ok(())
+        }
+        other => Err(format!("expected NotYetSupported(Struct), got {other:?}").into()),
+    }
+}
+
+#[test]
+fn record_with_list_field_round_trips() -> TestResult {
+    let mut module = IrModule::new();
+    module.structs.push(IrStruct {
+        name: "Stats".to_owned(),
+        visibility: Visibility::Public,
+        traits: Vec::new(),
+        fields: vec![
+            primitive_field("count", PrimitiveType::I32),
+            IrField {
+                name: "values".to_owned(),
+                ty: array_ty(primitive(PrimitiveType::I32)),
+                mutable: false,
+                optional: false,
+                default: None,
+                doc: None,
+                convention: ParamConvention::Let,
+            },
+        ],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    if !wit.contains("values: list<s32>") {
+        return Err(format!("missing list-typed field in record:\n{wit}").into());
+    }
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    Ok(())
+}
+
 #[test]
 fn emitted_wit_round_trips_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();

@@ -255,25 +255,48 @@ fn write_export(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
 /// Map a [`ResolvedType`] to the WIT type name string used inside a
 /// `func(...)` signature, or `Ok(None)` for `Never` (no value, omit
 /// the result clause when this is a return type — caller's choice).
-fn resolved_wit_type(ty: &ResolvedType) -> Result<Option<&'static str>, WitEmitError> {
-    let ResolvedType::Primitive(p) = ty else {
-        return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+///
+/// `Array<T>` recurses on its element to compose `list<inner>`; the
+/// element type must itself be WIT-expressible — `Never` and other
+/// non-mappable element types surface as `NotYetSupported`.
+fn resolved_wit_type(ty: &ResolvedType) -> Result<Option<String>, WitEmitError> {
+    match ty {
+        ResolvedType::Primitive(p) => primitive_wit_type(*p),
+        ResolvedType::Array(elem) => {
+            let inner = resolved_wit_type(elem)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Array<Never>".to_owned(),
+                })
+            })?;
+            Ok(Some(format!("list<{inner}>")))
+        }
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
             kind: variant_tag(ty),
-        }));
-    };
-    primitive_wit_type(*p)
+        })),
+    }
 }
 
 /// Map a [`PrimitiveType`] to its WIT type name. `Never` returns
 /// `None` so callers can decide between rejecting it (parameters) or
 /// omitting the result clause (returns).
-fn primitive_wit_type(p: PrimitiveType) -> Result<Option<&'static str>, WitEmitError> {
+fn primitive_wit_type(p: PrimitiveType) -> Result<Option<String>, WitEmitError> {
     match p {
-        PrimitiveType::I32 => Ok(Some("s32")),
-        PrimitiveType::I64 => Ok(Some("s64")),
-        PrimitiveType::F32 => Ok(Some("f32")),
-        PrimitiveType::F64 => Ok(Some("f64")),
-        PrimitiveType::Boolean => Ok(Some("bool")),
+        PrimitiveType::I32 => Ok(Some("s32".to_owned())),
+        PrimitiveType::I64 => Ok(Some("s64".to_owned())),
+        PrimitiveType::F32 => Ok(Some("f32".to_owned())),
+        PrimitiveType::F64 => Ok(Some("f64".to_owned())),
+        PrimitiveType::Boolean => Ok(Some("bool".to_owned())),
         PrimitiveType::Never => Ok(None),
         PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
             Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
