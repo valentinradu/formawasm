@@ -51,8 +51,8 @@ Indirect closure invocation also remains for Phase 1c.
 - ✅ mc4 (`c349117` + cleanup `25d6c92`): For-loop comprehension over `Range<I32>` collecting body values into a fresh `Array<body_ty>`. Loop variable threaded via the new upstream `var_binding_id` field on `IrExpr::For` (formalang `8cfe909`). Cleanup commit deduplicates array-header writes between `lower_array` / `lower_for` and replaces the silent scratch-local count with a shared constant.
 - ✅ mc5 (`4be409b`): index access (`arr[i]`) reads through the array header to the element buffer.
 - ✅ mc6: For over `Array<T>` lowers as a direct loop — read `in_buf` and `len` from the array header, load each element into the loop variable per iteration, store body values into a fresh `Array<body_ty>`. Implemented as a separate `lower_for_array` arm in `src/lower/control.rs` so the per-source scratch-local layout stays explicit; the seventh scratch slot (`end` in the Range path) is intentionally skipped to keep the per-For reservation count uniform with `walk_count`.
-- ⏳ **mc7 next**: WIT `list<T>` mapping so public `Array<I32>` signatures cross the WIT boundary.
-- ⏳ mc8: Sieve-of-Eratosthenes end-to-end test — the Phase 1c milestone.
+- ✅ mc7: WIT `list<T>` mapping. `resolved_wit_type` now returns owned `String`s and recurses on `ResolvedType::Array(elem)` to emit `list<inner>`. Records and function signatures pick this up for free; nested lists (`list<list<s32>>`) compose. Unsupported element types (`Never`, `Struct`, …) propagate the existing `NotYetSupported` error. Round-trips through `wit_parser::Resolve`.
+- ⏳ **mc8 next**: Sieve-of-Eratosthenes end-to-end test — the Phase 1c milestone.
 
 **Known restrictions to lift later in Phase 1c:**
 
@@ -130,21 +130,22 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-## Immediate work — Phase 1c mc7: WIT `list<T>` mapping
+## Immediate work — Phase 1c mc8: Sieve-of-Eratosthenes milestone
 
-Phase 1c mc1–mc6 are committed (see Status above). The next mc lands
-the WIT-side type mapping so `Array<T>` can flow across the component
-boundary on `pub` signatures.
+Phase 1c mc1–mc7 are committed (see Status above). The final mc
+composes everything that's landed since mc1 into one program — the
+classical Sieve of Eratosthenes — and exercises it end-to-end through
+the public `Backend::generate` entry point.
 
 **Scope**
 
-- `src/wit.rs` — extend the `ResolvedType` → WIT-type emitter so `ResolvedType::Array(elem)` becomes `list<elem-wit>`. Reuse the existing primitive / record / variant emitters for the element type.
-- Boundary policy: `list<closure>` and friends should still be rejected upstream by pre-flight checks; only types already in the WIT-expressible subset cross.
-- Update `tests/wit.rs` to round-trip a `list<s32>` / `list<bool>` signature through `wit_parser::Resolve` and assert the export reads back as a list type.
+- New test under `tests/` (e.g. `sieve.rs`) that hand-builds an `IrModule` for the sieve: takes `limit: I32`, returns `Array<I32>` of primes ≤ limit. Build the candidate `Array<Boolean>`, run the outer `for p in 2..limit` and inner `for m in (p*p)..limit` loops to mark composites, then collect the surviving indices into the result array.
+- Run the full pipeline (`Pipeline::new().pass(MonomorphisePass).pass(ClosureConversionPass).pass(DeadCodeEliminationPass).emit(module, &WasmBackend::new())`) — this is the first test that hits the `Backend::generate` entry point with an `Array<I32>` return crossing the WIT boundary.
+- Validate the emitted bytes through the component-model validator (not just `wasmparser`'s core-module path).
+- Instantiate under wasmtime's component runtime and compare against the expected primes for a couple of fixed limits (e.g. 30 → [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]).
 
-After mc7, mc8 commits the sieve-of-Eratosthenes end-to-end test as
-the Phase 1c milestone — it composes everything that's landed since
-mc1 and is the gate for declaring Phase 1c done.
+After mc8 lands, Phase 1c is closed and we move to Phase 2 (strings,
+optionals, dictionaries) per the README roadmap.
 
 ---
 
