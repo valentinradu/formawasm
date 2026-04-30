@@ -535,6 +535,160 @@ pub fn plan_range(bound: &ResolvedType, _module: &IrModule) -> Result<RangeLayou
     })
 }
 
+// ── optional layout ──────────────────────────────────────────────────
+
+/// Discriminant-tag size in bytes for an `Optional<T>` value. The tag
+/// occupies a `u32` slot at offset 0 and uses [`OPTIONAL_TAG_NIL`] /
+/// [`OPTIONAL_TAG_SOME`] as its two values.
+pub const OPTIONAL_TAG_SIZE: u32 = 4;
+
+/// Discriminant-tag alignment for an `Optional<T>` value.
+pub const OPTIONAL_TAG_ALIGN: u32 = 4;
+
+/// Discriminant-tag value for the `nil` payload-absent case.
+pub const OPTIONAL_TAG_NIL: u32 = 0;
+
+/// Discriminant-tag value for the payload-present (`Some`) case.
+pub const OPTIONAL_TAG_SOME: u32 = 1;
+
+/// Layout decisions for an `Optional<T>` value.
+///
+/// Optional is laid out as a uniform `{ tag: i32, payload: T }` pair
+/// in linear memory. Tag values are [`OPTIONAL_TAG_NIL`] (no payload)
+/// and [`OPTIONAL_TAG_SOME`] (payload present); the same byte range is
+/// reserved either way so callers don't need to know the discriminant
+/// to compute the allocation size. `Optional<Never>` is the type of
+/// `nil` itself — it has no payload, so `payload_size == 0` and the
+/// total value is just the 4-byte tag.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain layout record consumed externally; intentionally constructible"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptionalLayout {
+    /// Total bytes one optional value occupies, including tag,
+    /// post-tag alignment padding, payload, and trailing alignment
+    /// padding.
+    pub size: u32,
+    /// Optional alignment — the maximum of [`OPTIONAL_TAG_ALIGN`] and
+    /// the payload's alignment (or just the tag alignment for
+    /// `Optional<Never>`).
+    pub align: u32,
+    /// Offset of the discriminant tag (always 0).
+    pub tag_offset: u32,
+    /// Offset where the payload starts. `tag_offset + OPTIONAL_TAG_SIZE`
+    /// rounded up to the payload's alignment.
+    pub payload_offset: u32,
+    /// Payload size in bytes. Aggregate inner types collapse to a
+    /// 4-byte pointer; `Optional<Never>` has size 0.
+    pub payload_size: u32,
+    /// Payload alignment in bytes. `1` when there is no payload
+    /// (`Optional<Never>`).
+    pub payload_align: u32,
+}
+
+/// Compute the layout of `Optional<inner>`.
+///
+/// `module` is accepted for API symmetry with the struct/enum/array/
+/// range planners; the current implementation only inspects `inner`.
+///
+/// Aggregate inner types (struct, enum, tuple, array) lower as `i32`
+/// pointers — the underlying value lives in a separately-allocated
+/// region. Primitive inner types are stored inline at their
+/// canonical-ABI size and alignment. `Optional<Never>` is the static
+/// type of the `nil` literal and lays out as a tag-only value with no
+/// payload. The heap-typed primitives (`String` / `Path` / `Regex`)
+/// and nested aggregates whose layouts depend on later phases surface
+/// as [`LayoutError::NotYetSupported`].
+pub fn plan_optional(
+    inner: &ResolvedType,
+    _module: &IrModule,
+) -> Result<OptionalLayout, LayoutError> {
+    if matches!(inner, ResolvedType::Primitive(PrimitiveType::Never)) {
+        return Ok(OptionalLayout {
+            size: OPTIONAL_TAG_SIZE,
+            align: OPTIONAL_TAG_ALIGN,
+            tag_offset: 0,
+            payload_offset: OPTIONAL_TAG_SIZE,
+            payload_size: 0,
+            payload_align: 1,
+        });
+    }
+
+    let (payload_size, payload_align) = optional_payload_size_align(inner)?;
+    let total_align = if payload_align > OPTIONAL_TAG_ALIGN {
+        payload_align
+    } else {
+        OPTIONAL_TAG_ALIGN
+    };
+    let payload_offset =
+        align_up(OPTIONAL_TAG_SIZE, payload_align).ok_or_else(|| LayoutError::SizeOverflow {
+            name: "<optional>".to_owned(),
+        })?;
+    let raw_size =
+        payload_offset
+            .checked_add(payload_size)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                name: "<optional>".to_owned(),
+            })?;
+    let size = align_up(raw_size, total_align).ok_or_else(|| LayoutError::SizeOverflow {
+        name: "<optional>".to_owned(),
+    })?;
+
+    Ok(OptionalLayout {
+        size,
+        align: total_align,
+        tag_offset: 0,
+        payload_offset,
+        payload_size,
+        payload_align,
+    })
+}
+
+/// Return the inline `(size, align)` pair for an `Optional<T>` payload.
+///
+/// Aggregate payload types live as `i32` pointers, so they always
+/// report `(POINTER_SIZE, POINTER_ALIGN)` regardless of the
+/// underlying value's storage size. Primitive payloads report their
+/// canonical-ABI size/align via [`primitive_size_align`]. `Never` is
+/// handled by the caller — it never reaches this helper.
+fn optional_payload_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
+    match ty {
+        ResolvedType::Primitive(p) => primitive_size_align(*p),
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Array(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
+        ResolvedType::Range(_) => Err(LayoutError::NotYetSupported {
+            kind: "Range<T>".to_owned(),
+        }),
+        ResolvedType::Optional(_) => Err(LayoutError::NotYetSupported {
+            kind: "Optional<Optional<T>>".to_owned(),
+        }),
+        ResolvedType::Dictionary { .. } => Err(LayoutError::NotYetSupported {
+            kind: "Dictionary<K, V>".to_owned(),
+        }),
+        ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
+            kind: "Closure".to_owned(),
+        }),
+        ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
+            kind: "Trait".to_owned(),
+        }),
+        ResolvedType::Generic { .. } => Err(LayoutError::NotYetSupported {
+            kind: "Generic".to_owned(),
+        }),
+        ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
+            kind: format!("TypeParam({name})"),
+        }),
+        ResolvedType::External { name, .. } => Err(LayoutError::NotYetSupported {
+            kind: format!("External({name})"),
+        }),
+        ResolvedType::Error => Err(LayoutError::NotYetSupported {
+            kind: "Error".to_owned(),
+        }),
+    }
+}
+
 /// Return the in-buffer `(size, align)` pair for an array element.
 ///
 /// Aggregate element types live as `i32` pointers, so they always
