@@ -140,7 +140,7 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-**Phase 2 in progress** (since 2026-04-30):
+**Phase 2 — `Optional<T>` is COMPLETE** (closed out 2026-04-30):
 
 - ✅ mc1 (`5a0ec1b`): `plan_optional` layout planner — uniform
   `{ tag: i32, payload: T }` record; `Optional<Never>` is the static
@@ -150,35 +150,39 @@ the residual case (it'd indicate the caller forgot to run the pass).
   in linear memory (alloc 4 bytes, store `OPTIONAL_TAG_NIL` at offset
   0, push pointer). `body_value_type` now maps `Optional<T>` to `i32`
   so let-bindings / params / returns travel as pointers — same
-  convention every other aggregate uses. End-to-end coverage in
-  `tests/lower_nil.rs` verifies the tag through wasmtime, including
-  the storage-compatible "widening" `let x: I32? = nil`.
+  convention every other aggregate uses.
 - ✅ mc3 (`4f6d1f5`): WIT mapping `Optional<T>` → `option<inner>`.
   Symmetric with the `Array<T>` → `list<inner>` recursion;
   `Optional<Never>` stays rejected because WIT has no zero-payload
   `option<>` form. Round-trips through `wit_parser::Resolve`.
+- ✅ mc4 (`80edbf6`): Some-wrap let-binding values into Optional<T>.
+  New `lower::optional` module owns the wrap helper plus the
+  `some_wrap_payload` predicate let / walk_count consult. Per-site
+  scratch reservation: 1 i32 (cell ptr) + 1 typed slot matching
+  payload's wasm value type. I32 / I64 / Boolean payload coverage.
+- ✅ mc5 (`8195e4c`): Coerce Optional<T> at function returns, if
+  branches, match arms. `lower_function_body_in_module` now takes
+  the return type and threads it to `count_scratch_locals` /
+  `finish_function_body`. New `lower_coerced` + `coercion_scratch_counts`
+  helpers funnel every site through one path. `if`'s block-type
+  derivation switches to `body_value_type` so `Optional<T>` returns
+  map to a single i32 result instead of failing as `NotYetSupported`.
+- ✅ mc6 (`f4c7c6a`): Coerce Optional<T> at function and method call
+  argument sites. `walk_count` plumbs `module: Option<&IrModule>`
+  through so per-site target-type lookups (callee parameter types,
+  struct/enum field declared types) fire alongside the regular walk.
+- ✅ mc7 (`e590eef`): Coerce Optional<T> at struct fields, tuple
+  slots, array elements. Layout planner accepts `Optional<T>` as a
+  4-byte pointer field/element anywhere a slot is allowed; new
+  `store_aggregate_field` helper picks the right store opcode
+  (i32_store for Optional, primitive store for primitives). The
+  `OptionalField` LayoutError variant is gone — the `optional: bool`
+  AST flag and resolved `Optional(T)` type now coexist without forcing
+  a rejection.
 
 ## Immediate work — Phase 2 continued
 
-The next mc closes the `Optional<T>` story by lifting the storage-
-compatible-widening shortcut into a proper `Some`-wrap path:
-
-1. **Some-wrapping**: when an expression of static type `T` (or any
-   `Optional<U>` strictly narrower than `Optional<T>`) flows into an
-   `Optional<T>`-typed slot, allocate a full-size `Optional<T>` value,
-   store `OPTIONAL_TAG_SOME` at offset 0, and store the payload at
-   `payload_offset`. The most natural plumbing is a coercion helper
-   the let / return / arg / arm-body sites all funnel through;
-   alternatively a pre-pass that inserts an explicit
-   `IrExpr::OptionalSome` (lift to upstream first if so).
-2. End-to-end test: a public `fn maybe(n: I32) -> I32? { if n > 0 { n }
-   else { nil } }` exported as `option<s32>` and round-tripped through
-   the component runtime — both arms exercised.
-3. Pattern-matching support: `Match` over `Optional<T>` to read back
-   the tag and bind the payload. (Or punt to a later mc if the wider
-   `Match` coverage stays focused.)
-
-After Optional closes, Phase 2 continues with the README's roadmap:
+The Optional<T> story is closed. README's Phase 2 roadmap continues:
 
 - String memory layout `{ ptr, len }`, data-section seeding for
   literals, equality runtime helper.
