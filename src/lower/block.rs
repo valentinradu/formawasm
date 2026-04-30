@@ -51,14 +51,12 @@ fn lower_block_statement(
                 .get(*binding_id)
                 .ok_or(LowerError::UnknownBinding(*binding_id))?;
             // If the binding's annotated type is `Optional<T>` and the
-            // value's static type is exactly `T`, wrap as Some before
-            // storing into the local. Other type combinations
+            // value's static type is exactly `T`, the coercion path
+            // wraps as Some before storing. Other type combinations
             // (Optional<Never> -> Optional<T>, exact match) flow
             // through as plain pointers via the regular lowering path.
-            if let Some(target) = ty.as_ref()
-                && let Some(payload_ty) = super::optional::some_wrap_payload(target, value.ty())
-            {
-                super::optional::lower_some_wrap(value, payload_ty, sink, ctx)?;
+            if let Some(target) = ty.as_ref() {
+                super::optional::lower_coerced(value, target, sink, ctx)?;
             } else {
                 lower_expr(value, sink, ctx)?;
             }
@@ -351,7 +349,7 @@ pub fn lower_function_body(
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
     let ctx = LowerContext::new(&plan.bindings, functions);
-    finish_function_body(body, plan.locals, &ctx)
+    finish_function_body(body, None, plan.locals, &ctx)
 }
 
 /// Module-aware variant of [`lower_function_body`].
@@ -370,6 +368,7 @@ pub fn lower_function_body(
 )]
 pub fn lower_function_body_in_module(
     body: &IrExpr,
+    return_ty: Option<&ResolvedType>,
     param_bindings: &[(BindingId, ValType)],
     functions: &FunctionMap,
     methods: &MethodMap,
@@ -379,7 +378,7 @@ pub fn lower_function_body_in_module(
     closure_ctx: Option<&ClosureCallContext<'_>>,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
-    let counts = count_scratch_locals(body)?;
+    let counts = count_scratch_locals(body, return_ty)?;
     let scratch_offset = scratch_locals_offset(param_bindings.len(), plan.locals.len())?;
 
     let mut locals = plan.locals;
@@ -421,7 +420,7 @@ pub fn lower_function_body_in_module(
             .with_closure_funcref_indices(closure.funcref_indices)
             .with_closure_type_indices(closure.type_indices);
     }
-    finish_function_body(body, locals, &ctx)
+    finish_function_body(body, return_ty, locals, &ctx)
 }
 
 fn scratch_locals_offset(params: usize, lets: usize) -> Result<u32, LowerError> {
@@ -448,8 +447,17 @@ pub(super) struct ScratchCounts {
     pub f64: u32,
 }
 
-fn count_scratch_locals(expr: &IrExpr) -> Result<ScratchCounts, LowerError> {
+fn count_scratch_locals(
+    expr: &IrExpr,
+    return_ty: Option<&ResolvedType>,
+) -> Result<ScratchCounts, LowerError> {
     let mut counts = ScratchCounts::default();
+    // The function's body value gets coerced to `return_ty` at the
+    // closing site, so any Some-wrap that happens there reserves
+    // scratch slots up-front just like the per-expression sites.
+    if let Some(target) = return_ty {
+        super::optional::coercion_scratch_counts(target, expr.ty(), &mut counts)?;
+    }
     walk_count(expr, &mut counts)?;
     Ok(counts)
 }
@@ -469,27 +477,8 @@ fn walk_count_block_statement(
 ) -> Result<(), LowerError> {
     match stmt {
         IrBlockStatement::Let { ty, value, .. } => {
-            // Some-wrap of a primitive payload reserves one i32 slot
-            // (for the allocated cell's base pointer) plus one typed
-            // slot matching the payload's wasm value type (so the
-            // payload survives the bump-allocator call without
-            // stomping on the operand stack).
-            if let Some(target) = ty.as_ref()
-                && let Some(payload_ty) = super::optional::some_wrap_payload(target, value.ty())
-            {
-                bump_count(&mut out.i32)?;
-                let value_vt = super::optional::some_wrap_scratch_valtype(payload_ty)?;
-                match value_vt {
-                    ValType::I32 => bump_count(&mut out.i32)?,
-                    ValType::I64 => bump_count(&mut out.i64)?,
-                    ValType::F32 => bump_count(&mut out.f32)?,
-                    ValType::F64 => bump_count(&mut out.f64)?,
-                    ValType::V128 | ValType::Ref(_) => {
-                        return Err(LowerError::NotYetImplemented {
-                            what: format!("Some-wrap scratch slot of value type {value_vt:?}"),
-                        });
-                    }
-                }
+            if let Some(target) = ty.as_ref() {
+                super::optional::coercion_scratch_counts(target, value.ty(), out)?;
             }
             walk_count(value, out)
         }
@@ -544,11 +533,17 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             condition,
             then_branch,
             else_branch,
-            ..
+            ty,
         } => {
             walk_count(condition, out)?;
+            // Each branch's value is coerced to the if's overall type
+            // (`Optional` widening only — every other type combination
+            // contributes nothing). Count those wraps so the pre-walk's
+            // totals match the lowering walker.
+            super::optional::coercion_scratch_counts(ty, then_branch.ty(), out)?;
             walk_count(then_branch, out)?;
             if let Some(else_branch) = else_branch {
+                super::optional::coercion_scratch_counts(ty, else_branch.ty(), out)?;
                 walk_count(else_branch, out)?;
             }
         }
@@ -579,13 +574,16 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             walk_count(key, out)?;
         }
         IrExpr::Match {
-            scrutinee, arms, ..
+            scrutinee,
+            arms,
+            ty,
         } => {
             // Each `Match` reserves one i32 scratch local for the
             // scrutinee pointer.
             bump_count(&mut out.i32)?;
             walk_count(scrutinee, out)?;
             for arm in arms {
+                super::optional::coercion_scratch_counts(ty, arm.body.ty(), out)?;
                 walk_count(&arm.body, out)?;
             }
         }
@@ -666,13 +664,18 @@ fn plan_function_locals(
 
 fn finish_function_body(
     body: &IrExpr,
+    return_ty: Option<&ResolvedType>,
     locals: Vec<(u32, ValType)>,
     ctx: &LowerContext<'_>,
 ) -> Result<Function, LowerError> {
     let mut func = Function::new(locals);
     {
         let sink = &mut func.instructions();
-        lower_expr(body, sink, ctx)?;
+        if let Some(target) = return_ty {
+            super::optional::lower_coerced(body, target, sink, ctx)?;
+        } else {
+            lower_expr(body, sink, ctx)?;
+        }
         sink.end();
     }
     Ok(func)

@@ -483,6 +483,7 @@ fn emit_function(
     let self_struct_id = impl_self_struct_id.or_else(|| detect_self_struct(f));
     let body = lower_function_body_in_module(
         body_expr,
+        f.return_type.as_ref(),
         &param_bindings,
         function_map,
         method_map,

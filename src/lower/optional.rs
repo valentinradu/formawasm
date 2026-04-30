@@ -13,6 +13,7 @@ use formalang::ir::{IrExpr, ResolvedType};
 use wasm_encoder::{InstructionSink, MemArg, ValType};
 
 use super::aggregate::{allocate_aggregate, primitive_of, store_primitive};
+use super::block::{ScratchCounts, bump_count};
 use super::{LowerContext, LowerError, lower_expr};
 use crate::layout::{FieldLayout, OPTIONAL_TAG_ALIGN, OPTIONAL_TAG_SOME, plan_optional};
 use crate::module::MEMORY_INDEX;
@@ -135,4 +136,55 @@ fn primitive_to_valtype(ty: &ResolvedType) -> Result<ValType, LowerError> {
 /// scratch counts match the lowering walker's consumption.
 pub(super) fn some_wrap_scratch_valtype(payload_ty: &ResolvedType) -> Result<ValType, LowerError> {
     primitive_to_valtype(payload_ty)
+}
+
+/// Lower `value_expr` into a slot of static type `target_ty`,
+/// inserting an `Optional<T>` Some-wrap when the slot widens the
+/// value's type. Sites that own a known target type (function
+/// returns, if branches, match arm bodies) call this in place of the
+/// bare [`lower_expr`] so a primitive `T` flowing into an
+/// `Optional<T>` slot materializes as a tagged-Some cell rather than
+/// a bare `T`. Other type combinations (exact match,
+/// Optional<Never> -> Optional<T>) flow through unchanged via the
+/// regular lowering path.
+pub(super) fn lower_coerced(
+    value_expr: &IrExpr,
+    target_ty: &ResolvedType,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    if let Some(payload_ty) = some_wrap_payload(target_ty, value_expr.ty()) {
+        lower_some_wrap(value_expr, payload_ty, sink, ctx)
+    } else {
+        lower_expr(value_expr, sink, ctx)
+    }
+}
+
+/// Add the scratch-slot reservations a Some-wrap coercion at this
+/// site requires, on top of whatever the inner expression already
+/// counts. Callers that own a known target type pair this with the
+/// regular `walk_count` recursion so the pre-walk's totals match the
+/// lowering walker's consumption.
+pub(super) fn coercion_scratch_counts(
+    target_ty: &ResolvedType,
+    value_ty: &ResolvedType,
+    out: &mut ScratchCounts,
+) -> Result<(), LowerError> {
+    let Some(payload_ty) = some_wrap_payload(target_ty, value_ty) else {
+        return Ok(());
+    };
+    bump_count(&mut out.i32)?;
+    let vt = some_wrap_scratch_valtype(payload_ty)?;
+    match vt {
+        ValType::I32 => bump_count(&mut out.i32)?,
+        ValType::I64 => bump_count(&mut out.i64)?,
+        ValType::F32 => bump_count(&mut out.f32)?,
+        ValType::F64 => bump_count(&mut out.f64)?,
+        ValType::V128 | ValType::Ref(_) => {
+            return Err(LowerError::NotYetImplemented {
+                what: format!("Some-wrap scratch slot of value type {vt:?}"),
+            });
+        }
+    }
+    Ok(())
 }

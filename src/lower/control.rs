@@ -13,7 +13,7 @@ use crate::layout::{
     ARRAY_HEADER_ALIGN, ENUM_TAG_ALIGN, FieldLayout, plan_array, plan_enum, plan_range,
 };
 use crate::module::MEMORY_INDEX;
-use crate::types::{body_value_type, resolved_value_type};
+use crate::types::body_value_type;
 
 /// Per-source-shape scratch-slot counts for an `IrExpr::For`. Called
 /// from [`super::block::walk_count`] before any code is emitted, so
@@ -137,17 +137,27 @@ pub fn lower_if(
         });
     };
 
-    let block_ty = resolved_value_type(ty)?.map_or(BlockType::Empty, BlockType::Result);
+    let block_ty = body_block_type(ty)?;
 
     lower_expr(condition, sink, ctx)?;
     sink.if_(block_ty);
-    lower_expr(then_branch, sink, ctx)?;
+    super::optional::lower_coerced(then_branch, ty, sink, ctx)?;
     if let Some(else_branch) = else_branch {
         sink.else_();
-        lower_expr(else_branch, sink, ctx)?;
+        super::optional::lower_coerced(else_branch, ty, sink, ctx)?;
     }
     sink.end();
     Ok(())
+}
+
+/// Block-type encoding for in-body wasm `if` / `block` constructs.
+///
+/// Unlike [`resolved_value_type`] (which is the strict WIT-only
+/// surface), aggregate types here lower as `i32` pointers so an `if`
+/// returning, say, `Optional<I32>` reports a single i32 result instead
+/// of failing as `NotYetSupported`.
+fn body_block_type(ty: &ResolvedType) -> Result<BlockType, LowerError> {
+    Ok(body_value_type(ty)?.map_or(BlockType::Empty, BlockType::Result))
 }
 
 /// Lower an [`IrExpr::Match`] onto `sink`.
@@ -266,7 +276,7 @@ pub fn lower_match(
         // matching some variant; we keep them as fall-throughs but
         // their body still needs to run. Treat them like any other
         // arm here.
-        lower_expr(&arm.body, sink, ctx)?;
+        super::optional::lower_coerced(&arm.body, ty, sink, ctx)?;
         let depth = arm_count_u32
             .checked_sub(u32::try_from(p).unwrap_or(u32::MAX))
             .ok_or_else(|| LowerError::NotYetImplemented {
@@ -285,7 +295,7 @@ pub fn lower_match(
         let arm = arms.get(p).ok_or_else(|| LowerError::NotYetImplemented {
             what: "wildcard arm index out of range (compiler bug)".to_owned(),
         })?;
-        lower_expr(&arm.body, sink, ctx)?;
+        super::optional::lower_coerced(&arm.body, ty, sink, ctx)?;
     } else {
         sink.unreachable();
     }
