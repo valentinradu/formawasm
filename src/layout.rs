@@ -35,17 +35,6 @@ pub enum LayoutError {
         kind: String,
     },
 
-    /// A field is marked `optional` (i.e. `T?`). `Optional<T>`
-    /// lowering lands in Phase 2; rejecting it explicitly here keeps
-    /// the layout planner from silently dropping the optionality flag.
-    #[error("optional field '{field}' on struct '{struct_name}' is not yet supported")]
-    OptionalField {
-        /// Source-level struct name.
-        struct_name: String,
-        /// Source-level field name.
-        field: String,
-    },
-
     /// The struct's total size — including alignment padding —
     /// exceeds `u32::MAX`. Linear-memory offsets are `u32` in core
     /// wasm so we cannot represent layouts larger than that.
@@ -116,12 +105,11 @@ pub fn plan_struct(s: &IrStruct, _module: &IrModule) -> Result<StructLayout, Lay
     let mut fields = Vec::with_capacity(s.fields.len());
 
     for f in &s.fields {
-        if f.optional {
-            return Err(LayoutError::OptionalField {
-                struct_name: s.name.clone(),
-                field: f.name.clone(),
-            });
-        }
+        // The `optional: bool` AST flag is redundant with
+        // `ty: ResolvedType::Optional(_)`. Phase 2 mc7 lifts the
+        // outright rejection that came in as a defensive marker
+        // before the optional layout existed; aggregate-as-pointer
+        // storage handles either form uniformly.
         let (size, align) = type_size_align(&f.ty)?;
         let aligned = align_up(offset, align).ok_or_else(|| LayoutError::SizeOverflow {
             name: s.name.clone(),
@@ -181,9 +169,16 @@ fn primitive_size_align(p: PrimitiveType) -> Result<(u32, u32), LayoutError> {
 
 /// Return the `(size, align)` pair for a [`ResolvedType`] used as a
 /// struct field type.
+///
+/// `Optional<T>` collapses to a 4-byte pointer payload — the
+/// underlying tagged cell lives in a separately-allocated linear-
+/// memory region. Other aggregate field types (Struct / Enum /
+/// Tuple / Array nested directly inside a struct field slot) stay
+/// rejected pending the matching nested-aggregate-field mc.
 fn type_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
     match ty {
         ResolvedType::Primitive(p) => primitive_size_align(*p),
+        ResolvedType::Optional(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::Struct(_) => Err(LayoutError::NotYetSupported {
             kind: "Struct".to_owned(),
         }),
@@ -198,9 +193,6 @@ fn type_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
         }),
         ResolvedType::Range(_) => Err(LayoutError::NotYetSupported {
             kind: "Range<T>".to_owned(),
-        }),
-        ResolvedType::Optional(_) => Err(LayoutError::NotYetSupported {
-            kind: "Optional<T>".to_owned(),
         }),
         ResolvedType::Dictionary { .. } => Err(LayoutError::NotYetSupported {
             kind: "Dictionary<K, V>".to_owned(),
@@ -701,12 +693,10 @@ fn array_element_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
+        | ResolvedType::Array(_)
+        | ResolvedType::Optional(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::Range(_) => Err(LayoutError::NotYetSupported {
             kind: "Range<T>".to_owned(),
-        }),
-        ResolvedType::Optional(_) => Err(LayoutError::NotYetSupported {
-            kind: "Optional<T>".to_owned(),
         }),
         ResolvedType::Dictionary { .. } => Err(LayoutError::NotYetSupported {
             kind: "Dictionary<K, V>".to_owned(),

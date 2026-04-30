@@ -55,14 +55,60 @@ pub fn lower_struct_inst(
 
     for (name, _idx, value_expr) in fields {
         let (field_layout, field_def) = lookup_field_by_name(s, &layout.fields, name)?;
-        let primitive = primitive_of(&field_def.ty)?;
         sink.local_get(base_local);
-        lower_expr(value_expr, sink, ctx)?;
-        store_primitive(primitive, *field_layout, sink);
+        store_aggregate_field(value_expr, &field_def.ty, *field_layout, sink, ctx)?;
     }
 
     sink.local_get(base_local);
     Ok(())
+}
+
+/// Lower `value_expr` into a position on the wasm operand stack
+/// suitable for the field-store opcode that matches `field_ty`, then
+/// emit that store at `field_layout`.
+///
+/// Primitive fields go through [`store_primitive`]; `Optional<T>`
+/// fields store the value as an i32 pointer (the optional cell
+/// itself lives elsewhere in linear memory). Other aggregate field
+/// types stay rejected pending the matching nested-aggregate-field
+/// mc — the layout planner already enforces that gate, so the arm
+/// here is defensive only.
+pub(super) fn store_aggregate_field(
+    value_expr: &IrExpr,
+    field_ty: &ResolvedType,
+    field_layout: FieldLayout,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    match field_ty {
+        ResolvedType::Primitive(p) => {
+            super::optional::lower_coerced(value_expr, field_ty, sink, ctx)?;
+            store_primitive(*p, field_layout, sink);
+            Ok(())
+        }
+        ResolvedType::Optional(_) => {
+            super::optional::lower_coerced(value_expr, field_ty, sink, ctx)?;
+            sink.i32_store(field_mem_arg(field_layout));
+            Ok(())
+        }
+        // Other aggregate / non-storable field types stay rejected
+        // pending the matching nested-aggregate-field mc — the layout
+        // planner already gates these out, so this arm is defensive.
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Trait(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Error => Err(LowerError::FieldAccessOnNonAggregate {
+            ty: field_ty.clone(),
+        }),
+    }
 }
 
 /// Reserve `size` bytes via the bump-allocator helper, store the
@@ -301,10 +347,8 @@ pub fn lower_enum_inst(
     for (field_name, _idx, value_expr) in fields {
         let (field_layout, field_def) =
             lookup_variant_field_by_name(variant_def, &variant_layout.fields, field_name)?;
-        let primitive = primitive_of(&field_def.ty)?;
         sink.local_get(base_local);
-        lower_expr(value_expr, sink, ctx)?;
-        store_primitive(primitive, *field_layout, sink);
+        store_aggregate_field(value_expr, &field_def.ty, *field_layout, sink, ctx)?;
     }
 
     sink.local_get(base_local);
@@ -388,10 +432,8 @@ pub fn lower_tuple(
     for (name, value_expr) in fields {
         let (field_layout, field_def) =
             lookup_field_by_name_with_meta(&synthetic.fields, &layout.fields, name, "__tuple")?;
-        let primitive = primitive_of(&field_def.ty)?;
         sink.local_get(base_local);
-        lower_expr(value_expr, sink, ctx)?;
-        store_primitive(primitive, *field_layout, sink);
+        store_aggregate_field(value_expr, &field_def.ty, *field_layout, sink, ctx)?;
     }
 
     sink.local_get(base_local);
@@ -470,7 +512,7 @@ pub fn lower_array(
                     name: "<array element offset>".to_owned(),
                 })?;
         sink.local_get(buf_local);
-        lower_expr(element, sink, ctx)?;
+        super::optional::lower_coerced(element, elem_ty, sink, ctx)?;
         store_array_element(elem_ty, layout, offset, sink)?;
     }
 
@@ -563,14 +605,14 @@ fn store_array_element(
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_) => {
+        | ResolvedType::Array(_)
+        | ResolvedType::Optional(_) => {
             sink.i32_store(field_mem_arg(field_layout));
             Ok(())
         }
         // `plan_array` rejects every other element type, so this arm
         // is defensive only.
         ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)

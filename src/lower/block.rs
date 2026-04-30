@@ -549,9 +549,22 @@ fn walk_count(
                 }
             }
         }
-        IrExpr::Tuple { fields, .. } => {
+        IrExpr::Tuple { fields, ty } => {
             bump_count(&mut out.i32)?;
-            for (_, e) in fields {
+            // Tuple field types come straight from the resolved
+            // `Tuple` type — no module lookup needed.
+            let target_fields: Option<&Vec<(String, ResolvedType)>> =
+                if let ResolvedType::Tuple(ts) = ty {
+                    Some(ts)
+                } else {
+                    None
+                };
+            for (name, e) in fields {
+                if let Some(targets) = target_fields
+                    && let Some((_, t)) = targets.iter().find(|(n, _)| n == name)
+                {
+                    super::optional::coercion_scratch_counts(t, e.ty(), out)?;
+                }
                 walk_count(e, module, out)?;
             }
         }
@@ -688,13 +701,21 @@ fn walk_count(
             bump_count(&mut out.i32)?;
             walk_count(env_struct, module, out)?;
         }
-        IrExpr::Array { elements, .. } => {
+        IrExpr::Array { elements, ty } => {
             // Each Array literal reserves two i32 scratch locals — one
             // for the element-buffer base pointer, one for the
             // header pointer.
             bump_count(&mut out.i32)?;
             bump_count(&mut out.i32)?;
+            let elem_ty: Option<&ResolvedType> = if let ResolvedType::Array(b) = ty {
+                Some(b.as_ref())
+            } else {
+                None
+            };
             for e in elements {
+                if let Some(t) = elem_ty {
+                    super::optional::coercion_scratch_counts(t, e.ty(), out)?;
+                }
                 walk_count(e, module, out)?;
             }
         }

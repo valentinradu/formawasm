@@ -289,19 +289,30 @@ fn float_fields_share_integer_alignments() -> TestResult {
 }
 
 #[test]
-fn optional_field_is_rejected() -> TestResult {
-    let mut f = field("maybe", primitive(PrimitiveType::I32));
+fn optional_field_lays_out_as_pointer() -> TestResult {
+    // Phase 2 mc7: `Optional<T>` fields collapse to a 4-byte pointer
+    // payload (the tagged optional cell lives elsewhere in linear
+    // memory). The redundant `optional: true` AST flag is preserved
+    // alongside the resolved `Optional(T)` type but no longer drives
+    // a layout rejection.
+    let mut f = field(
+        "maybe",
+        ResolvedType::Optional(Box::new(primitive(PrimitiveType::I32))),
+    );
     f.optional = true;
     let s = make_struct("Opt", vec![f]);
     let module = IrModule::new();
-    match layout::plan_struct(&s, &module) {
-        Err(LayoutError::OptionalField { struct_name, field })
-            if struct_name == "Opt" && field == "maybe" =>
-        {
-            Ok(())
-        }
-        other => Err(format!("expected OptionalField, got {other:?}").into()),
-    }
+    let layout = layout::plan_struct(&s, &module)?;
+    assert_layout(
+        &layout,
+        4,
+        4,
+        &[FieldLayout {
+            offset: 0,
+            size: 4,
+            align: 4,
+        }],
+    )
 }
 
 #[test]
