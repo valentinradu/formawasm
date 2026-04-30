@@ -8,6 +8,8 @@ use formalang::ir::{DispatchKind, IrExpr};
 use wasm_encoder::InstructionSink;
 
 use super::{LowerContext, LowerError, lower_expr};
+use crate::module::MEMORY_INDEX;
+use crate::types::{CLOSURE_ENV_OFFSET, CLOSURE_FUNCREF_OFFSET};
 
 /// Lower an [`IrExpr::FunctionCall`] onto `sink`.
 ///
@@ -42,6 +44,76 @@ pub fn lower_function_call(
         lower_expr(arg, sink, ctx)?;
     }
     sink.call(wasm_idx);
+    Ok(())
+}
+
+/// Lower an [`IrExpr::CallClosure`] onto `sink`.
+///
+/// The `closure` sub-expression evaluates to a base pointer for an
+/// 8-byte `(funcref_idx: i32, env_ptr: i32)` value built by
+/// [`super::lower_closure_ref`]. The lowering:
+///
+/// 1. Park the closure value's base pointer in a fresh i32 scratch
+///    local so we can read from it twice.
+/// 2. Push `env_ptr` (loaded from offset 4) as the first argument —
+///    the lifted top-level function takes the env struct in slot 0.
+/// 3. Lower each explicit argument in declaration order.
+/// 4. Push `funcref_idx` (loaded from offset 0) as the table index.
+/// 5. Emit `call_indirect` against the funcref table, with a wasm
+///    type signature derived from the closure's `ResolvedType::Closure`.
+///
+/// The funcref table and per-closure type signatures are wired by
+/// [`crate::module_lowering`] before any function bodies are
+/// lowered; this helper looks up the matching type index through
+/// [`LowerContext::closure_type_index`].
+pub fn lower_call_closure(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    use formalang::ir::ResolvedType;
+    use wasm_encoder::{MemArg, ValType};
+
+    let IrExpr::CallClosure { closure, args, .. } = expr else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_call_closure called with non-CallClosure expression".to_owned(),
+        });
+    };
+
+    let closure_ty = closure.ty().clone();
+    let ResolvedType::Closure { .. } = &closure_ty else {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("CallClosure on non-closure-typed value {closure_ty:?}"),
+        });
+    };
+
+    let table_idx = ctx.closure_table_index()?;
+    let type_idx = ctx.closure_type_index(&closure_ty)?;
+
+    let base_local = ctx.next_scratch_local(ValType::I32)?;
+    lower_expr(closure, sink, ctx)?;
+    sink.local_set(base_local);
+
+    // env_ptr arg first (the lifted function's first parameter).
+    sink.local_get(base_local);
+    sink.i32_load(MemArg {
+        offset: u64::from(CLOSURE_ENV_OFFSET),
+        align: 2, // log2(4)
+        memory_index: MEMORY_INDEX,
+    });
+
+    for (_, arg) in args {
+        lower_expr(arg, sink, ctx)?;
+    }
+
+    // Funcref index for call_indirect.
+    sink.local_get(base_local);
+    sink.i32_load(MemArg {
+        offset: u64::from(CLOSURE_FUNCREF_OFFSET),
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    });
+    sink.call_indirect(table_idx, type_idx);
     Ok(())
 }
 

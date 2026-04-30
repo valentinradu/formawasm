@@ -7,9 +7,12 @@
 //! functions, code, exports …) into the builder before
 //! [`ModuleBuilder::finish`] emits the byte-encoded module.
 
+use std::borrow::Cow;
+
 use wasm_encoder::{
-    CodeSection, ConstExpr, ExportKind, ExportSection, Function, FunctionSection, GlobalSection,
-    GlobalType, MemorySection, MemoryType, Module, TypeSection, ValType,
+    CodeSection, ConstExpr, ElementSection, Elements, ExportKind, ExportSection, Function,
+    FunctionSection, GlobalSection, GlobalType, MemorySection, MemoryType, Module, RefType,
+    TableSection, TableType, TypeSection, ValType,
 };
 
 /// Alignment, in bytes, the bump allocator rounds every returned address up to.
@@ -71,11 +74,18 @@ pub const INITIAL_MEMORY_PAGES: u64 = 1;
 pub struct ModuleBuilder {
     types: TypeSection,
     functions: FunctionSection,
+    tables: TableSection,
     memories: MemorySection,
     globals: GlobalSection,
     exports: ExportSection,
+    elements: ElementSection,
     code: CodeSection,
     bump_allocator: Option<u32>,
+    /// Index of the funcref `Table` carrying every closure-callable
+    /// function. Created lazily by [`Self::declare_closure_table`]; the
+    /// `ElementSection` populates it with concrete `wasm` function
+    /// indices via [`Self::populate_closure_table`].
+    closure_table_idx: Option<u32>,
 }
 
 impl Default for ModuleBuilder {
@@ -114,12 +124,68 @@ impl ModuleBuilder {
         Self {
             types: TypeSection::new(),
             functions: FunctionSection::new(),
+            tables: TableSection::new(),
             memories,
             globals,
             exports,
+            elements: ElementSection::new(),
             code: CodeSection::new(),
             bump_allocator: None,
+            closure_table_idx: None,
         }
+    }
+
+    /// Declare a wasm function-type signature without attaching a
+    /// function body. Used by `call_indirect` lowerings that need a
+    /// type-index for the call's signature; the index is stable across
+    /// the rest of the build.
+    pub fn declare_type(&mut self, params: &[ValType], results: &[ValType]) -> u32 {
+        let idx = self.types.len();
+        self.types
+            .ty()
+            .function(params.iter().copied(), results.iter().copied());
+        idx
+    }
+
+    /// Lazy-create the funcref `Table` of `num_closures` slots used by
+    /// indirect closure invocation. Returns the table index. Calling
+    /// repeatedly returns the original index without re-declaring.
+    pub fn declare_closure_table(&mut self, num_closures: u32) -> u32 {
+        if let Some(idx) = self.closure_table_idx {
+            return idx;
+        }
+        let idx = self.tables.len();
+        self.tables.table(TableType {
+            element_type: RefType::FUNCREF,
+            minimum: u64::from(num_closures),
+            maximum: Some(u64::from(num_closures)),
+            table64: false,
+            shared: false,
+        });
+        self.closure_table_idx = Some(idx);
+        idx
+    }
+
+    /// Populate the closure funcref table with `wasm_func_indices`,
+    /// in order, starting at element offset 0. The closure value's
+    /// stored funcref index is the slot number (the table's element
+    /// index), which `call_indirect` resolves to the function pointer
+    /// at runtime.
+    pub fn populate_closure_table(&mut self, wasm_func_indices: &[u32]) {
+        let Some(table_idx) = self.closure_table_idx else {
+            return;
+        };
+        self.elements.active(
+            Some(table_idx),
+            &ConstExpr::i32_const(0),
+            Elements::Functions(Cow::Borrowed(wasm_func_indices)),
+        );
+    }
+
+    /// Wasm table index of the closure funcref table if declared.
+    #[must_use]
+    pub const fn closure_table_index(&self) -> Option<u32> {
+        self.closure_table_idx
     }
 
     /// Export a previously-declared function under `name`.
@@ -213,18 +279,24 @@ impl ModuleBuilder {
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
         let mut module = Module::new();
-        // Section order matters for validation: type, function, memory,
-        // global, code.
+        // Section order is fixed by the wasm spec: type, function,
+        // table, memory, global, export, element, code.
         if !self.types.is_empty() {
             module.section(&self.types);
         }
         if !self.functions.is_empty() {
             module.section(&self.functions);
         }
+        if !self.tables.is_empty() {
+            module.section(&self.tables);
+        }
         module.section(&self.memories);
         module.section(&self.globals);
         if !self.exports.is_empty() {
             module.section(&self.exports);
+        }
+        if !self.elements.is_empty() {
+            module.section(&self.elements);
         }
         if !self.code.is_empty() {
             module.section(&self.code);

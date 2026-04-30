@@ -276,6 +276,10 @@ fn check_type(ty: &ResolvedType, location: &str) -> Result<(), PreflightError> {
 // Expression walker
 // ───────────────────────────────────────────────────────────────────
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive walk over every IrExpr variant; splitting hides the per-variant pre-flight contract"
+)]
 fn check_expr(expr: &IrExpr, location: &str) -> Result<(), PreflightError> {
     check_type(expr.ty(), location)?;
 
@@ -351,6 +355,14 @@ fn check_expr(expr: &IrExpr, location: &str) -> Result<(), PreflightError> {
         }
 
         IrExpr::FunctionCall { args, .. } => {
+            for (_, sub) in args {
+                check_expr(sub, location)?;
+            }
+            Ok(())
+        }
+
+        IrExpr::CallClosure { closure, args, .. } => {
+            check_expr(closure, location)?;
             for (_, sub) in args {
                 check_expr(sub, location)?;
             }

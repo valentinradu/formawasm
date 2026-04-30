@@ -135,11 +135,12 @@ fn closure_ref_materializes_a_pair_in_linear_memory() -> TestResult {
     let funcref_idx = i32::from_le_bytes(funcref_bytes);
     let env_ptr = i32::from_le_bytes(env_bytes);
 
-    // funcref_idx is the wasm function index of `__closure_0`.
-    // With 1 bump-allocator (idx 0) + __closure_0 (idx 1) + make_closure (idx 2),
-    // the lifted function lives at wasm index 1.
-    if funcref_idx != 1 {
-        return Err(format!("expected funcref idx 1, got {funcref_idx}").into());
+    // funcref_idx is the *table element index* of `__closure_0` inside
+    // the closure funcref table — 0, since it's the only closure-
+    // callable function in the module. The wasm function index lives
+    // in the table at that slot, not directly in the closure value.
+    if funcref_idx != 0 {
+        return Err(format!("expected table element idx 0, got {funcref_idx}").into());
     }
     // env_ptr should be a non-negative aligned offset (an empty struct
     // still allocates 0 bytes via the bump allocator, so it gets some

@@ -212,15 +212,13 @@ pub fn lower_closure_ref(
     let func_idx_raw = u32::try_from(func_idx_u32).map_err(|_| LowerError::NotYetImplemented {
         what: "ClosureRef target index exceeds u32::MAX".to_owned(),
     })?;
-    let funcref_wasm_idx = ctx
-        .functions
-        .get(formalang::ir::FunctionId(func_idx_raw))
-        .ok_or(LowerError::UnknownFunction(formalang::ir::FunctionId(
-            func_idx_raw,
-        )))?;
+    // Closure values store the *table element index* (not the wasm
+    // function index) in the funcref slot, so `call_indirect` at the
+    // call site can index the closure funcref table directly.
+    let funcref_table_idx = ctx.closure_funcref_index(formalang::ir::FunctionId(func_idx_raw))?;
     let funcref_signed =
-        i32::try_from(funcref_wasm_idx).map_err(|_| LowerError::NotYetImplemented {
-            what: "ClosureRef target wasm index exceeds i32::MAX".to_owned(),
+        i32::try_from(funcref_table_idx).map_err(|_| LowerError::NotYetImplemented {
+            what: "ClosureRef target table index exceeds i32::MAX".to_owned(),
         })?;
 
     let base_local = allocate_aggregate(crate::types::CLOSURE_VALUE_SIZE, sink, ctx)?;

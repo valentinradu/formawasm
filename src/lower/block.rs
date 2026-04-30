@@ -6,7 +6,8 @@ use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrModule, ResolvedType,
 use wasm_encoder::{Function, InstructionSink, ValType};
 
 use super::{
-    BindingMap, FunctionMap, LowerContext, LowerError, MethodMap, ScratchAllocator, lower_expr,
+    BindingMap, ClosureCallContext, FunctionMap, LowerContext, LowerError, MethodMap,
+    ScratchAllocator, lower_expr,
 };
 use crate::types::body_value_type;
 
@@ -143,6 +144,7 @@ fn lower_assign(
         | IrExpr::For { .. }
         | IrExpr::Match { .. }
         | IrExpr::FunctionCall { .. }
+        | IrExpr::CallClosure { .. }
         | IrExpr::MethodCall { .. }
         | IrExpr::Closure { .. }
         | IrExpr::ClosureRef { .. }
@@ -197,6 +199,10 @@ fn walk_block_statements(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive walk over every IrExpr variant; splitting hides which variants introduce new bindings"
+)]
 fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result<(), LowerError> {
     match expr {
         IrExpr::Block {
@@ -225,6 +231,13 @@ fn walk_for_locals(expr: &IrExpr, out: &mut Vec<(BindingId, ValType)>) -> Result
             Ok(())
         }
         IrExpr::FunctionCall { args, .. } => {
+            for (_, arg) in args {
+                walk_for_locals(arg, out)?;
+            }
+            Ok(())
+        }
+        IrExpr::CallClosure { closure, args, .. } => {
+            walk_for_locals(closure, out)?;
             for (_, arg) in args {
                 walk_for_locals(arg, out)?;
             }
@@ -337,6 +350,10 @@ pub fn lower_function_body(
 /// `i32`-typed scratch local per occurrence so the recursive
 /// lowering can stash each base pointer without clobbering enclosing
 /// constructions.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "module-aware body lowering needs every map and table-context input the called expression lowerings can possibly read; bundling into a struct hides the contract"
+)]
 pub fn lower_function_body_in_module(
     body: &IrExpr,
     param_bindings: &[(BindingId, ValType)],
@@ -345,6 +362,7 @@ pub fn lower_function_body_in_module(
     module: &IrModule,
     bump_allocator: u32,
     self_struct_id: Option<StructId>,
+    closure_ctx: Option<&ClosureCallContext<'_>>,
 ) -> Result<Function, LowerError> {
     let plan = plan_function_locals(body, param_bindings)?;
     let counts = count_scratch_locals(body)?;
@@ -382,6 +400,12 @@ pub fn lower_function_body_in_module(
         .with_scratch_locals(&allocator);
     if let Some(id) = self_struct_id {
         ctx = ctx.with_self_struct_id(id);
+    }
+    if let Some(closure) = closure_ctx {
+        ctx = ctx
+            .with_closure_table(closure.table_idx)
+            .with_closure_funcref_indices(closure.funcref_indices)
+            .with_closure_type_indices(closure.type_indices);
     }
     finish_function_body(body, locals, &ctx)
 }
@@ -439,6 +463,10 @@ fn walk_count_block_statement(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive walk over every IrExpr variant; splitting hides which variants reserve which scratch slots"
+)]
 fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> {
     match expr {
         IrExpr::StructInst { fields, .. } | IrExpr::EnumInst { fields, .. } => {
@@ -487,6 +515,16 @@ fn walk_count(expr: &IrExpr, out: &mut ScratchCounts) -> Result<(), LowerError> 
             }
         }
         IrExpr::FunctionCall { args, .. } => {
+            for (_, arg) in args {
+                walk_count(arg, out)?;
+            }
+        }
+        IrExpr::CallClosure { closure, args, .. } => {
+            // One i32 scratch local for the closure value's base
+            // pointer — re-read from once for env_ptr and once for the
+            // funcref index inside `lower_call_closure`.
+            bump_count(&mut out.i32)?;
+            walk_count(closure, out)?;
             for (_, arg) in args {
                 walk_count(arg, out)?;
             }

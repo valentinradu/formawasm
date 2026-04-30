@@ -40,7 +40,7 @@ pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
 // MethodMap is exported for the production module-lowering pass that
 // consumes it as a coordinated input alongside FunctionMap.
-pub use call::{lower_function_call, lower_method_call};
+pub use call::{lower_call_closure, lower_function_call, lower_method_call};
 pub use control::{lower_for, lower_if, lower_match};
 pub use literal::lower_literal;
 pub use reference::{lower_let_ref, lower_reference};
@@ -399,6 +399,25 @@ pub struct LowerContext<'a> {
     /// memory loads through the implicit `self: i32` parameter at
     /// wasm-local 0.
     pub self_struct_id: Option<StructId>,
+    /// Wasm `Table` index of the funcref table declared by the module
+    /// builder for indirect closure invocation. `None` when the module
+    /// has no closure-callable functions; `lower_call_closure` and
+    /// `lower_closure_ref` surface
+    /// [`LowerError::MissingContext`] on this field if a closure
+    /// value or call site reaches them without the table available.
+    pub closure_table: Option<u32>,
+    /// Maps a closure-callable function's [`FunctionId`] to its
+    /// element index inside [`Self::closure_table`]. The index is
+    /// what gets stored in a closure value's funcref slot — the slot
+    /// number `call_indirect` looks up at runtime, not the wasm
+    /// function index.
+    pub closure_funcref_indices: Option<&'a HashMap<FunctionId, u32>>,
+    /// Maps a closure's `ResolvedType::Closure { ... }` to the wasm
+    /// type-section index for its `call_indirect` signature. The
+    /// signature prepends one i32 (`env_ptr`) to the closure's
+    /// declared parameters; the lifted top-level function takes the
+    /// env struct as its first argument.
+    pub closure_type_indices: Option<&'a HashMap<ResolvedType, u32>>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -416,6 +435,9 @@ impl<'a> LowerContext<'a> {
             bump_allocator: None,
             scratch_locals: None,
             self_struct_id: None,
+            closure_table: None,
+            closure_funcref_indices: None,
+            closure_type_indices: None,
         }
     }
 
@@ -455,6 +477,78 @@ impl<'a> LowerContext<'a> {
         self
     }
 
+    /// Attach the funcref-table index for indirect closure
+    /// invocation. The table is declared and populated by the module
+    /// builder before any function bodies are lowered.
+    #[must_use]
+    pub const fn with_closure_table(mut self, idx: u32) -> Self {
+        self.closure_table = Some(idx);
+        self
+    }
+
+    /// Attach the closure-funcref index map. Maps a closure-callable
+    /// function's [`FunctionId`] to its element index inside the
+    /// funcref table.
+    #[must_use]
+    pub const fn with_closure_funcref_indices(
+        mut self,
+        indices: &'a HashMap<FunctionId, u32>,
+    ) -> Self {
+        self.closure_funcref_indices = Some(indices);
+        self
+    }
+
+    /// Attach the closure-type index map. Maps a closure's
+    /// `ResolvedType::Closure { ... }` to the wasm type-section index
+    /// for its `call_indirect` signature.
+    #[must_use]
+    pub const fn with_closure_type_indices(
+        mut self,
+        indices: &'a HashMap<ResolvedType, u32>,
+    ) -> Self {
+        self.closure_type_indices = Some(indices);
+        self
+    }
+
+    /// Wasm-table index of the closure funcref table or surface
+    /// [`LowerError::MissingContext`] if unset.
+    pub fn closure_table_index(&self) -> Result<u32, LowerError> {
+        self.closure_table.ok_or(LowerError::MissingContext {
+            what: "closure_table",
+        })
+    }
+
+    /// Wasm type-section index for a closure-call signature. Returns
+    /// [`LowerError::MissingContext`] when the surrounding lowering
+    /// pass didn't attach the map, or [`LowerError::NotYetImplemented`]
+    /// when the call site uses a closure type the pass didn't pre-
+    /// register (typically a sign that the pre-walk missed it).
+    pub fn closure_type_index(&self, ty: &ResolvedType) -> Result<u32, LowerError> {
+        let map = self
+            .closure_type_indices
+            .ok_or(LowerError::MissingContext {
+                what: "closure_type_indices",
+            })?;
+        map.get(ty)
+            .copied()
+            .ok_or_else(|| LowerError::NotYetImplemented {
+                what: format!("call_indirect type signature for {ty:?} (not pre-registered)"),
+            })
+    }
+
+    /// Element index inside the closure funcref table for a function
+    /// id. Returns [`LowerError::MissingContext`] when the map is
+    /// unset, or [`LowerError::UnknownFunction`] when the function
+    /// isn't closure-callable.
+    pub fn closure_funcref_index(&self, id: FunctionId) -> Result<u32, LowerError> {
+        let map = self
+            .closure_funcref_indices
+            .ok_or(LowerError::MissingContext {
+                what: "closure_funcref_indices",
+            })?;
+        map.get(&id).copied().ok_or(LowerError::UnknownFunction(id))
+    }
+
     /// Borrow the IR module or surface
     /// [`LowerError::MissingContext`] if the field is unset.
     pub fn module(&self) -> Result<&'a IrModule, LowerError> {
@@ -481,6 +575,28 @@ impl<'a> LowerContext<'a> {
         })?;
         allocator.allocate(ty)
     }
+}
+
+/// Bundle of closure-call plumbing handed from the module-level
+/// lowering pass into [`lower_function_body_in_module`].
+///
+/// Built once per module after the funcref table has been declared
+/// and populated; every function body lowered against the same
+/// module shares this context.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain bundle consumed by the function-body planner"
+)]
+#[derive(Debug, Clone, Copy)]
+pub struct ClosureCallContext<'a> {
+    /// Wasm-table index of the closure funcref table.
+    pub table_idx: u32,
+    /// Maps each closure-callable function's [`FunctionId`] to its
+    /// element index inside the table.
+    pub funcref_indices: &'a HashMap<FunctionId, u32>,
+    /// Maps a closure's `ResolvedType::Closure { ... }` to the wasm
+    /// type-section index for the matching `call_indirect` signature.
+    pub type_indices: &'a HashMap<ResolvedType, u32>,
 }
 
 /// Per-type scratch-local allocator passed by reference into [`LowerContext`].
@@ -596,6 +712,7 @@ pub fn lower_expr(
         IrExpr::UnaryOp { .. } => lower_unary_op(expr, sink, ctx),
         IrExpr::Block { .. } => lower_block(expr, sink, ctx),
         IrExpr::FunctionCall { .. } => lower_function_call(expr, sink, ctx),
+        IrExpr::CallClosure { .. } => lower_call_closure(expr, sink, ctx),
         IrExpr::If { .. } => lower_if(expr, sink, ctx),
 
         IrExpr::StructInst { .. } => lower_struct_inst(expr, sink, ctx),
@@ -636,6 +753,7 @@ pub(crate) const fn expr_variant_name(expr: &IrExpr) -> &'static str {
         IrExpr::For { .. } => "For",
         IrExpr::Match { .. } => "Match",
         IrExpr::FunctionCall { .. } => "FunctionCall",
+        IrExpr::CallClosure { .. } => "CallClosure",
         IrExpr::MethodCall { .. } => "MethodCall",
         IrExpr::Closure { .. } => "Closure",
         IrExpr::ClosureRef { .. } => "ClosureRef",
