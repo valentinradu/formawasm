@@ -155,7 +155,7 @@ fn check_divisor_function(self_id: FunctionId) -> IrFunction {
         PrimitiveType::I32,
     );
     let recurse = function_call(
-        "check-divisor",
+        "check_divisor",
         self_id,
         vec![n(), next_d],
         PrimitiveType::Boolean,
@@ -174,7 +174,7 @@ fn check_divisor_function(self_id: FunctionId) -> IrFunction {
     };
 
     function(
-        "check-divisor",
+        "check_divisor",
         vec![
             (BindingId(0), "n", primitive_ty(PrimitiveType::I32)),
             (BindingId(1), "d", primitive_ty(PrimitiveType::I32)),
@@ -201,7 +201,7 @@ fn is_prime_function(check_divisor_id: FunctionId) -> IrFunction {
         PrimitiveType::Boolean,
     );
     let trial = function_call(
-        "check-divisor",
+        "check_divisor",
         check_divisor_id,
         vec![n(), integer_literal(2)],
         PrimitiveType::Boolean,
@@ -214,7 +214,7 @@ fn is_prime_function(check_divisor_id: FunctionId) -> IrFunction {
     };
 
     function(
-        "is-prime",
+        "is_prime",
         vec![(BindingId(0), "n", primitive_ty(PrimitiveType::I32))],
         primitive_ty(PrimitiveType::Boolean),
         body,
@@ -240,7 +240,7 @@ fn sieve_function(is_prime_id: FunctionId) -> IrFunction {
         ty: range_ty(primitive_ty(PrimitiveType::I32)),
     };
     let body = function_call(
-        "is-prime",
+        "is_prime",
         is_prime_id,
         vec![let_ref(p_id, "p", primitive_ty(PrimitiveType::I32))],
         PrimitiveType::Boolean,

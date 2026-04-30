@@ -126,7 +126,7 @@ fn unit_variant_writes_correct_tag() -> TestResult {
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &m, &[])?;
-    let f = instance.get_typed_func::<(), i32>(&mut store, "make_green")?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "make-green")?;
     let ptr = f.call(&mut store, ())?;
     let memory = instance
         .exports(&mut store)
@@ -171,7 +171,7 @@ fn variant_with_i32_payload_writes_tag_and_field() -> TestResult {
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &m, &[])?;
-    let f = instance.get_typed_func::<(), i32>(&mut store, "make_some")?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "make-some")?;
     let ptr = f.call(&mut store, ())?;
     let memory = instance
         .exports(&mut store)
@@ -223,7 +223,7 @@ fn variant_with_i64_payload_uses_eight_byte_offset() -> TestResult {
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &m, &[])?;
-    let f = instance.get_typed_func::<(), i32>(&mut store, "make_b")?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "make-b")?;
     let ptr = f.call(&mut store, ())?;
     let memory = instance
         .exports(&mut store)

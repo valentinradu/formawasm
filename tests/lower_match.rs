@@ -224,7 +224,7 @@ fn match_extracts_payload_binding() -> TestResult {
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &m, &[])?;
-    let f = instance.get_typed_func::<(), i32>(&mut store, "unwrap_some")?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "unwrap-some")?;
     let got = f.call(&mut store, ())?;
     if got != 42 {
         return Err(format!("got {got}, want 42").into());

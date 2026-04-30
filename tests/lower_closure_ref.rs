@@ -114,7 +114,7 @@ fn closure_ref_materializes_a_pair_in_linear_memory() -> TestResult {
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &m, &[])?;
-    let f = instance.get_typed_func::<(), i32>(&mut store, "make_closure")?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "make-closure")?;
     let ptr = f.call(&mut store, ())?;
     let memory = instance
         .exports(&mut store)

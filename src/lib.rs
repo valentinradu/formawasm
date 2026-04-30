@@ -7,6 +7,7 @@
 
 mod backend;
 pub mod component;
+pub(crate) mod ident;
 pub mod layout;
 pub mod lower;
 pub mod module;

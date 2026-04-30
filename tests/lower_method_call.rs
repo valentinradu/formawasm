@@ -187,7 +187,7 @@ fn calls_inherent_method_returning_self_field() -> TestResult {
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &m, &[])?;
-    let f = instance.get_typed_func::<(), i32>(&mut store, "make_and_call")?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "make-and-call")?;
     let got = f.call(&mut store, ())?;
     if got != 11 {
         return Err(format!("got {got}, want 11").into());

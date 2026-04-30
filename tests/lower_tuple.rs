@@ -171,7 +171,7 @@ fn tuple_with_mixed_alignments_reads_back_i64() -> TestResult {
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
     let instance = Instance::new(&mut store, &m, &[])?;
-    let f = instance.get_typed_func::<(), i64>(&mut store, "read_big")?;
+    let f = instance.get_typed_func::<(), i64>(&mut store, "read-big")?;
     let got = f.call(&mut store, ())?;
     if got != 0x0BAD_F00D_DEAD_BEEF {
         return Err(format!("got {got:#x}, want 0x0BADF00DDEADBEEF").into());

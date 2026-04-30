@@ -18,6 +18,7 @@ use formalang::ir::{IrEnum, IrFunction, IrModule, IrStruct, ResolvedType};
 use thiserror::Error;
 use wit_parser::Resolve;
 
+use crate::ident::kebab_case;
 use crate::survey::PublicSurface;
 use crate::types::TypeMapError;
 
@@ -201,30 +202,8 @@ fn write_variant(out: &mut String, e: &IrEnum) -> Result<(), WitEmitError> {
     Ok(())
 }
 
-/// Convert a name to lower-kebab-case suitable as a WIT identifier.
-/// Splits on existing case transitions: `MyType` → `my-type`,
-/// `Pair` → `pair`, `XMLParser` → `x-m-l-parser`.
-fn kebab_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for (i, ch) in name.chars().enumerate() {
-        if ch.is_ascii_uppercase() {
-            if i > 0 && !out.ends_with('-') {
-                out.push('-');
-            }
-            out.extend(ch.to_lowercase());
-        } else if ch == '_' {
-            if !out.ends_with('-') {
-                out.push('-');
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
 fn write_export(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
-    write!(out, "  export {}: func(", f.name).map_err(invalid_format)?;
+    write!(out, "  export {}: func(", kebab_case(&f.name)).map_err(invalid_format)?;
     for (i, param) in f.params.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
@@ -240,7 +219,7 @@ fn write_export(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
             function: f.name.clone(),
             param: param.name.clone(),
         })?;
-        write!(out, "{}: {}", param.name, wit_ty).map_err(invalid_format)?;
+        write!(out, "{}: {wit_ty}", kebab_case(&param.name)).map_err(invalid_format)?;
     }
     write!(out, ")").map_err(invalid_format)?;
     if let Some(ret) = f.return_type.as_ref()

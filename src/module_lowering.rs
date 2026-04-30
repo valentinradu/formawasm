@@ -12,6 +12,7 @@ use formalang::ir::{
 };
 use wasm_encoder::ValType;
 
+use crate::ident::kebab_case;
 use crate::lower::{FunctionMap, LowerError, MethodMap, lower_function_body_in_module};
 use crate::module::ModuleBuilder;
 use crate::types::{TypeMapError, body_result_types, body_value_type};
@@ -210,7 +211,7 @@ fn emit_function(
     // get exported — name collisions between different impls would
     // otherwise produce a malformed module.
     if impl_self_struct_id.is_none() {
-        builder.export_function(&f.name, wasm_idx);
+        builder.export_function(&kebab_case(&f.name), wasm_idx);
     }
     Ok(())
 }
