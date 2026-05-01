@@ -14,7 +14,7 @@ use formalang::ir::{
     BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget,
     ResolvedType,
 };
-use formawasm::module_lowering::{self, ModuleLowerError};
+use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Engine, Instance, Module, Store};
 
@@ -114,23 +114,38 @@ fn single_function_module_validates() -> TestResult {
 }
 
 #[test]
-fn rejects_extern_function() -> TestResult {
-    let mut f = function(
+fn extern_function_emits_core_wasm_import() -> TestResult {
+    // Phase 4 mc2: extern functions are declared as core-wasm
+    // function imports under the canonical-ABI module name. The
+    // emitted module should validate (signature + import section
+    // are well-formed) and contain the host's name in the import
+    // bytes.
+    let mut host = function(
         "host_log",
-        vec![],
+        vec![(BindingId(0), "n", PrimitiveType::I32)],
         PrimitiveType::I32,
         integer_literal(0, PrimitiveType::I32),
     );
-    f.body = None;
-    f.extern_abi = Some(ExternAbi::C);
+    host.body = None;
+    host.extern_abi = Some(ExternAbi::C);
 
     let mut module = IrModule::new();
-    module.functions.push(f);
+    module.functions.push(host);
 
-    match module_lowering::lower_module(&module) {
-        Err(ModuleLowerError::ExternFunction { name }) if name == "host_log" => Ok(()),
-        other => Err(format!("expected ExternFunction, got {other:?}").into()),
+    let bytes = module_lowering::lower_module(&module)?;
+    validate(&bytes)?;
+
+    // The kebab-cased function name is the import's core-wasm
+    // entry name; it should appear verbatim in the emitted bytes
+    // alongside the canonical-ABI module name.
+    let hay = String::from_utf8_lossy(&bytes);
+    if !hay.contains("host-log") {
+        return Err("missing kebab-case import name in module bytes".into());
     }
+    if !hay.contains("cm32p2") {
+        return Err("missing canonical-ABI import module name".into());
+    }
+    Ok(())
 }
 
 // ── Fibonacci milestone ─────────────────────────────────────────────

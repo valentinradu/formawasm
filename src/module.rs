@@ -10,9 +10,10 @@
 use std::borrow::Cow;
 
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, ExportKind,
-    ExportSection, Function, FunctionSection, GlobalSection, GlobalType, MemArg, MemorySection,
-    MemoryType, Module, RefType, TableSection, TableType, TypeSection, ValType,
+    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
+    ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
+    MemArg, MemorySection, MemoryType, Module, RefType, TableSection, TableType, TypeSection,
+    ValType,
 };
 
 /// Alignment, in bytes, the bump allocator rounds every returned address up to.
@@ -46,6 +47,14 @@ pub const CABI_REALLOC_NAME: &str = "cabi_realloc";
 /// by `wit-component`'s canonical-ABI lifting/lowering and useful for
 /// tests that need to peek at constructed aggregates.
 pub const MEMORY_EXPORT_NAME: &str = "memory";
+
+/// Wasm-import module name `wit-component` lifts world-level imports under.
+///
+/// Per the canonical-ABI 32-bit-platform-2 mangling (see
+/// `wit-component`'s `validation::Standard`), each
+/// `extern_abi`-bearing function in the IR module maps to one
+/// `(IMPORT_MODULE_NAME, kebab-case-fn-name)` core-wasm import.
+pub const IMPORT_MODULE_NAME: &str = "cm32p2";
 
 /// Round-up addend for the bump allocator's alignment math:
 /// `BUMP_ALLOCATOR_ALIGN - 1`. Hardcoded as `i32` to feed
@@ -92,6 +101,11 @@ pub const INITIAL_MEMORY_PAGES: u64 = 1;
 #[non_exhaustive]
 pub struct ModuleBuilder {
     types: TypeSection,
+    imports: ImportSection,
+    /// Number of imported functions declared so far. Local function
+    /// indices start at this offset, since imports occupy the leading
+    /// region of the wasm function-index space.
+    import_function_count: u32,
     functions: FunctionSection,
     tables: TableSection,
     memories: MemorySection,
@@ -149,6 +163,8 @@ impl ModuleBuilder {
 
         Self {
             types: TypeSection::new(),
+            imports: ImportSection::new(),
+            import_function_count: 0,
             functions: FunctionSection::new(),
             tables: TableSection::new(),
             memories,
@@ -283,7 +299,9 @@ impl ModuleBuilder {
 
     /// Declare a function with the given param + result valtypes and a
     /// caller-supplied body. The body must already include the closing
-    /// `end` instruction. Returns the wasm function index.
+    /// `end` instruction. Returns the wasm function index — accounting
+    /// for the imported-function region that occupies the leading
+    /// indices of the wasm function-index space.
     pub fn declare_function_with_body(
         &mut self,
         param_types: &[ValType],
@@ -291,7 +309,8 @@ impl ModuleBuilder {
         body: &Function,
     ) -> u32 {
         let type_index = self.types.len();
-        let func_index = self.functions.len();
+        let local_index = self.functions.len();
+        let func_index = self.import_function_count.saturating_add(local_index);
 
         self.types
             .ty()
@@ -299,6 +318,35 @@ impl ModuleBuilder {
         self.functions.function(type_index);
         self.code.function(body);
 
+        func_index
+    }
+
+    /// Declare a wasm function import under
+    /// `(module_name, fn_name)` with the given signature, and
+    /// return the wasm function index assigned to it.
+    ///
+    /// Imports occupy the leading region of the wasm function-index
+    /// space — the spec orders the import section before the
+    /// function section. Every call to this method must therefore
+    /// happen before any [`Self::declare_function_with_body`] call
+    /// whose returned index the caller intends to compare against an
+    /// import's; the helper itself bumps `import_function_count` so
+    /// subsequent locally-defined functions land at the right offset.
+    pub fn declare_function_import(
+        &mut self,
+        module_name: &str,
+        fn_name: &str,
+        param_types: &[ValType],
+        result_types: &[ValType],
+    ) -> u32 {
+        let type_index = self.types.len();
+        self.types
+            .ty()
+            .function(param_types.iter().copied(), result_types.iter().copied());
+        self.imports
+            .import(module_name, fn_name, EntityType::Function(type_index));
+        let func_index = self.import_function_count;
+        self.import_function_count = self.import_function_count.saturating_add(1);
         func_index
     }
 
@@ -611,10 +659,13 @@ impl ModuleBuilder {
         idx
     }
 
-    /// Number of declared functions so far.
+    /// Total wasm function-index-space size — imports plus locally-
+    /// defined functions. The wasm spec puts imports first, so this
+    /// is `import_function_count + functions.len()`.
     #[must_use]
     pub fn function_count(&self) -> u32 {
-        self.functions.len()
+        self.import_function_count
+            .saturating_add(self.functions.len())
     }
 
     /// Encode the module as a sequence of bytes ready for validation
@@ -643,10 +694,14 @@ impl ModuleBuilder {
         }
 
         let mut module = Module::new();
-        // Section order is fixed by the wasm spec: type, function,
-        // table, memory, global, export, element, code, data.
+        // Section order is fixed by the wasm spec: type, import,
+        // function, table, memory, global, export, element, code,
+        // data.
         if !self.types.is_empty() {
             module.section(&self.types);
+        }
+        if !self.imports.is_empty() {
+            module.section(&self.imports);
         }
         if !self.functions.is_empty() {
             module.section(&self.functions);

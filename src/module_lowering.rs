@@ -21,7 +21,7 @@ use crate::lower::{
     ClosureCallContext, FunctionMap, LowerError, MethodMap, VTableContext,
     lower_function_body_in_module,
 };
-use crate::module::ModuleBuilder;
+use crate::module::{IMPORT_MODULE_NAME, ModuleBuilder};
 use crate::string_pool::{StringPool, StringPoolError};
 use crate::types::{TypeMapError, body_result_types, body_value_type};
 
@@ -53,10 +53,12 @@ pub enum ModuleLowerError {
     #[error(transparent)]
     Lower(#[from] LowerError),
 
-    /// A function carries no body (likely an `extern` declaration).
-    /// Externs land in Phase 4 alongside cross-module imports.
-    #[error("function '{name}' has no body — extern functions are not yet supported (Phase 4)")]
-    ExternFunction {
+    /// A non-extern function reached body emission with `body: None`.
+    /// `extern_abi`-bearing functions are declared as imports up-
+    /// front in [`lower_module`] and never reach this stage; a
+    /// `body: None` here means the IR carries a malformed function.
+    #[error("function '{name}' has no body and is not declared `extern`")]
+    MissingFunctionBody {
         /// Source-level name of the offending function.
         name: String,
     },
@@ -138,6 +140,29 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     let mut string_pool = StringPool::new();
     collect_string_literals(module, &mut string_pool)?;
 
+    let mut function_map = FunctionMap::new();
+
+    // Imports first — every `extern_abi`-bearing top-level function
+    // becomes one core-wasm function import under
+    // `IMPORT_MODULE_NAME`. Imports occupy the leading region of the
+    // wasm function-index space, so they must be declared before the
+    // bump allocator and other runtime helpers (which are local
+    // function definitions and consume the indices that follow).
+    for (i, f) in module.functions.iter().enumerate() {
+        if !f.is_extern() {
+            continue;
+        }
+        let id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        let (params, results) = lower_function_signature(f)?;
+        let wasm_idx = builder.declare_function_import(
+            IMPORT_MODULE_NAME,
+            &kebab_case(&f.name),
+            &params,
+            &results,
+        );
+        function_map.insert(FunctionId(id_raw), wasm_idx);
+    }
+
     let bump_idx = builder.declare_bump_allocator();
     // The string runtime helpers (__str_eq, __str_concat) are
     // unconditionally declared after the bump allocator so their
@@ -154,23 +179,33 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         .checked_add(1)
         .ok_or(ModuleLowerError::TooManyFunctions)?;
 
-    let mut function_map = FunctionMap::new();
-    for (i, _) in module.functions.iter().enumerate() {
+    // Locally-defined user functions follow the runtime helpers.
+    // Walk `module.functions` again, this time assigning a wasm
+    // index only to non-extern entries; their indices ladder up
+    // from `user_offset` in source-declaration order.
+    let mut local_counter: u32 = 0;
+    for (i, f) in module.functions.iter().enumerate() {
+        if f.is_extern() {
+            continue;
+        }
         let id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
-        let wasm_idx = id_raw
-            .checked_add(user_offset)
+        let wasm_idx = user_offset
+            .checked_add(local_counter)
             .ok_or(ModuleLowerError::TooManyFunctions)?;
         function_map.insert(FunctionId(id_raw), wasm_idx);
+        local_counter = local_counter
+            .checked_add(1)
+            .ok_or(ModuleLowerError::TooManyFunctions)?;
     }
 
     // Pre-assign wasm function indices for every method in every
     // impl, so MethodCall lowering can resolve targets without
-    // re-walking the impls.
+    // re-walking the impls. The methods region begins right after
+    // the locally-defined user functions; only non-extern user
+    // functions take indices in that region (extern functions live
+    // in the import region ahead of the runtime helpers).
     let methods_offset = user_offset
-        .checked_add(
-            u32::try_from(module.functions.len())
-                .map_err(|_| ModuleLowerError::TooManyFunctions)?,
-        )
+        .checked_add(local_counter)
         .ok_or(ModuleLowerError::TooManyFunctions)?;
     let mut method_map = MethodMap::new();
     let mut method_counter: u32 = 0;
@@ -209,6 +244,9 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     });
 
     for f in &module.functions {
+        if f.is_extern() {
+            continue;
+        }
         emit_function(
             f,
             &mut builder,
@@ -917,15 +955,10 @@ fn emit_function(
     str_eq: u32,
     str_concat: u32,
 ) -> Result<(), ModuleLowerError> {
-    if f.is_extern() {
-        return Err(ModuleLowerError::ExternFunction {
-            name: f.name.clone(),
-        });
-    }
     let body_expr = f
         .body
         .as_ref()
-        .ok_or_else(|| ModuleLowerError::ExternFunction {
+        .ok_or_else(|| ModuleLowerError::MissingFunctionBody {
             name: f.name.clone(),
         })?;
 
@@ -1152,6 +1185,18 @@ fn detect_self_struct(f: &IrFunction) -> Option<StructId> {
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => None,
     }
+}
+
+/// Build the wasm `(params, results)` signature for `f` without
+/// allocating `BindingId` slots. Used by the import-declaration
+/// path, where the imported function has no body and so no
+/// parameter binding map is required.
+fn lower_function_signature(
+    f: &IrFunction,
+) -> Result<(Vec<ValType>, Vec<ValType>), ModuleLowerError> {
+    let (params, _) = lower_params(f)?;
+    let results = body_result_types(f.return_type.as_ref())?;
+    Ok((params, results))
 }
 
 fn lower_params(f: &IrFunction) -> Result<(Vec<ValType>, Vec<ParamBinding>), ModuleLowerError> {
