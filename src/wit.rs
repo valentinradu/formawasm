@@ -95,9 +95,11 @@ pub enum WitEmitError {
 /// The result is the contents of a single `.wit` file containing one
 /// `package` line, one `record` per public struct in
 /// `surface.exported_structs`, one `variant` per public enum in
-/// `surface.exported_enums`, and one `world` declaration with one
-/// `export` per function in `surface.exports`. Imports surface in
-/// Phase 4.
+/// `surface.exported_enums`, and one `world` declaration carrying:
+/// one `import` per `extern_abi`-bearing function in
+/// `surface.imports` and one `export` per function in
+/// `surface.exports`. Cross-module references via
+/// `ResolvedType::External` follow in Phase 4 mc3.
 pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, WitEmitError> {
     let mut out = String::new();
     writeln!(out, "package {PACKAGE};").map_err(invalid_format)?;
@@ -141,6 +143,17 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
             out.push_str(n);
         }
         writeln!(out, "}};").map_err(invalid_format)?;
+    }
+
+    for &fid in &surface.imports {
+        let f = module
+            .functions
+            .get(fid.0 as usize)
+            .ok_or(WitEmitError::ExportOutOfRange {
+                index: fid.0,
+                len: module.functions.len(),
+            })?;
+        write_import(&mut out, f)?;
     }
 
     for &fid in &surface.exports {
@@ -203,7 +216,18 @@ fn write_variant(out: &mut String, e: &IrEnum) -> Result<(), WitEmitError> {
 }
 
 fn write_export(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
-    write!(out, "  export {}: func(", kebab_case(&f.name)).map_err(invalid_format)?;
+    write_world_func(out, f, "export")
+}
+
+fn write_import(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
+    write_world_func(out, f, "import")
+}
+
+/// Emit a single `import` or `export` line for `f` inside the world
+/// block. The signature shape is identical for both directions —
+/// only the leading keyword differs.
+fn write_world_func(out: &mut String, f: &IrFunction, kind: &str) -> Result<(), WitEmitError> {
+    write!(out, "  {kind} {}: func(", kebab_case(&f.name)).map_err(invalid_format)?;
     for (i, param) in f.params.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");

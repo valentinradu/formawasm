@@ -4,7 +4,7 @@
 //! non-primitive rejection path, and a round-trip back through
 //! `wit_parser::Resolve` to confirm the emitted text is real WIT.
 
-use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
+use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
     BindingId, FunctionId, IrEnum, IrEnumVariant, IrField, IrFunction, IrFunctionParam, IrModule,
     IrStruct, ResolvedType, StructId,
@@ -847,6 +847,70 @@ fn emitted_wit_round_trips_through_wit_parser() -> TestResult {
     let world = resolve.select_world(&[pkg], Some(WORLD_NAME))?;
 
     let world = resolve.worlds.get(world).ok_or("missing world id")?;
+    if world.exports.len() != 1 {
+        return Err(format!("expected exactly 1 export, got {}", world.exports.len()).into());
+    }
+    Ok(())
+}
+
+#[test]
+fn extern_function_emits_import_with_signature() -> TestResult {
+    let mut f = function(
+        "host-add",
+        vec![
+            (BindingId(0), "a", primitive(PrimitiveType::I32)),
+            (BindingId(1), "b", primitive(PrimitiveType::I32)),
+        ],
+        Some(primitive(PrimitiveType::I32)),
+    );
+    f.extern_abi = Some(ExternAbi::C);
+
+    let mut module = IrModule::new();
+    module.functions.push(f);
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "import host-add: func(a: s32, b: s32) -> s32;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    if wit.contains("export host-add") {
+        return Err(format!("extern fn must not be exported: {wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn import_signature_round_trips_through_wit_parser() -> TestResult {
+    let mut host = function(
+        "host-add",
+        vec![
+            (BindingId(0), "a", primitive(PrimitiveType::I32)),
+            (BindingId(1), "b", primitive(PrimitiveType::I32)),
+        ],
+        Some(primitive(PrimitiveType::I32)),
+    );
+    host.extern_abi = Some(ExternAbi::C);
+
+    let mut module = IrModule::new();
+    module.functions.push(host);
+    module.functions.push(function(
+        "use-host",
+        vec![],
+        Some(primitive(PrimitiveType::I32)),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    let world_id = resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    let world = resolve.worlds.get(world_id).ok_or("missing world id")?;
+    if world.imports.len() != 1 {
+        return Err(format!("expected exactly 1 import, got {}", world.imports.len()).into());
+    }
     if world.exports.len() != 1 {
         return Err(format!("expected exactly 1 export, got {}", world.exports.len()).into());
     }
