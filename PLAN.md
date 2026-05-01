@@ -7,7 +7,7 @@ first, then come back here for the "what to do now" view.
 
 ---
 
-## Status (as of 2026-04-30 — Phase 2 in progress)
+## Status (as of 2026-05-01 — Phase 2 complete; Phase 3 next)
 
 **Upstream — formalang at `~/projects/formalang`:**
 
@@ -140,7 +140,7 @@ the residual case (it'd indicate the caller forgot to run the pass).
 
 ---
 
-**Phase 2 — `Optional<T>` is COMPLETE** (closed out 2026-04-30):
+**Phase 2 is COMPLETE** (closed out 2026-05-01):
 
 - ✅ mc1 (`5a0ec1b`): `plan_optional` layout planner — uniform
   `{ tag: i32, payload: T }` record; `Optional<Never>` is the static
@@ -179,26 +179,54 @@ the residual case (it'd indicate the caller forgot to run the pass).
   `OptionalField` LayoutError variant is gone — the `optional: bool`
   AST flag and resolved `Optional(T)` type now coexist without forcing
   a rejection.
+- ✅ mc8 (`e60c020`): `plan_string` returns the canonical
+  `{ ptr: i32, len: i32 }` 8-byte / 4-aligned header. Strings are
+  immutable so there is no `cap` slot.
+- ✅ mc9 (`e2d57ce`): `Literal::String` seeds bytes + header into the
+  wasm `data` section. New `StringPool` interns every literal during
+  a pre-walk; `ModuleBuilder::finish` emits the active data segment
+  and bumps `HEAP_BASE` past it. `body_value_type` maps String to
+  i32 (header pointer); the literal lowers to a single `i32.const
+  <header_offset>`.
+- ✅ mc10 (`35addd6`): `BinaryOp::Eq / Ne` on String operands routes
+  through a `__str_eq` runtime helper. `Eq` calls it directly; `Ne`
+  follows up with `i32.eqz`.
+- ✅ mc11 (`f20aec0`): `BinaryOp::Add` on String operands routes
+  through `__str_concat` — allocates buffer + header,
+  `memory.copy`s both inputs in, returns the new header pointer.
+- ✅ mc12 (`69c4290`): WIT mapping `String` / `Path` / `Regex` →
+  `string` plus a canonical-ABI export wrapper that splits each
+  string / list parameter into the host's expected `(ptr, len)`
+  pair. `cabi_realloc` is exported so the runtime can allocate
+  inbound buffers in our linear memory. End-to-end roundtrip
+  through wasmtime's component runtime.
+- ✅ mc13 (`a4c1b99`): `Dictionary<K, V>` v1 — literal construction
+  + linear-scan lookup. v1 layout is `{ ptr, len, cap }` plus a
+  buffer of pointers, each pointing to a `(k, v)` pair tuple. String
+  keys compare via `__str_eq`; missing keys trap. Layout planner
+  accepts String / Path / Regex as 4-byte pointer-sized fields,
+  optional payloads, and range bounds.
+- ✅ mc14 (`1f76f6d`): WIT mapping `Dictionary<K, V>` →
+  `list<tuple<K, V>>` (component-model tuple type at the boundary).
+- ✅ Phase 2 milestone (`9aa9ef2`): `tests/milestone_2.rs` —
+  `greet(role: String) -> String` with a `Dictionary<String, String>`
+  literal lookup, an `I32?` Some-wrap site, and chained string
+  concatenation. Round-trips three roles through wasmtime's
+  component runtime.
 
-## Immediate work — Phase 2 continued
+## Immediate work — Phase 3: virtual dispatch (~4 commits)
 
-The Optional<T> story is closed. README's Phase 2 roadmap continues:
+Per README's roadmap (line 299):
 
-- String memory layout `{ ptr, len }`, data-section seeding for
-  literals, equality runtime helper.
-- Lowering for `BinaryOp::Add` on `String` (concatenation runtime helper).
-- WIT mapping `string`, plus a round-trip test through the component
-  runtime with a `string -> string` export.
-- `Path` / `Regex` mapped to `string` at the boundary, identity
-  preserved internally.
-- Dictionary as sorted-pairs array v1: literal lowering, lookup
-  runtime helper.
-- WIT mapping `Dictionary<K, V>` → `list<tuple<K, V>>`.
+1. Vtable memory layout per trait (table of funcrefs).
+2. Element-section entries per `impl Trait for Type`.
+3. `DispatchKind::Virtual` lowering: load funcref from vtable +
+   `call_indirect`.
+4. **Milestone**: trait-method call resolves across two `impl`s
+   under wasmtime.
 
-The convenience cleanups from "Known restrictions" can land
-opportunistically alongside whichever Phase 2 mc touches the same
-area (e.g. kebab-case the function-name path the next time `wit.rs`
-gets meaningful changes).
+After Phase 3 closes, Phase 4 picks up `extern_abi` imports + cross-
+module `ResolvedType::External` references.
 
 ---
 
