@@ -11,13 +11,15 @@ use std::collections::HashMap;
 use formalang::ast::Literal;
 use formalang::ir::{
     BindingId, FunctionId, ImplId, ImplTarget, IrBlockStatement, IrExpr, IrFunction,
-    IrFunctionParam, IrImpl, IrModule, MethodIdx, ResolvedType, StructId,
+    IrFunctionParam, IrImpl, IrModule, MethodIdx, ResolvedType, StructId, TraitId,
 };
 use wasm_encoder::ValType;
 
 use crate::ident::kebab_case;
+use crate::layout::VTABLE_SLOT_ALIGN;
 use crate::lower::{
-    ClosureCallContext, FunctionMap, LowerError, MethodMap, lower_function_body_in_module,
+    ClosureCallContext, FunctionMap, LowerError, MethodMap, VTableContext,
+    lower_function_body_in_module,
 };
 use crate::module::ModuleBuilder;
 use crate::string_pool::{StringPool, StringPoolError};
@@ -26,6 +28,21 @@ use crate::types::{TypeMapError, body_result_types, body_value_type};
 /// `(BindingId, ValType)` pair recording one function parameter's
 /// binding identity alongside its wasm value type.
 type ParamBinding = (BindingId, ValType);
+
+/// Hashable encoding of an [`ImplTarget`].
+///
+/// `ImplTarget` itself doesn't implement `Hash` upstream, so vtable
+/// keying flattens it into a `(tag, raw_id)` tuple — `tag = 0` for a
+/// struct target, `tag = 1` for an enum target.
+pub(crate) type ImplTargetKey = (u32, u32);
+
+/// Encode an [`ImplTarget`] into the vtable-key form.
+pub(crate) const fn impl_target_key(t: ImplTarget) -> ImplTargetKey {
+    match t {
+        ImplTarget::Struct(id) => (0, id.0),
+        ImplTarget::Enum(id) => (1, id.0),
+    }
+}
 
 /// Errors produced by [`lower_module`].
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +87,31 @@ pub enum ModuleLowerError {
     /// data size would exceed `u32::MAX`.
     #[error(transparent)]
     StringPool(#[from] StringPoolError),
+
+    /// An `impl Trait for Type` references a `TraitId` that the
+    /// module's `traits` vector does not contain. Indicates corrupt
+    /// IR.
+    #[error("TraitId {0:?} is not present in IrModule.traits")]
+    UnknownTrait(TraitId),
+
+    /// A trait method declared by `IrTrait.methods` has no matching
+    /// entry in an `impl Trait for Type` block. Means the impl is
+    /// incomplete; semantic analysis upstream should have rejected it.
+    #[error("trait '{trait_name}' method '{method}' is missing in impl for {target:?}")]
+    MissingTraitMethod {
+        /// Containing trait name.
+        trait_name: String,
+        /// Source-level method name on the trait.
+        method: String,
+        /// Target the impl applies to.
+        target: ImplTarget,
+    },
+
+    /// The static-data segment would exceed `u32::MAX` bytes after
+    /// appending vtable bytes. Linear-memory offsets are `u32` so
+    /// every vtable byte must fit in that range.
+    #[error("static data segment exceeds u32::MAX after appending vtable bytes")]
+    VtableDataOverflow,
 }
 
 /// Walk `module` and return the encoded core-Wasm bytes.
@@ -82,6 +124,10 @@ pub enum ModuleLowerError {
 /// call-site lowerings. [`FunctionMap`] hides the user-offset shift.
 ///
 /// Nested `module.modules` are still not walked.
+#[expect(
+    clippy::too_many_lines,
+    reason = "module-level orchestration sequences string interning, function/method index assignment, closure plumbing, and vtable plumbing — splitting hides the dependency order between them"
+)]
 pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     let mut builder = ModuleBuilder::new();
 
@@ -152,6 +198,16 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         type_indices: &p.type_indices,
     });
 
+    let string_data_len = u32::try_from(string_pool.data().len())
+        .map_err(|_| ModuleLowerError::VtableDataOverflow)?;
+    let vtable_plumbing =
+        build_vtable_plumbing(&mut builder, module, &method_map, string_data_len)?;
+    let vtable_ctx = vtable_plumbing.as_ref().map(|p| VTableContext {
+        table_idx: p.table_idx,
+        vtable_offsets: &p.vtable_offsets,
+        call_type_indices: &p.call_type_indices,
+    });
+
     for f in &module.functions {
         emit_function(
             f,
@@ -162,6 +218,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             bump_idx,
             None,
             closure_ctx.as_ref(),
+            vtable_ctx.as_ref(),
             string_pool.lookup_map(),
             str_eq_idx,
             str_concat_idx,
@@ -181,12 +238,25 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             module,
             bump_idx,
             closure_ctx.as_ref(),
+            vtable_ctx.as_ref(),
             string_pool.lookup_map(),
             str_eq_idx,
             str_concat_idx,
         )?;
     }
-    builder.set_string_data(string_pool.data().to_vec());
+
+    let mut static_data = string_pool.data().to_vec();
+    if let Some(p) = vtable_plumbing.as_ref() {
+        // Pad string-data up to the vtable region's start offset, then
+        // append the vtable bytes. The base was computed against the
+        // string_data_len snapshot above, so the padding here mirrors
+        // the alignment math `build_vtable_plumbing` already did.
+        while static_data.len() < p.vtable_data_base as usize {
+            static_data.push(0);
+        }
+        static_data.extend_from_slice(&p.vtable_data);
+    }
+    builder.set_static_data(static_data);
     Ok(builder.finish())
 }
 
@@ -461,6 +531,213 @@ fn register_closure_call_type(
     Ok(builder.declare_type(&params, &results))
 }
 
+/// Owned plumbing for virtual trait-method dispatch.
+///
+/// Built once after the function/method index space has been laid
+/// down, before any function body is lowered. The owned maps back
+/// the [`VTableContext`] borrows that flow into per-function
+/// lowering — keeping them owned at this scope avoids dangling
+/// borrows against the `ModuleBuilder` field accesses that come
+/// later.
+struct VTablePlumbing {
+    table_idx: u32,
+    vtable_offsets: HashMap<(TraitId, ImplTargetKey), u32>,
+    call_type_indices: HashMap<(TraitId, MethodIdx), u32>,
+    /// Bytes to append to the static-data segment. Each impl's
+    /// vtable is `methods * 4` bytes of i32 funcref-table indices,
+    /// laid out back-to-back at the offsets recorded in
+    /// [`Self::vtable_offsets`].
+    vtable_data: Vec<u8>,
+    /// Absolute byte offset of [`Self::vtable_data`] within the
+    /// final static-data segment. Equals
+    /// `align_up(string_data.len(), VTABLE_SLOT_ALIGN)`.
+    vtable_data_base: u32,
+}
+
+/// Walk `module` and:
+///
+/// 1. Assign each method on every `impl Trait for Type` (non-extern)
+///    a slot inside a fresh funcref table.
+/// 2. Build per-`(trait_id, target)` vtable bytes — for each method
+///    declared on the trait, look up the matching impl method by
+///    name and append its funcref-table slot index as an i32.
+/// 3. Pre-register a wasm `func` type per trait method so virtual
+///    call sites can `call_indirect` against it.
+///
+/// Returns `None` when the module has no trait impls — the caller
+/// leaves the [`VTableContext`] unset, and any stray
+/// [`formalang::ir::DispatchKind::Virtual`] call site falls through
+/// to a typed [`LowerError::MissingContext`] downstream.
+fn build_vtable_plumbing(
+    builder: &mut ModuleBuilder,
+    module: &IrModule,
+    method_map: &MethodMap,
+    string_data_len: u32,
+) -> Result<Option<VTablePlumbing>, ModuleLowerError> {
+    let mut method_funcref_indices: HashMap<(ImplId, MethodIdx), u32> = HashMap::new();
+    let mut method_table_func_indices: Vec<u32> = Vec::new();
+    let mut next_slot: u32 = 0;
+    for (i, imp) in module.impls.iter().enumerate() {
+        if imp.is_extern || imp.trait_ref.is_none() {
+            continue;
+        }
+        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        for (j, _) in imp.functions.iter().enumerate() {
+            let method_idx_raw =
+                u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            let key = (ImplId(impl_id_raw), MethodIdx(method_idx_raw));
+            let wasm_func_idx = method_map
+                .get(key)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            method_funcref_indices.insert(key, next_slot);
+            method_table_func_indices.push(wasm_func_idx);
+            next_slot = next_slot
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+        }
+    }
+
+    if next_slot == 0 {
+        return Ok(None);
+    }
+
+    let table_idx = builder.declare_method_table(next_slot);
+    builder.populate_method_table(&method_table_func_indices);
+
+    // Compute the absolute byte offset where the first vtable lives.
+    // Vtables come after the string-pool data inside the same static
+    // data segment; each cell is 4-aligned, so we round the string
+    // segment's length up to that boundary.
+    let vtable_data_base = align_up_u32(string_data_len, VTABLE_SLOT_ALIGN)
+        .ok_or(ModuleLowerError::VtableDataOverflow)?;
+
+    let mut vtable_offsets: HashMap<(TraitId, ImplTargetKey), u32> = HashMap::new();
+    let mut vtable_data: Vec<u8> = Vec::new();
+    for (i, imp) in module.impls.iter().enumerate() {
+        if imp.is_extern {
+            continue;
+        }
+        let Some(trait_ref) = imp.trait_ref.as_ref() else {
+            continue;
+        };
+        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        let trait_id = trait_ref.trait_id;
+        let trait_decl = module
+            .traits
+            .get(trait_id.0 as usize)
+            .ok_or(ModuleLowerError::UnknownTrait(trait_id))?;
+
+        let local_offset =
+            u32::try_from(vtable_data.len()).map_err(|_| ModuleLowerError::VtableDataOverflow)?;
+        let absolute_offset = vtable_data_base
+            .checked_add(local_offset)
+            .ok_or(ModuleLowerError::VtableDataOverflow)?;
+        vtable_offsets.insert((trait_id, impl_target_key(imp.target)), absolute_offset);
+
+        for trait_method in &trait_decl.methods {
+            let (method_idx_in_impl, _) = imp
+                .functions
+                .iter()
+                .enumerate()
+                .find(|(_, f)| f.name == trait_method.name)
+                .ok_or_else(|| ModuleLowerError::MissingTraitMethod {
+                    trait_name: trait_decl.name.clone(),
+                    method: trait_method.name.clone(),
+                    target: imp.target,
+                })?;
+            let m_idx_raw = u32::try_from(method_idx_in_impl)
+                .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            let key = (ImplId(impl_id_raw), MethodIdx(m_idx_raw));
+            let funcref_slot = method_funcref_indices
+                .get(&key)
+                .copied()
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            vtable_data.extend_from_slice(&funcref_slot.to_le_bytes());
+        }
+    }
+
+    let mut call_type_indices: HashMap<(TraitId, MethodIdx), u32> = HashMap::new();
+    for (i, t) in module.traits.iter().enumerate() {
+        let trait_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        for (j, sig) in t.methods.iter().enumerate() {
+            let method_idx_raw =
+                u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            let type_idx = register_trait_method_call_type(sig, builder)?;
+            call_type_indices.insert((TraitId(trait_id_raw), MethodIdx(method_idx_raw)), type_idx);
+        }
+    }
+
+    Ok(Some(VTablePlumbing {
+        table_idx,
+        vtable_offsets,
+        call_type_indices,
+        vtable_data,
+        vtable_data_base,
+    }))
+}
+
+/// Register a wasm `func` type for `sig`'s `call_indirect` signature.
+///
+/// The first parameter is always an i32 receiver pointer (the trait
+/// method's implicit `self`). Subsequent parameters use each
+/// declared param's body-side wasm value type. The return type
+/// follows [`body_value_type`] — `None` (Never / unit) means a
+/// zero-result type.
+fn register_trait_method_call_type(
+    sig: &formalang::ir::IrFunctionSig,
+    builder: &mut ModuleBuilder,
+) -> Result<u32, ModuleLowerError> {
+    let mut params: Vec<ValType> = Vec::with_capacity(sig.params.len());
+    let mut iter = sig.params.iter();
+    let first = iter.next();
+    if let Some(p) = first {
+        if p.name == "self" {
+            params.push(ValType::I32);
+        } else {
+            // Trait method without `self` — treat the leading param
+            // like a regular one. Phase 3's milestone exclusively
+            // exercises self-bearing methods, but the code path stays
+            // total over the IR shape.
+            let ty =
+                p.ty.as_ref()
+                    .ok_or_else(|| ModuleLowerError::MissingParamType {
+                        function: sig.name.clone(),
+                        name: p.name.clone(),
+                    })?;
+            let vt = body_value_type(ty)?.ok_or_else(|| {
+                ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: format!("trait-method parameter of type {ty:?} (Never)"),
+                })
+            })?;
+            params.push(vt);
+        }
+    }
+    for p in iter {
+        let ty =
+            p.ty.as_ref()
+                .ok_or_else(|| ModuleLowerError::MissingParamType {
+                    function: sig.name.clone(),
+                    name: p.name.clone(),
+                })?;
+        let vt = body_value_type(ty)?.ok_or_else(|| {
+            ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                kind: format!("trait-method parameter of type {ty:?} (Never)"),
+            })
+        })?;
+        params.push(vt);
+    }
+    let results = body_result_types(sig.return_type.as_ref())?;
+    Ok(builder.declare_type(&params, &results))
+}
+
+/// Round `value` up to the next multiple of `align` (must be a
+/// power of two). Returns `None` on overflow.
+fn align_up_u32(value: u32, align: u32) -> Option<u32> {
+    let mask = align.checked_sub(1)?;
+    let added = value.checked_add(mask)?;
+    Some(added & !mask)
+}
+
 /// Walk every child sub-expression of `expr` and apply `visit` to
 /// each. Used by [`collect_call_closure_types`] so the per-closure
 /// pre-registration walk doesn't need its own exhaustive variant
@@ -594,6 +871,7 @@ fn emit_impl(
     module: &IrModule,
     bump_allocator: u32,
     closure_ctx: Option<&ClosureCallContext<'_>>,
+    vtable_ctx: Option<&VTableContext<'_>>,
     string_pool: &HashMap<String, u32>,
     str_eq: u32,
     str_concat: u32,
@@ -612,6 +890,7 @@ fn emit_impl(
             bump_allocator,
             self_struct_id,
             closure_ctx,
+            vtable_ctx,
             string_pool,
             str_eq,
             str_concat,
@@ -633,6 +912,7 @@ fn emit_function(
     bump_allocator: u32,
     impl_self_struct_id: Option<StructId>,
     closure_ctx: Option<&ClosureCallContext<'_>>,
+    vtable_ctx: Option<&VTableContext<'_>>,
     string_pool: &HashMap<String, u32>,
     str_eq: u32,
     str_concat: u32,
@@ -663,6 +943,7 @@ fn emit_function(
         bump_allocator,
         self_struct_id,
         closure_ctx,
+        vtable_ctx,
         string_pool,
         str_eq,
         str_concat,

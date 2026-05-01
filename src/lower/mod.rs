@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use formalang::ast::PrimitiveType;
 use formalang::ir::{
-    BindingId, FunctionId, ImplId, IrExpr, IrModule, MethodIdx, ResolvedType, StructId,
+    BindingId, FunctionId, ImplId, IrExpr, IrModule, MethodIdx, ResolvedType, StructId, TraitId,
 };
 use thiserror::Error;
 use wasm_encoder::{InstructionSink, ValType};
@@ -237,6 +237,39 @@ pub enum LowerError {
     /// encountered. Virtual dispatch lands in Phase 3.
     #[error("virtual method dispatch is not yet supported (Phase 3)")]
     VirtualMethodCall,
+
+    /// A virtual `MethodCall` whose `(trait_id, impl_target)` pair
+    /// has no vtable registered. Indicates the module-level pre-walk
+    /// missed the impl, or the receiver type is one the layout
+    /// planner doesn't recognise as a vtable target.
+    #[error("no vtable registered for trait {trait_id:?} on target tag={}, id={}", target.0, target.1)]
+    UnknownVtable {
+        /// The trait whose vtable is missing.
+        trait_id: TraitId,
+        /// The impl-target key the lookup was keyed on.
+        target: ImplTargetKey,
+    },
+
+    /// A virtual `MethodCall` whose `(trait_id, method_idx)` pair has
+    /// no `call_indirect` type-index registered. Indicates the module-
+    /// level pre-walk missed the trait method.
+    #[error("no call_indirect type registered for trait {trait_id:?} method {method_idx:?}")]
+    UnknownVirtualMethodType {
+        /// Trait id.
+        trait_id: TraitId,
+        /// Method index inside the trait's `methods` vector.
+        method_idx: MethodIdx,
+    },
+
+    /// A virtual `MethodCall` whose receiver type cannot be resolved
+    /// to an `ImplTarget`. Phase 3 supports concrete struct / enum
+    /// receivers; trait-object receivers stay rejected (semantic
+    /// analysis bans `Trait` as a value).
+    #[error("virtual method dispatch on receiver type {ty:?} is not supported")]
+    UnsupportedVirtualReceiver {
+        /// The offending receiver's resolved type.
+        ty: ResolvedType,
+    },
 }
 
 /// Mapping from a module-scope `FunctionId` to its wasm function
@@ -433,6 +466,20 @@ pub struct LowerContext<'a> {
     /// Wasm function index of the `__str_concat` runtime helper. Used
     /// by `BinaryOp::Add` lowerings on `String` operands.
     pub str_concat: Option<u32>,
+    /// Wasm `Table` index of the method funcref table declared by the
+    /// module builder for virtual trait-method dispatch. `None` when
+    /// the module has no trait impls; `lower_method_call` surfaces
+    /// [`LowerError::MissingContext`] on this field if a virtual call
+    /// site reaches it without the table available.
+    pub method_table: Option<u32>,
+    /// Maps `(trait_id, impl_target_key)` to the absolute byte offset
+    /// of the matching vtable inside the static-data segment. The
+    /// cell at `vtable_offset + method_idx * VTABLE_SLOT_SIZE` stores
+    /// the funcref-table slot index of the method body.
+    pub vtable_offsets: Option<&'a HashMap<(TraitId, ImplTargetKey), u32>>,
+    /// Maps `(trait_id, method_idx)` to the wasm type-section index
+    /// for that method's `call_indirect` signature.
+    pub virtual_call_type_indices: Option<&'a HashMap<(TraitId, MethodIdx), u32>>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -456,6 +503,9 @@ impl<'a> LowerContext<'a> {
             string_pool: None,
             str_eq: None,
             str_concat: None,
+            method_table: None,
+            vtable_offsets: None,
+            virtual_call_type_indices: None,
         }
     }
 
@@ -624,6 +674,79 @@ impl<'a> LowerContext<'a> {
         map.get(&id).copied().ok_or(LowerError::UnknownFunction(id))
     }
 
+    /// Attach the method funcref-table index. Required for lowering
+    /// any [`formalang::ir::DispatchKind::Virtual`] call site.
+    #[must_use]
+    pub const fn with_method_table(mut self, idx: u32) -> Self {
+        self.method_table = Some(idx);
+        self
+    }
+
+    /// Attach the per-`(trait_id, impl_target_key)` vtable offset
+    /// table.
+    #[must_use]
+    pub const fn with_vtable_offsets(
+        mut self,
+        offsets: &'a HashMap<(TraitId, ImplTargetKey), u32>,
+    ) -> Self {
+        self.vtable_offsets = Some(offsets);
+        self
+    }
+
+    /// Attach the per-trait-method `call_indirect` type-index map.
+    #[must_use]
+    pub const fn with_virtual_call_type_indices(
+        mut self,
+        indices: &'a HashMap<(TraitId, MethodIdx), u32>,
+    ) -> Self {
+        self.virtual_call_type_indices = Some(indices);
+        self
+    }
+
+    /// Method funcref table index, or surface
+    /// [`LowerError::MissingContext`] if unset.
+    pub fn method_table_index(&self) -> Result<u32, LowerError> {
+        self.method_table.ok_or(LowerError::MissingContext {
+            what: "method_table",
+        })
+    }
+
+    /// Look up the absolute byte offset of the
+    /// `(trait_id, impl_target_key)` vtable, or surface a typed
+    /// error when the map is unset / the key is missing.
+    pub fn vtable_offset(
+        &self,
+        trait_id: TraitId,
+        target: ImplTargetKey,
+    ) -> Result<u32, LowerError> {
+        let map = self.vtable_offsets.ok_or(LowerError::MissingContext {
+            what: "vtable_offsets",
+        })?;
+        map.get(&(trait_id, target))
+            .copied()
+            .ok_or(LowerError::UnknownVtable { trait_id, target })
+    }
+
+    /// Look up the `call_indirect` type-section index for a trait
+    /// method, or surface a typed error if missing.
+    pub fn virtual_call_type_index(
+        &self,
+        trait_id: TraitId,
+        method_idx: MethodIdx,
+    ) -> Result<u32, LowerError> {
+        let map = self
+            .virtual_call_type_indices
+            .ok_or(LowerError::MissingContext {
+                what: "virtual_call_type_indices",
+            })?;
+        map.get(&(trait_id, method_idx))
+            .copied()
+            .ok_or(LowerError::UnknownVirtualMethodType {
+                trait_id,
+                method_idx,
+            })
+    }
+
     /// Borrow the IR module or surface
     /// [`LowerError::MissingContext`] if the field is unset.
     pub fn module(&self) -> Result<&'a IrModule, LowerError> {
@@ -672,6 +795,40 @@ pub struct ClosureCallContext<'a> {
     /// Maps a closure's `ResolvedType::Closure { ... }` to the wasm
     /// type-section index for the matching `call_indirect` signature.
     pub type_indices: &'a HashMap<ResolvedType, u32>,
+}
+
+/// Hashable encoding of an `ImplTarget` used as part of the vtable
+/// lookup key. `tag = 0` for a struct target, `tag = 1` for an enum
+/// target; the second field is the raw struct or enum id.
+pub type ImplTargetKey = (u32, u32);
+
+/// Bundle of virtual-dispatch plumbing handed from the module-level
+/// lowering pass into [`lower_function_body_in_module`].
+///
+/// Built once per module after the per-impl method funcref table has
+/// been declared and the vtable bytes seeded into the static-data
+/// segment; every function body lowered against the same module
+/// shares this context. Per-call lookups read from these maps to
+/// resolve a [`formalang::ir::DispatchKind::Virtual`] site to a
+/// concrete `(vtable_base, method_funcref_table_idx, type_idx)`
+/// triple.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain bundle consumed by the function-body planner"
+)]
+#[derive(Debug, Clone, Copy)]
+pub struct VTableContext<'a> {
+    /// Wasm-table index of the method funcref table populated with
+    /// every trait-impl method body.
+    pub table_idx: u32,
+    /// Absolute byte offset of each `(trait_id, impl_target_key)`
+    /// vtable inside the static-data segment. The cell at
+    /// `vtable_offset + method_idx * VTABLE_SLOT_SIZE` stores the
+    /// funcref-table index of that method's body.
+    pub vtable_offsets: &'a HashMap<(TraitId, ImplTargetKey), u32>,
+    /// Wasm type-section index for each trait method's
+    /// `call_indirect` signature.
+    pub call_type_indices: &'a HashMap<(TraitId, MethodIdx), u32>,
 }
 
 /// Per-type scratch-local allocator passed by reference into [`LowerContext`].

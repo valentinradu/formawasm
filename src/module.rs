@@ -110,10 +110,16 @@ pub struct ModuleBuilder {
     /// `ElementSection` populates it with concrete `wasm` function
     /// indices via [`Self::populate_closure_table`].
     closure_table_idx: Option<u32>,
-    /// Static data segment seeded with string-literal bytes + headers.
-    /// Lives at offset 0 in linear memory; the bump-allocator's heap
-    /// starts immediately after this region.
-    string_data: Vec<u8>,
+    /// Index of the funcref `Table` carrying every trait-method
+    /// function reachable through a vtable. Created lazily by
+    /// [`Self::declare_method_table`]; populated via
+    /// [`Self::populate_method_table`].
+    method_table_idx: Option<u32>,
+    /// Static data segment carrying string-literal bytes + headers
+    /// followed by per-impl vtable blobs. Lives at offset 0 in linear
+    /// memory; the bump-allocator's heap starts immediately after this
+    /// region.
+    static_data: Vec<u8>,
 }
 
 impl Default for ModuleBuilder {
@@ -153,7 +159,8 @@ impl ModuleBuilder {
             str_eq: None,
             str_concat: None,
             closure_table_idx: None,
-            string_data: Vec::new(),
+            method_table_idx: None,
+            static_data: Vec::new(),
         }
     }
 
@@ -165,8 +172,14 @@ impl ModuleBuilder {
     /// (rounded up to [`BUMP_ALLOCATOR_ALIGN`]) so subsequent bump-
     /// allocator calls cannot trample the data. Calling repeatedly
     /// replaces the previously-installed contents.
-    pub fn set_string_data(&mut self, bytes: Vec<u8>) {
-        self.string_data = bytes;
+    ///
+    /// Module-lowering builds this buffer by concatenating the string
+    /// pool's bytes (at offset 0) with any per-impl vtable blobs. Both
+    /// regions are read-only static data — strings keep header/byte
+    /// offsets within the buffer; vtables store funcref-table indices
+    /// that virtual-dispatch lowering loads at the call site.
+    pub fn set_static_data(&mut self, bytes: Vec<u8>) {
+        self.static_data = bytes;
     }
 
     /// Declare a wasm function-type signature without attaching a
@@ -220,6 +233,47 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn closure_table_index(&self) -> Option<u32> {
         self.closure_table_idx
+    }
+
+    /// Lazy-create the funcref `Table` of `num_methods` slots used by
+    /// virtual trait-method dispatch. Returns the table index. Calling
+    /// repeatedly returns the original index without re-declaring.
+    pub fn declare_method_table(&mut self, num_methods: u32) -> u32 {
+        if let Some(idx) = self.method_table_idx {
+            return idx;
+        }
+        let idx = self.tables.len();
+        self.tables.table(TableType {
+            element_type: RefType::FUNCREF,
+            minimum: u64::from(num_methods),
+            maximum: Some(u64::from(num_methods)),
+            table64: false,
+            shared: false,
+        });
+        self.method_table_idx = Some(idx);
+        idx
+    }
+
+    /// Populate the method funcref table with `wasm_func_indices`, in
+    /// order, starting at element offset 0. The vtable slot value
+    /// stored in linear memory is the slot number (the table's element
+    /// index), which `call_indirect` resolves to the function pointer
+    /// at runtime.
+    pub fn populate_method_table(&mut self, wasm_func_indices: &[u32]) {
+        let Some(table_idx) = self.method_table_idx else {
+            return;
+        };
+        self.elements.active(
+            Some(table_idx),
+            &ConstExpr::i32_const(0),
+            Elements::Functions(Cow::Borrowed(wasm_func_indices)),
+        );
+    }
+
+    /// Wasm table index of the method funcref table if declared.
+    #[must_use]
+    pub const fn method_table_index(&self) -> Option<u32> {
+        self.method_table_idx
     }
 
     /// Export a previously-declared function under `name`.
@@ -567,7 +621,7 @@ impl ModuleBuilder {
     /// or component wrapping.
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
-        let heap_base = compute_heap_base(self.string_data.len());
+        let heap_base = compute_heap_base(self.static_data.len());
 
         let mut globals = GlobalSection::new();
         globals.global(
@@ -580,11 +634,11 @@ impl ModuleBuilder {
         );
 
         let mut data = DataSection::new();
-        if !self.string_data.is_empty() {
+        if !self.static_data.is_empty() {
             data.active(
                 MEMORY_INDEX,
                 &ConstExpr::i32_const(HEAP_BASE),
-                self.string_data.iter().copied(),
+                self.static_data.iter().copied(),
             );
         }
 
@@ -611,7 +665,7 @@ impl ModuleBuilder {
         if !self.code.is_empty() {
             module.section(&self.code);
         }
-        if !self.string_data.is_empty() {
+        if !self.static_data.is_empty() {
             module.section(&data);
         }
         module.finish()

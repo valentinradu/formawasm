@@ -380,6 +380,7 @@ pub fn lower_function_body_in_module(
     bump_allocator: u32,
     self_struct_id: Option<StructId>,
     closure_ctx: Option<&ClosureCallContext<'_>>,
+    vtable_ctx: Option<&super::VTableContext<'_>>,
     string_pool: &std::collections::HashMap<String, u32>,
     str_eq: u32,
     str_concat: u32,
@@ -429,6 +430,12 @@ pub fn lower_function_body_in_module(
             .with_closure_table(closure.table_idx)
             .with_closure_funcref_indices(closure.funcref_indices)
             .with_closure_type_indices(closure.type_indices);
+    }
+    if let Some(vt) = vtable_ctx {
+        ctx = ctx
+            .with_method_table(vt.table_idx)
+            .with_vtable_offsets(vt.vtable_offsets)
+            .with_virtual_call_type_indices(vt.call_type_indices);
     }
     finish_function_body(body, return_ty, locals, &ctx)
 }
