@@ -7,7 +7,7 @@ first, then come back here for the "what to do now" view.
 
 ---
 
-## Status (as of 2026-05-01 — Phase 2 complete; Phase 3 next)
+## Status (as of 2026-05-02 — Phase 3 complete; Phase 4 next)
 
 **Upstream — formalang at `~/projects/formalang`:**
 
@@ -214,19 +214,54 @@ the residual case (it'd indicate the caller forgot to run the pass).
   concatenation. Round-trips three roles through wasmtime's
   component runtime.
 
-## Immediate work — Phase 3: virtual dispatch (~4 commits)
+**Phase 3 is COMPLETE** (closed out 2026-05-02):
 
-Per README's roadmap (line 299):
-
-1. Vtable memory layout per trait (table of funcrefs).
-2. Element-section entries per `impl Trait for Type`.
-3. `DispatchKind::Virtual` lowering: load funcref from vtable +
-   `call_indirect`.
-4. **Milestone**: trait-method call resolves across two `impl`s
-   under wasmtime.
+- ✅ mc1: `plan_vtable` layout planner — `methods * 4` flat array of
+  `i32` funcref-table indices, 4-aligned. Empty / single-method /
+  multi-method traits all produce the same uniform shape.
+- ✅ mc2: Per-impl vtable plumbing. `build_vtable_plumbing` declares
+  a fresh funcref `Table` sized to total impl-method count, populates
+  it with each trait-impl method's wasm function index, then walks
+  every `impl Trait for Type` and seeds vtable bytes
+  (`funcref_slot.to_le_bytes()`, one slot per trait method, ordered
+  to match `IrTrait.methods`) into the static-data segment after the
+  string-pool region. `(TraitId, ImplTargetKey) → vtable_offset`
+  and `(TraitId, MethodIdx) → call_indirect_type_index` flow into
+  per-function lowering through a new `VTableContext`.
+- ✅ mc3: `DispatchKind::Virtual` lowering. Resolves the receiver's
+  concrete type at compile time (`Struct` / `Enum`), looks up the
+  vtable's absolute byte offset, emits
+  `i32.const 0; i32.load offset=vtable_base+method_idx*4` to read
+  the funcref-table slot, pushes receiver + Optional-coerced args,
+  emits `call_indirect <method_table_idx>, <type_idx>`. Static
+  dispatch keeps the existing `call <wasm_idx>` path. Optional
+  argument coercion now consults the trait method's signature for
+  Virtual dispatch (matches what static dispatch reads from the
+  impl block).
+- ✅ Phase 3 milestone (`tests/milestone_3.rs`): one trait `Greet`
+  with method `value(self) -> I32`, two struct impls returning 1 / 2
+  respectively, two top-level `dispatch_alpha` / `dispatch_beta`
+  functions invoking `.value()` via `DispatchKind::Virtual`.
+  Runs through `Pipeline::new()` (no `MonomorphisePass`, so the
+  Virtual call sites survive into the backend), validates the
+  component-model artifact, instantiates under wasmtime's component
+  runtime, and confirms each function dispatches to its own impl.
 
 After Phase 3 closes, Phase 4 picks up `extern_abi` imports + cross-
 module `ResolvedType::External` references.
+
+## Immediate work — Phase 4: externs + external modules (~6 commits)
+
+Per README's roadmap (line 306):
+
+1. WIT-import generation from each `extern_abi` `IrFunction`.
+2. Component import-section emission.
+3. Lowering for `ResolvedType::External` references (cross-module
+   symbol resolution).
+4. Test harness wires host-provided imports via
+   `wasmtime::component::Linker`.
+5. **Milestone**: host-provided extern called from formalang;
+   multi-module program compiles.
 
 ---
 
