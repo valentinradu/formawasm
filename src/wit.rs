@@ -261,6 +261,24 @@ fn resolved_wit_type(ty: &ResolvedType) -> Result<Option<String>, WitEmitError> 
             })?;
             Ok(Some(format!("option<{inner_name}>")))
         }
+        ResolvedType::Dictionary { key_ty, value_ty } => {
+            // `Dictionary<K, V>` lifts to `list<tuple<K, V>>` at the
+            // boundary — the canonical-ABI shape for a sequence of
+            // pairs. Internally we keep the v1 `{ ptr, len, cap }`
+            // buffer-of-pair-pointers layout; the list lift reads the
+            // header, the per-pair lift reads each `(k, v)` tuple.
+            let key_name = resolved_wit_type(key_ty)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Dictionary<Never, _>".to_owned(),
+                })
+            })?;
+            let value_name = resolved_wit_type(value_ty)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Dictionary<_, Never>".to_owned(),
+                })
+            })?;
+            Ok(Some(format!("list<tuple<{key_name}, {value_name}>>")))
+        }
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Trait(_)
@@ -269,7 +287,6 @@ fn resolved_wit_type(ty: &ResolvedType) -> Result<Option<String>, WitEmitError> 
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
             kind: variant_tag(ty),

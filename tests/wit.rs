@@ -387,6 +387,60 @@ fn optional_ty(inner: ResolvedType) -> ResolvedType {
     ResolvedType::Optional(Box::new(inner))
 }
 
+fn dict_ty(key: ResolvedType, value: ResolvedType) -> ResolvedType {
+    ResolvedType::Dictionary {
+        key_ty: Box::new(key),
+        value_ty: Box::new(value),
+    }
+}
+
+#[test]
+fn dictionary_emits_list_of_tuple_pairs() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "table",
+        vec![],
+        Some(dict_ty(
+            primitive(PrimitiveType::String),
+            primitive(PrimitiveType::I32),
+        )),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let expected = "export table: func() -> list<tuple<string, s32>>;";
+    if !wit.contains(expected) {
+        return Err(format!("missing `{expected}` in:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn dictionary_signature_round_trips_through_wit_parser() -> TestResult {
+    let mut module = IrModule::new();
+    module.functions.push(function(
+        "lookup-table",
+        vec![(
+            BindingId(0),
+            "entries",
+            dict_ty(
+                primitive(PrimitiveType::String),
+                primitive(PrimitiveType::I32),
+            ),
+        )],
+        Some(primitive(PrimitiveType::I32)),
+    ));
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    Ok(())
+}
+
 #[test]
 fn string_parameter_emits_string_wit_type() -> TestResult {
     let mut module = IrModule::new();
