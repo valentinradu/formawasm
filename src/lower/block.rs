@@ -670,18 +670,25 @@ fn walk_count(
             ..
         } => {
             walk_count(receiver, module, out)?;
-            // Static-dispatch method args coerce to their declared
-            // parameter types; virtual dispatch isn't supported yet.
-            let method_sig = match dispatch {
+            // Static-dispatch arg coercion reads from the impl
+            // method's IrFunction signature; virtual-dispatch arg
+            // coercion reads from the trait method's IrFunctionSig.
+            // Both shapes expose a `params: Vec<IrFunctionParam>`
+            // slice, so the lookup helper below works for either.
+            let method_params: Option<&[formalang::ir::IrFunctionParam]> = match dispatch {
                 formalang::ir::DispatchKind::Static { impl_id } => module
                     .and_then(|m| m.impls.get(impl_id.0 as usize))
-                    .and_then(|i| i.functions.get(method_idx.0 as usize)),
-                formalang::ir::DispatchKind::Virtual { .. } => None,
+                    .and_then(|i| i.functions.get(method_idx.0 as usize))
+                    .map(|f| f.params.as_slice()),
+                formalang::ir::DispatchKind::Virtual { trait_id, .. } => module
+                    .and_then(|m| m.traits.get(trait_id.0 as usize))
+                    .and_then(|t| t.methods.get(method_idx.0 as usize))
+                    .map(|sig| sig.params.as_slice()),
             };
             for (param_name, arg) in args {
-                let target = method_sig.and_then(|sig| {
+                let target = method_params.and_then(|params| {
                     param_name.as_ref().and_then(|n| {
-                        sig.params
+                        params
                             .iter()
                             .find(|p| p.name == *n)
                             .and_then(|p| p.ty.as_ref())

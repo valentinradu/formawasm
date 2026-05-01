@@ -1,14 +1,19 @@
 //! Lowering of [`IrExpr::FunctionCall`] (direct calls) and
-//! [`IrExpr::MethodCall`] static dispatch.
+//! [`IrExpr::MethodCall`] static + virtual dispatch.
 //!
-//! Indirect calls (closures, vtables) live in Phase 1b/3 alongside
-//! `ClosureRef` and virtual dispatch.
+//! Static dispatch resolves to a direct `call <wasm_index>`. Virtual
+//! dispatch loads a funcref-table slot index from the receiver's
+//! per-trait vtable in linear memory, then `call_indirect`s against
+//! the module's method funcref table. Indirect closure calls live
+//! alongside in [`super::call::lower_call_closure`].
 
-use formalang::ir::{DispatchKind, IrExpr};
-use wasm_encoder::InstructionSink;
+use formalang::ir::{DispatchKind, ImplTarget, IrExpr, ResolvedType};
+use wasm_encoder::{InstructionSink, MemArg};
 
 use super::{LowerContext, LowerError, lower_expr};
+use crate::layout::VTABLE_SLOT_SIZE;
 use crate::module::MEMORY_INDEX;
+use crate::module_lowering::impl_target_key;
 use crate::types::{CLOSURE_ENV_OFFSET, CLOSURE_FUNCREF_OFFSET};
 
 /// Lower an [`IrExpr::FunctionCall`] onto `sink`.
@@ -136,12 +141,22 @@ pub fn lower_call_closure(
     Ok(())
 }
 
-/// Lower an [`IrExpr::MethodCall`] with static dispatch onto `sink`.
+/// Lower an [`IrExpr::MethodCall`] onto `sink`.
 ///
-/// Pushes the receiver pointer (the implicit first parameter), then
-/// the explicit args in declaration order, then emits a single
-/// `call <wasm_index>` resolved through the [`super::MethodMap`] in
-/// `ctx`. Virtual dispatch lands in Phase 3.
+/// Static dispatch pushes the receiver pointer (implicit first
+/// parameter), then explicit args in declaration order, then emits a
+/// single `call <wasm_index>` resolved through the [`super::MethodMap`]
+/// in `ctx`.
+///
+/// Virtual dispatch resolves the receiver's concrete type at compile
+/// time (`Struct` / `Enum`), looks up the matching `(trait_id, target)`
+/// vtable's absolute byte offset, loads the funcref-table slot at
+/// `vtable_base + method_idx * VTABLE_SLOT_SIZE`, pushes the receiver
+/// alongside its explicit args (with Optional coercion against the
+/// trait method's declared parameter types), then emits `call_indirect`
+/// against the module's method funcref table. The trait method's wasm
+/// signature was pre-registered in the type section by the module-
+/// level pass.
 pub fn lower_method_call(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
@@ -160,18 +175,33 @@ pub fn lower_method_call(
         });
     };
 
-    let impl_id = match dispatch {
-        DispatchKind::Static { impl_id } => *impl_id,
-        DispatchKind::Virtual { .. } => return Err(LowerError::VirtualMethodCall),
-    };
+    match dispatch {
+        DispatchKind::Static { impl_id } => {
+            lower_static_method_call(*impl_id, *method_idx, receiver, args, sink, ctx)
+        }
+        DispatchKind::Virtual {
+            trait_id,
+            method_name: _,
+        } => lower_virtual_method_call(*trait_id, *method_idx, receiver, args, sink, ctx),
+    }
+}
+
+fn lower_static_method_call(
+    impl_id: formalang::ir::ImplId,
+    method_idx: formalang::ir::MethodIdx,
+    receiver: &IrExpr,
+    args: &[(Option<String>, IrExpr)],
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
     let methods = ctx
         .methods
         .ok_or(LowerError::MissingContext { what: "methods" })?;
     let wasm_idx = methods
-        .get((impl_id, *method_idx))
+        .get((impl_id, method_idx))
         .ok_or(LowerError::UnknownMethod {
             impl_id,
-            method_idx: *method_idx,
+            method_idx,
         })?;
 
     lower_expr(receiver, sink, ctx)?;
@@ -198,5 +228,88 @@ pub fn lower_method_call(
         }
     }
     sink.call(wasm_idx);
+    Ok(())
+}
+
+fn lower_virtual_method_call(
+    trait_id: formalang::ir::TraitId,
+    method_idx: formalang::ir::MethodIdx,
+    receiver: &IrExpr,
+    args: &[(Option<String>, IrExpr)],
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let target = match receiver.ty() {
+        ResolvedType::Struct(id) => ImplTarget::Struct(*id),
+        ResolvedType::Enum(id) => ImplTarget::Enum(*id),
+        other @ (ResolvedType::Primitive(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Array(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error) => {
+            return Err(LowerError::UnsupportedVirtualReceiver { ty: other.clone() });
+        }
+    };
+    let table_idx = ctx.method_table_index()?;
+    let type_idx = ctx.virtual_call_type_index(trait_id, method_idx)?;
+    let vtable_base = ctx.vtable_offset(trait_id, impl_target_key(target))?;
+
+    // Slot byte offset = vtable_base + method_idx * VTABLE_SLOT_SIZE.
+    // Computed at compile time so the runtime cost is a single
+    // i32.const + i32.load before the call_indirect.
+    let slot_offset = u64::from(vtable_base)
+        .checked_add(
+            u64::from(method_idx.0)
+                .checked_mul(u64::from(VTABLE_SLOT_SIZE))
+                .ok_or_else(|| LowerError::NotYetImplemented {
+                    what: "vtable slot offset overflow".to_owned(),
+                })?,
+        )
+        .ok_or_else(|| LowerError::NotYetImplemented {
+            what: "vtable slot offset overflow".to_owned(),
+        })?;
+
+    // Push the receiver pointer (implicit first arg of every trait
+    // method) and the explicit args, coercing each against the
+    // trait method's declared parameter type so Optional widening
+    // matches static dispatch.
+    lower_expr(receiver, sink, ctx)?;
+    let trait_method_sig = ctx
+        .module()
+        .ok()
+        .and_then(|m| m.traits.get(trait_id.0 as usize))
+        .and_then(|t| t.methods.get(method_idx.0 as usize));
+    for (param_name, arg) in args {
+        let target_ty = trait_method_sig.and_then(|sig| {
+            param_name.as_ref().and_then(|n| {
+                sig.params
+                    .iter()
+                    .find(|p| p.name == *n)
+                    .and_then(|p| p.ty.as_ref())
+            })
+        });
+        if let Some(t) = target_ty {
+            super::optional::lower_coerced(arg, t, sink, ctx)?;
+        } else {
+            lower_expr(arg, sink, ctx)?;
+        }
+    }
+
+    // Load the funcref-table slot from the vtable cell, then
+    // call_indirect.
+    sink.i32_const(0)
+        .i32_load(MemArg {
+            offset: slot_offset,
+            align: 2, // log2(4)
+            memory_index: MEMORY_INDEX,
+        })
+        .call_indirect(table_idx, type_idx);
     Ok(())
 }
