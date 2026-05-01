@@ -21,8 +21,8 @@ pub mod wit;
 pub use backend::{WasmBackend, WasmBackendError};
 pub use component::{ComponentWrapError, wrap_component};
 pub use layout::{
-    ArrayLayout, EnumLayout, FieldLayout, LayoutError, RangeLayout, StructLayout, VariantLayout,
-    plan_array, plan_enum, plan_range, plan_struct,
+    ArrayLayout, EnumLayout, FieldLayout, LayoutError, RangeLayout, StructLayout, VTableLayout,
+    VariantLayout, plan_array, plan_enum, plan_range, plan_struct, plan_vtable,
 };
 pub use lower::{BindingMap, FunctionMap, LowerContext, LowerError};
 pub use module::ModuleBuilder;
@@ -34,6 +34,6 @@ pub use wit::{WitEmitError, emit_wit};
 
 pub use formalang::ir::{
     EnumId, FunctionId, IrFunction, IrFunctionParam, IrFunctionSig, IrImport, IrImportItem,
-    IrModule, ResolvedType, StructId, TraitId,
+    IrModule, IrTrait, ResolvedType, StructId, TraitId,
 };
 pub use formalang::pipeline::{Backend, IrPass, Pipeline, PipelineError};

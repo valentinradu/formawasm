@@ -17,7 +17,7 @@
 //! lowerings land in subsequent Phase 1b microcommits.
 
 use formalang::ast::{PrimitiveType, Visibility};
-use formalang::ir::{IrEnum, IrModule, IrStruct, ResolvedType};
+use formalang::ir::{IrEnum, IrModule, IrStruct, IrTrait, ResolvedType};
 use thiserror::Error;
 
 /// Errors produced by [`plan_struct`].
@@ -835,4 +835,65 @@ fn array_element_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError
             kind: "Error".to_owned(),
         }),
     }
+}
+
+// ── vtable layout ────────────────────────────────────────────────────
+
+/// Per-slot size in bytes inside a trait vtable. Each slot stores a
+/// funcref-table index as an `i32`.
+pub const VTABLE_SLOT_SIZE: u32 = 4;
+
+/// Per-slot alignment in bytes inside a trait vtable. Slots are
+/// `i32`-sized funcref indices.
+pub const VTABLE_SLOT_ALIGN: u32 = 4;
+
+/// Layout decisions for a per-trait vtable.
+///
+/// One vtable per `(trait, impl_target)` pair. The vtable is a flat
+/// array of i32 funcref-table indices — one per method declared on the
+/// trait, ordered to match `IrTrait.methods` so a `MethodIdx` indexes
+/// directly into it. Virtual call sites compute
+/// `vtable_base + method_idx * VTABLE_SLOT_SIZE`, load the funcref,
+/// and `call_indirect` against the module's funcref table.
+///
+/// Traits with zero methods produce a degenerate `size = 0` vtable
+/// — the planner accepts them so the per-trait walk has a uniform
+/// shape.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain layout record consumed externally; intentionally constructible"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VTableLayout {
+    /// Total bytes one vtable occupies. Equals `methods * VTABLE_SLOT_SIZE`.
+    pub size: u32,
+    /// Vtable alignment in bytes — always [`VTABLE_SLOT_ALIGN`].
+    pub align: u32,
+    /// Number of method slots in the vtable.
+    pub method_count: u32,
+    /// Per-slot size — always [`VTABLE_SLOT_SIZE`].
+    pub slot_size: u32,
+}
+
+/// Compute the layout of the vtable for `trait_def`.
+///
+/// `module` is accepted for API symmetry with the other planners; the
+/// current implementation only inspects `trait_def.methods.len()`.
+pub fn plan_vtable(trait_def: &IrTrait, _module: &IrModule) -> Result<VTableLayout, LayoutError> {
+    let method_count =
+        u32::try_from(trait_def.methods.len()).map_err(|_| LayoutError::SizeOverflow {
+            name: format!("vtable<{}>", trait_def.name),
+        })?;
+    let size =
+        method_count
+            .checked_mul(VTABLE_SLOT_SIZE)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                name: format!("vtable<{}>", trait_def.name),
+            })?;
+    Ok(VTableLayout {
+        size,
+        align: VTABLE_SLOT_ALIGN,
+        method_count,
+        slot_size: VTABLE_SLOT_SIZE,
+    })
 }
