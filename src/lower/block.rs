@@ -688,6 +688,20 @@ fn walk_count(
         }
         IrExpr::FieldAccess { object, .. } => walk_count(object, module, out)?,
         IrExpr::DictAccess { dict, key, .. } => {
+            // DictAccess on a Dictionary<K, V> reserves six i32
+            // scratch locals (header, buffer, len, counter, target,
+            // pair). Array indexing needs none. Reserve the dict
+            // case unconditionally since the pre-walk doesn't yet
+            // peer into the dict's IR shape — the wasted slots are
+            // a few i32s per missing array index.
+            if matches!(dict.ty(), ResolvedType::Dictionary { .. }) {
+                bump_count(&mut out.i32)?;
+                bump_count(&mut out.i32)?;
+                bump_count(&mut out.i32)?;
+                bump_count(&mut out.i32)?;
+                bump_count(&mut out.i32)?;
+                bump_count(&mut out.i32)?;
+            }
             walk_count(dict, module, out)?;
             walk_count(key, module, out)?;
         }
@@ -750,11 +764,22 @@ fn walk_count(
                 bump_count(&mut out.i32)?;
             }
         }
+        IrExpr::DictLiteral { entries, .. } => {
+            // Each entry allocates one pair tuple (1 i32 scratch),
+            // and the literal as a whole reserves another i32 scratch
+            // for the buffer base plus one for the header.
+            bump_count(&mut out.i32)?;
+            bump_count(&mut out.i32)?;
+            for (k, v) in entries {
+                bump_count(&mut out.i32)?;
+                walk_count(k, module, out)?;
+                walk_count(v, module, out)?;
+            }
+        }
         IrExpr::Reference { .. }
         | IrExpr::LetRef { .. }
         | IrExpr::SelfFieldRef { .. }
-        | IrExpr::Closure { .. }
-        | IrExpr::DictLiteral { .. } => {}
+        | IrExpr::Closure { .. } => {}
     }
     Ok(())
 }

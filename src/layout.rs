@@ -144,24 +144,22 @@ pub fn plan_struct(s: &IrStruct, _module: &IrModule) -> Result<StructLayout, Lay
 
 /// Return the `(size, align)` pair for a primitive-typed field.
 ///
-/// `Never` and the heap-typed primitives (`String`, `Path`, `Regex`)
-/// surface as [`LayoutError::NotYetSupported`] — `Never` because no
-/// instance can be stored, the others because their layouts depend on
-/// the Phase 2 string runtime.
+/// String / Path / Regex are stored as 4-byte pointers to their
+/// `{ ptr, len }` headers in linear memory; `Never` stays rejected
+/// (uninhabited — no instance can ever be laid out).
 fn primitive_size_align(p: PrimitiveType) -> Result<(u32, u32), LayoutError> {
     match p {
         PrimitiveType::Boolean => Ok((1, 1)),
         PrimitiveType::I32 | PrimitiveType::F32 => Ok((4, 4)),
         PrimitiveType::I64 | PrimitiveType::F64 => Ok((8, 8)),
-        // Never (uninhabited — no instance to lay out), heap-typed
-        // primitives (`String` / `Path` / `Regex`) whose layouts
-        // depend on the Phase 2 string runtime, and any future
-        // #[non_exhaustive] variants all surface here.
-        PrimitiveType::Never
-        | PrimitiveType::String
-        | PrimitiveType::Path
-        | PrimitiveType::Regex
-        | _ => Err(LayoutError::NotYetSupported {
+        // Strings, paths, and regexes all share the same in-memory
+        // representation — a pointer to a heap-allocated header.
+        PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
+            Ok((POINTER_SIZE, POINTER_ALIGN))
+        }
+        // Never is uninhabited; future #[non_exhaustive] variants
+        // ride this arm too.
+        PrimitiveType::Never | _ => Err(LayoutError::NotYetSupported {
             kind: format!("{p:?}"),
         }),
     }
@@ -525,6 +523,63 @@ pub fn plan_range(bound: &ResolvedType, _module: &IrModule) -> Result<RangeLayou
         bound_align,
         end_offset,
     })
+}
+
+// ── dictionary layout ────────────────────────────────────────────────
+
+/// Header size of a dictionary value: `{ ptr: i32, len: i32, cap: i32 }`.
+///
+/// Phase 2 v1 represents `Dictionary<K, V>` as a sorted-pairs-array
+/// — the same shape `Array<Tuple<(K, V)>>` would lower to. Each entry
+/// in the buffer is an `i32` pointer to a freshly-allocated `(k: K,
+/// v: V)` pair tuple. Lookup walks the buffer linearly comparing
+/// keys; insertion order is preserved (Phase 2 doesn't yet sort).
+pub const DICTIONARY_HEADER_SIZE: u32 = ARRAY_HEADER_SIZE;
+
+/// Header alignment of a dictionary value (always 4).
+pub const DICTIONARY_HEADER_ALIGN: u32 = ARRAY_HEADER_ALIGN;
+
+/// Layout decisions for a `Dictionary<K, V>` value.
+///
+/// The underlying buffer-of-pair-pointers is identical to the
+/// `Array<Tuple<(K, V)>>` storage: each slot is a 4-byte i32 pointer
+/// to a per-entry pair tuple in linear memory.
+#[expect(
+    clippy::exhaustive_structs,
+    reason = "plain layout record consumed externally; intentionally constructible"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DictionaryLayout {
+    /// Bytes occupied by the header. Always
+    /// [`DICTIONARY_HEADER_SIZE`].
+    pub header_size: u32,
+    /// Header alignment. Always [`DICTIONARY_HEADER_ALIGN`].
+    pub header_align: u32,
+    /// Per-entry size in the buffer — always `POINTER_SIZE` (4)
+    /// since each slot holds an `i32` pointer to the pair tuple.
+    pub entry_size: u32,
+    /// Per-entry alignment in the buffer.
+    pub entry_align: u32,
+}
+
+/// Compute the layout of `Dictionary<key, value>`.
+///
+/// Today the layout is fixed regardless of the key/value types — the
+/// per-entry buffer slot is always a pointer. The arguments are
+/// accepted for forward compatibility with later layout strategies
+/// (small-string-optimization key inlining, etc.).
+#[must_use]
+pub const fn plan_dictionary(
+    _key_ty: &ResolvedType,
+    _value_ty: &ResolvedType,
+    _module: &IrModule,
+) -> DictionaryLayout {
+    DictionaryLayout {
+        header_size: DICTIONARY_HEADER_SIZE,
+        header_align: DICTIONARY_HEADER_ALIGN,
+        entry_size: POINTER_SIZE,
+        entry_align: POINTER_ALIGN,
+    }
 }
 
 // ── string layout ────────────────────────────────────────────────────

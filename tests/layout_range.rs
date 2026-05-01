@@ -113,12 +113,24 @@ fn range_of_never_is_not_yet_supported() -> TestResult {
 }
 
 #[test]
-fn range_of_string_is_not_yet_supported() -> TestResult {
+fn range_of_string_lays_out_as_two_pointers() -> TestResult {
+    // Phase 2 mc13: String / Path / Regex are pointer-sized at the
+    // layout layer, so `plan_range` accepts them as bound types
+    // mechanically. Whether `Range<String>` is *semantically* valid
+    // (strings have no native ordering) is a frontend concern, not a
+    // layout-planner one.
     let module = IrModule::new();
-    match layout::plan_range(&primitive(PrimitiveType::String), &module) {
-        Err(LayoutError::NotYetSupported { kind }) if kind == "String" => Ok(()),
-        other => Err(format!("expected NotYetSupported(String), got {other:?}").into()),
-    }
+    let layout = layout::plan_range(&primitive(PrimitiveType::String), &module)?;
+    assert_range_layout(
+        &layout,
+        RangeLayout {
+            size: 8,
+            align: 4,
+            bound_size: 4,
+            bound_align: 4,
+            end_offset: 4,
+        },
+    )
 }
 
 #[test]

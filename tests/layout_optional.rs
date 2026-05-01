@@ -148,12 +148,23 @@ fn optional_of_struct_uses_pointer_payload() -> TestResult {
 }
 
 #[test]
-fn optional_of_string_is_not_yet_supported() -> TestResult {
+fn optional_of_string_uses_pointer_payload() -> TestResult {
+    // Phase 2 mc13: String / Path / Regex payloads collapse to a
+    // 4-byte pointer to their `{ ptr, len }` header, exactly like
+    // every other aggregate inner type.
     let module = IrModule::new();
-    match layout::plan_optional(&primitive(PrimitiveType::String), &module) {
-        Err(LayoutError::NotYetSupported { kind }) if kind == "String" => Ok(()),
-        other => Err(format!("expected NotYetSupported(String), got {other:?}").into()),
-    }
+    let layout = layout::plan_optional(&primitive(PrimitiveType::String), &module)?;
+    assert_optional_layout(
+        &layout,
+        OptionalLayout {
+            size: 8,
+            align: 4,
+            tag_offset: 0,
+            payload_offset: 4,
+            payload_size: 4,
+            payload_align: 4,
+        },
+    )
 }
 
 #[test]

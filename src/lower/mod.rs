@@ -34,8 +34,8 @@ use crate::layout::LayoutError;
 use crate::types::TypeMapError;
 
 pub use aggregate::{
-    lower_array, lower_closure_ref, lower_dict_access, lower_enum_inst, lower_field_access,
-    lower_range, lower_self_field_ref, lower_struct_inst, lower_tuple,
+    lower_array, lower_closure_ref, lower_dict_access, lower_dict_literal, lower_enum_inst,
+    lower_field_access, lower_range, lower_self_field_ref, lower_struct_inst, lower_tuple,
 };
 pub use binary_op::lower_binary_op;
 pub use block::{lower_block, lower_function_body, lower_function_body_in_module};
@@ -802,8 +802,9 @@ pub fn lower_expr(
         IrExpr::For { .. } => lower_for(expr, sink, ctx),
 
         IrExpr::DictAccess { .. } => lower_dict_access(expr, sink, ctx),
+        IrExpr::DictLiteral { .. } => lower_dict_literal(expr, sink, ctx),
 
-        IrExpr::Closure { .. } | IrExpr::DictLiteral { .. } => Err(LowerError::NotYetImplemented {
+        IrExpr::Closure { .. } => Err(LowerError::NotYetImplemented {
             what: format!("IrExpr::{}", expr_variant_name(expr)),
         }),
     }

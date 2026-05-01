@@ -175,6 +175,7 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
         | ResolvedType::Array(_)
         | ResolvedType::Range(_)
         | ResolvedType::Optional(_)
+        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. } => Ok(Some(ValType::I32)),
         ResolvedType::Trait(_) => Err(TypeMapError::NotYetSupported {
             kind: "Trait".to_owned(),
@@ -187,9 +188,6 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
         }),
         ResolvedType::External { name, .. } => Err(TypeMapError::NotYetSupported {
             kind: format!("External({name})"),
-        }),
-        ResolvedType::Dictionary { .. } => Err(TypeMapError::NotYetSupported {
-            kind: "Dictionary<K, V>".to_owned(),
         }),
         ResolvedType::Error => Err(TypeMapError::NotYetSupported {
             kind: "Error".to_owned(),

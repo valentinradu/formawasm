@@ -133,8 +133,9 @@ pub(super) fn allocate_aggregate(
 }
 
 /// Pick the right `xN.store` opcode for `p`. `bool` uses
-/// `i32.store8` since the field occupies a single byte; the other
-/// primitives store in their full native width.
+/// `i32.store8` since the field occupies a single byte;
+/// `String` / `Path` / `Regex` store the i32 header pointer; the
+/// numeric primitives store at their full native width.
 pub(super) fn store_primitive(
     p: PrimitiveType,
     layout: FieldLayout,
@@ -145,7 +146,7 @@ pub(super) fn store_primitive(
         PrimitiveType::Boolean => {
             sink.i32_store8(mem_arg);
         }
-        PrimitiveType::I32 => {
+        PrimitiveType::I32 | PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
             sink.i32_store(mem_arg);
         }
         PrimitiveType::I64 => {
@@ -157,22 +158,17 @@ pub(super) fn store_primitive(
         PrimitiveType::F64 => {
             sink.f64_store(mem_arg);
         }
-        // primitive_of() filters non-storable primitives long before
-        // we get here; the wildcard satisfies wildcard_enum_match_arm
-        // and traps in case an unsupported primitive ever slips
-        // through (defensive — shouldn't be reachable).
-        PrimitiveType::Never
-        | PrimitiveType::String
-        | PrimitiveType::Path
-        | PrimitiveType::Regex
-        | _ => {
+        // `Never` is uninhabited so this arm is defensive only;
+        // future #[non_exhaustive] variants ride the same path.
+        PrimitiveType::Never | _ => {
             sink.unreachable();
         }
     }
 }
 
 /// Pick the right `xN.load` opcode for `p`. `bool` uses
-/// `i32.load8_u` to zero-extend the byte into the i32 value type.
+/// `i32.load8_u` to zero-extend the byte into the i32 value type;
+/// `String` / `Path` / `Regex` load the i32 header pointer.
 pub(super) fn load_primitive(
     p: PrimitiveType,
     layout: FieldLayout,
@@ -183,7 +179,7 @@ pub(super) fn load_primitive(
         PrimitiveType::Boolean => {
             sink.i32_load8_u(mem_arg);
         }
-        PrimitiveType::I32 => {
+        PrimitiveType::I32 | PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
             sink.i32_load(mem_arg);
         }
         PrimitiveType::I64 => {
@@ -195,11 +191,7 @@ pub(super) fn load_primitive(
         PrimitiveType::F64 => {
             sink.f64_load(mem_arg);
         }
-        PrimitiveType::Never
-        | PrimitiveType::String
-        | PrimitiveType::Path
-        | PrimitiveType::Regex
-        | _ => {
+        PrimitiveType::Never | _ => {
             sink.unreachable();
         }
     }
@@ -625,20 +617,120 @@ fn store_array_element(
     }
 }
 
-/// Lower [`IrExpr::DictAccess`] when its `dict` is an [`IrExpr::Array`]
-/// value.
+/// Lower [`IrExpr::DictLiteral`] as a `{ ptr, len, cap }` header
+/// pointing at a buffer of pointers, each pointing to a freshly-
+/// allocated `(k, v)` pair tuple.
 ///
-/// Pattern: read the buffer pointer from the array's header at offset 0,
-/// then leave `buf_ptr + idx * element_size` on the stack and emit the
-/// element type's primitive `load` opcode (or `i32_load` for aggregate
-/// elements, which live as pointers in the buffer).
+/// Phase 2 v1 keeps insertion order and does no sorting / dedup;
+/// later mcs may swap in a sorted layout for log-n lookup.
+pub fn lower_dict_literal(
+    expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    let IrExpr::DictLiteral { entries, ty } = expr else {
+        return Err(LowerError::NotYetImplemented {
+            what: "lower_dict_literal called with non-DictLiteral expression".to_owned(),
+        });
+    };
+    let ResolvedType::Dictionary { key_ty, value_ty } = ty else {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("DictLiteral carrying non-Dictionary type {ty:?}"),
+        });
+    };
+    let module = ctx.module()?;
+    let pair_struct = dict_pair_struct(key_ty, value_ty);
+    let pair_layout = plan_struct(&pair_struct, module)?;
+    let key_field_layout =
+        pair_layout
+            .fields
+            .first()
+            .copied()
+            .ok_or_else(|| LowerError::NotYetImplemented {
+                what: "dict pair tuple has no fields".to_owned(),
+            })?;
+    let value_field_layout =
+        pair_layout
+            .fields
+            .get(1)
+            .copied()
+            .ok_or_else(|| LowerError::NotYetImplemented {
+                what: "dict pair tuple has fewer than two fields".to_owned(),
+            })?;
+
+    let len_u32 = u32::try_from(entries.len()).map_err(|_| LowerError::NotYetImplemented {
+        what: "dict literal with more than u32::MAX entries".to_owned(),
+    })?;
+    let len_signed = i32::try_from(len_u32).map_err(|_| LowerError::NotYetImplemented {
+        what: "dict literal length exceeds i32::MAX".to_owned(),
+    })?;
+    let buffer_size =
+        len_u32
+            .checked_mul(POINTER_SIZE_CONST)
+            .ok_or_else(|| LayoutError::SizeOverflow {
+                name: "<dict buffer>".to_owned(),
+            })?;
+
+    let buf_local = allocate_aggregate(buffer_size, sink, ctx)?;
+
+    for (i, (k_expr, v_expr)) in entries.iter().enumerate() {
+        let i_u32 = u32::try_from(i).unwrap_or(u32::MAX);
+        let slot_offset =
+            i_u32
+                .checked_mul(POINTER_SIZE_CONST)
+                .ok_or_else(|| LayoutError::SizeOverflow {
+                    name: "<dict slot offset>".to_owned(),
+                })?;
+
+        // Allocate a pair tuple, store (k, v) into it.
+        let pair_local = allocate_aggregate(pair_layout.size, sink, ctx)?;
+        let key_prim = primitive_of(key_ty)?;
+        sink.local_get(pair_local);
+        super::optional::lower_coerced(k_expr, key_ty, sink, ctx)?;
+        store_primitive(key_prim, key_field_layout, sink);
+
+        let value_prim = primitive_of(value_ty)?;
+        sink.local_get(pair_local);
+        super::optional::lower_coerced(v_expr, value_ty, sink, ctx)?;
+        store_primitive(value_prim, value_field_layout, sink);
+
+        // Store the pair pointer in the buffer at slot_offset.
+        sink.local_get(buf_local);
+        sink.local_get(pair_local);
+        sink.i32_store(MemArg {
+            offset: u64::from(slot_offset),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        });
+    }
+
+    let header_local = allocate_aggregate(crate::layout::DICTIONARY_HEADER_SIZE, sink, ctx)?;
+    finalize_array_header(header_local, buf_local, HeaderLen::Const(len_signed), sink);
+    Ok(())
+}
+
+/// Pointer size used for dictionary buffer slots and similar
+/// aggregate-as-pointer contexts.
+const POINTER_SIZE_CONST: u32 = 4;
+
+/// Lower [`IrExpr::DictAccess`] for either an array indexing (`arr[i]`)
+/// or a dictionary lookup (`dict[key]`).
 ///
-/// Bounds checking is intentionally absent for Phase 1c — out-of-range
-/// reads land wherever the multiply takes them. A trapping bounds check
-/// rides a later phase once the language has a panicking-runtime story.
+/// The two collection shapes share the variant in the IR; the
+/// dispatch here switches on `dict.ty()`:
 ///
-/// Dictionary-typed receivers (`ResolvedType::Dictionary`) are rejected
-/// as `NotYetImplemented`; real dictionary access lands in Phase 2.
+/// * `Array<T>`: read the buffer pointer from the array header at
+///   offset 0, then leave `buf_ptr + idx * element_size` on the
+///   stack and emit the element type's `load` opcode (or `i32_load`
+///   for aggregate elements stored as pointers).
+/// * `Dictionary<K, V>`: walk the buffer of pair pointers comparing
+///   each entry's key against the lookup key. Returns the matching
+///   value's bytes; traps via `unreachable` when no entry matches.
+///
+/// Bounds checking on array indexing is intentionally absent for
+/// Phase 1c — out-of-range reads land wherever the multiply takes
+/// them. A trapping bounds check rides a later phase once the
+/// language has a panicking-runtime story.
 pub fn lower_dict_access(
     expr: &IrExpr,
     sink: &mut InstructionSink<'_>,
@@ -651,13 +743,233 @@ pub fn lower_dict_access(
     };
 
     let coll_ty = dict.ty();
-    let ResolvedType::Array(elem_box) = coll_ty else {
-        return Err(LowerError::NotYetImplemented {
+    match coll_ty {
+        ResolvedType::Array(elem_box) => lower_array_index(dict, key, elem_box.as_ref(), sink, ctx),
+        ResolvedType::Dictionary { key_ty, value_ty } => {
+            lower_dict_lookup(dict, key, key_ty.as_ref(), value_ty.as_ref(), sink, ctx)
+        }
+        ResolvedType::Primitive(_)
+        | ResolvedType::Struct(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Range(_)
+        | ResolvedType::Optional(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => Err(LowerError::NotYetImplemented {
             what: format!("DictAccess on collection type {coll_ty:?}"),
-        });
-    };
-    let elem_ty = elem_box.as_ref();
+        }),
+    }
+}
 
+/// Synthesize a 2-tuple struct for a dictionary's `(key, value)`
+/// pair — consumed by `plan_struct` to compute per-field offsets.
+fn dict_pair_struct(key_ty: &ResolvedType, value_ty: &ResolvedType) -> IrStruct {
+    use formalang::ast::ParamConvention;
+    use formalang::ast::Visibility;
+    let field = |name: &str, ty: ResolvedType| IrField {
+        name: name.to_owned(),
+        ty,
+        mutable: false,
+        optional: false,
+        default: None,
+        doc: None,
+        convention: ParamConvention::Let,
+    };
+    IrStruct {
+        name: "__dict_pair".to_owned(),
+        visibility: Visibility::Private,
+        traits: Vec::new(),
+        fields: vec![field("k", key_ty.clone()), field("v", value_ty.clone())],
+        generic_params: Vec::new(),
+        doc: None,
+    }
+}
+
+/// Lower a `Dictionary<K, V>` lookup as a linear scan.
+///
+/// Phase 2 v1 represents the dictionary as `{ ptr, len, cap }` plus a
+/// buffer of pointers, each pointing to a heap-allocated `(k: K,
+/// v: V)` pair tuple. The lookup walks the buffer comparing every
+/// pair's key against the lookup key and returns the matching value.
+/// A miss traps via `unreachable` — Phase 2 has no panic-runtime story
+/// yet, so absent keys aren't recoverable.
+///
+/// String keys compare via `__str_eq`. Other key types stay
+/// unimplemented for v1 — formalang's typical dictionary literals
+/// use string keys so this covers the milestone case.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single self-contained linear-scan loop; splitting hides the block / loop / br_if structure"
+)]
+fn lower_dict_lookup(
+    dict: &IrExpr,
+    key: &IrExpr,
+    key_ty: &ResolvedType,
+    value_ty: &ResolvedType,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    use formalang::ast::PrimitiveType;
+    use wasm_encoder::BlockType;
+
+    if !matches!(key_ty, ResolvedType::Primitive(PrimitiveType::String)) {
+        return Err(LowerError::NotYetImplemented {
+            what: format!("Dictionary lookup with key type {key_ty:?} (Phase 2 v1: String only)"),
+        });
+    }
+    let value_prim = primitive_of(value_ty).map_err(|_| LowerError::NotYetImplemented {
+        what: format!("Dictionary value type {value_ty:?} (Phase 2 v1: primitive only)"),
+    })?;
+    if matches!(value_prim, PrimitiveType::Never) {
+        return Err(LowerError::NotYetImplemented {
+            what: "Dictionary value type Never".to_owned(),
+        });
+    }
+    let module = ctx.module()?;
+    let pair_struct = dict_pair_struct(key_ty, value_ty);
+    let pair_layout = plan_struct(&pair_struct, module)?;
+    let value_field_layout =
+        pair_layout
+            .fields
+            .get(1)
+            .copied()
+            .ok_or_else(|| LowerError::NotYetImplemented {
+                what: "dict pair tuple has fewer than two fields".to_owned(),
+            })?;
+    let value_block_ty = match value_prim {
+        PrimitiveType::Boolean | PrimitiveType::I32 => BlockType::Result(ValType::I32),
+        PrimitiveType::I64 => BlockType::Result(ValType::I64),
+        PrimitiveType::F32 => BlockType::Result(ValType::F32),
+        PrimitiveType::F64 => BlockType::Result(ValType::F64),
+        PrimitiveType::Never
+        | PrimitiveType::String
+        | PrimitiveType::Path
+        | PrimitiveType::Regex
+        | _ => {
+            return Err(LowerError::NotYetImplemented {
+                what: format!("Dictionary value primitive {value_prim:?}"),
+            });
+        }
+    };
+
+    let str_eq_idx = ctx.str_eq_index()?;
+
+    // Reserve scratch locals: dict header ptr, buffer ptr, len,
+    // loop counter, target key, current pair pointer.
+    let dict_local = ctx.next_scratch_local(ValType::I32)?;
+    let buf_local = ctx.next_scratch_local(ValType::I32)?;
+    let len_local = ctx.next_scratch_local(ValType::I32)?;
+    let i_local = ctx.next_scratch_local(ValType::I32)?;
+    let target_local = ctx.next_scratch_local(ValType::I32)?;
+    let pair_local = ctx.next_scratch_local(ValType::I32)?;
+
+    lower_expr(dict, sink, ctx)?;
+    sink.local_set(dict_local);
+
+    sink.local_get(dict_local);
+    sink.i32_load(MemArg {
+        offset: 0,
+        align: align_to_log2(ARRAY_HEADER_ALIGN),
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_set(buf_local);
+
+    sink.local_get(dict_local);
+    sink.i32_load(MemArg {
+        offset: 4,
+        align: align_to_log2(ARRAY_HEADER_ALIGN),
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_set(len_local);
+
+    lower_expr(key, sink, ctx)?;
+    sink.local_set(target_local);
+
+    sink.i32_const(0);
+    sink.local_set(i_local);
+
+    // block $found (result: V's value type)
+    //   loop $scan
+    //     if i >= len { unreachable }   ;; not-found path traps
+    //     pair = buf[i]
+    //     if __str_eq(pair.k, target) {
+    //       <load pair.v>
+    //       br $found
+    //     }
+    //     i += 1
+    //     br $scan
+    //   end
+    // end
+    sink.block(value_block_ty);
+    sink.loop_(BlockType::Empty);
+
+    // Termination check — falling off `len` traps.
+    sink.local_get(i_local);
+    sink.local_get(len_local);
+    sink.i32_ge_u();
+    sink.if_(BlockType::Empty);
+    sink.unreachable();
+    sink.end();
+
+    // Load pair pointer at buf + i*4.
+    sink.local_get(buf_local);
+    sink.local_get(i_local);
+    sink.i32_const(4);
+    sink.i32_mul();
+    sink.i32_add();
+    sink.i32_load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_set(pair_local);
+
+    // Compare keys: __str_eq(pair.k, target).
+    sink.local_get(pair_local);
+    sink.i32_load(MemArg {
+        offset: 0, // k at pair offset 0 (first field of pair tuple)
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    });
+    sink.local_get(target_local);
+    sink.call(str_eq_idx);
+    sink.if_(BlockType::Empty);
+    // Match: leave value on stack, br to $found (depth 2: out of `if`,
+    // out of `loop`, into `block`).
+    sink.local_get(pair_local);
+    load_primitive(value_prim, value_field_layout, sink);
+    sink.br(2);
+    sink.end();
+
+    // i += 1; br loop
+    sink.local_get(i_local);
+    sink.i32_const(1);
+    sink.i32_add();
+    sink.local_set(i_local);
+    sink.br(0);
+
+    sink.end(); // close loop
+    // Falling off the loop's end is statically unreachable (the body
+    // always ends in `br 0`), but wasm's validator doesn't perform
+    // that dataflow analysis. Emit `unreachable` after the loop so
+    // the outer block's `i32` result-type is satisfied via the
+    // validator's polymorphic-after-unreachable rule.
+    sink.unreachable();
+    sink.end(); // close block (value already pushed via br on match)
+    Ok(())
+}
+
+fn lower_array_index(
+    dict: &IrExpr,
+    key: &IrExpr,
+    elem_ty: &ResolvedType,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
     let module = ctx.module()?;
     let layout = plan_array(elem_ty, module)?;
     let elem_size_signed =
@@ -665,7 +977,6 @@ pub fn lower_dict_access(
             name: "<array element>".to_owned(),
         })?;
 
-    // Load the element-buffer pointer from header[0].
     lower_expr(dict, sink, ctx)?;
     sink.i32_load(MemArg {
         offset: 0,
@@ -673,7 +984,6 @@ pub fn lower_dict_access(
         memory_index: MEMORY_INDEX,
     });
 
-    // Compute buf_ptr + idx * elem_size.
     lower_expr(key, sink, ctx)?;
     sink.i32_const(elem_size_signed);
     sink.i32_mul();

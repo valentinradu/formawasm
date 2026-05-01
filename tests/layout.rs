@@ -342,14 +342,24 @@ fn never_field_is_not_yet_supported() -> TestResult {
 }
 
 #[test]
-fn string_field_is_not_yet_supported() -> TestResult {
+fn string_field_lays_out_as_pointer() -> TestResult {
+    // Phase 2 mc13: String / Path / Regex fields collapse to a
+    // 4-byte pointer payload — the `{ ptr, len }` header lives
+    // elsewhere in linear memory.
     let s = make_struct(
         "Stringy",
         vec![field("s", primitive(PrimitiveType::String))],
     );
     let module = IrModule::new();
-    match layout::plan_struct(&s, &module) {
-        Err(LayoutError::NotYetSupported { kind }) if kind == "String" => Ok(()),
-        other => Err(format!("expected NotYetSupported(String), got {other:?}").into()),
-    }
+    let layout = layout::plan_struct(&s, &module)?;
+    assert_layout(
+        &layout,
+        4,
+        4,
+        &[FieldLayout {
+            offset: 0,
+            size: 4,
+            align: 4,
+        }],
+    )
 }
