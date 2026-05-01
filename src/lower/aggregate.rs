@@ -841,15 +841,18 @@ fn lower_dict_lookup(
                 what: "dict pair tuple has fewer than two fields".to_owned(),
             })?;
     let value_block_ty = match value_prim {
-        PrimitiveType::Boolean | PrimitiveType::I32 => BlockType::Result(ValType::I32),
+        // Strings / paths / regexes ride the same i32-pointer
+        // representation as the numeric primitives that fit in i32,
+        // so they share the BlockType::Result(I32) branch.
+        PrimitiveType::Boolean
+        | PrimitiveType::I32
+        | PrimitiveType::String
+        | PrimitiveType::Path
+        | PrimitiveType::Regex => BlockType::Result(ValType::I32),
         PrimitiveType::I64 => BlockType::Result(ValType::I64),
         PrimitiveType::F32 => BlockType::Result(ValType::F32),
         PrimitiveType::F64 => BlockType::Result(ValType::F64),
-        PrimitiveType::Never
-        | PrimitiveType::String
-        | PrimitiveType::Path
-        | PrimitiveType::Regex
-        | _ => {
+        PrimitiveType::Never | _ => {
             return Err(LowerError::NotYetImplemented {
                 what: format!("Dictionary value primitive {value_prim:?}"),
             });
