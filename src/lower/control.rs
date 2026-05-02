@@ -82,13 +82,22 @@ pub(super) fn for_scratch_counts(
 }
 
 /// Wasm value type used for one bound of a `Range<T>` and for the
-/// loop-counter scratch slots that derive from it. Only types whose
-/// `For` lowering is wired up surface here — F32/F64 ranges are
-/// rejected explicitly until their iteration semantics get wired in.
+/// loop-counter scratch slots that derive from it. The four numeric
+/// primitives (`I32` / `I64` / `F32` / `F64`) are accepted; every
+/// other shape stays rejected.
+///
+/// Float ranges iterate `ceil(end - start)` times, each step
+/// advancing the loop variable by `1.0` (the only sensible default
+/// the language has not yet allowed callers to override). The
+/// per-iteration arithmetic shares the typed helpers below; only the
+/// `len_i32` setup and the buffer-index compute differ between the
+/// integer and float paths.
 fn range_bound_valtype(bound_ty: &ResolvedType) -> Result<ValType, LowerError> {
     match bound_ty {
         ResolvedType::Primitive(PrimitiveType::I32) => Ok(ValType::I32),
         ResolvedType::Primitive(PrimitiveType::I64) => Ok(ValType::I64),
+        ResolvedType::Primitive(PrimitiveType::F32) => Ok(ValType::F32),
+        ResolvedType::Primitive(PrimitiveType::F64) => Ok(ValType::F64),
         ResolvedType::Primitive(_)
         | ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
@@ -103,7 +112,7 @@ fn range_bound_valtype(bound_ty: &ResolvedType) -> Result<ValType, LowerError> {
         | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => Err(LowerError::NotYetImplemented {
-            what: format!("for-loop over Range<{bound_ty:?}> (only I32 / I64 supported)"),
+            what: format!("for-loop over Range<{bound_ty:?}>"),
         }),
     }
 }
@@ -628,16 +637,18 @@ fn emit_for_range_setup(
     );
     sink.local_set(locals.end);
 
-    // Compute `len_i32 = (end - start)` (wrapping i64 to i32 if the
-    // bound is i64). Linear-memory allocations are i32-addressed so
-    // the wrap is safe — the bump-allocator call traps if the multi-
-    // plication still overflows.
+    // Compute `len_i32 = (end - start)` for the integer paths or
+    // `ceil(end - start)` for the float paths, then narrow to i32
+    // (wrapping for i64, saturating-truncating for floats).
+    // Linear-memory allocations are i32-addressed so the narrow is
+    // safe — the bump-allocator call traps if the multiplication
+    // later overflows. `ceil` on the float side ensures the buffer
+    // is large enough to hold every iteration even when
+    // `end - start` is fractional.
     sink.local_get(locals.end);
     sink.local_get(locals.start);
     typed_sub(locals.bound_vt, sink);
-    if matches!(locals.bound_vt, ValType::I64) {
-        sink.i32_wrap_i64();
-    }
+    typed_len_to_i32(locals.bound_vt, sink);
     sink.local_set(locals.len_i32);
 
     let alloc_idx = ctx.bump_allocator()?;
@@ -695,9 +706,7 @@ fn emit_for_range_loop(
 
     sink.local_get(locals.out_buf);
     sink.local_get(locals.i);
-    if matches!(locals.bound_vt, ValType::I64) {
-        sink.i32_wrap_i64();
-    }
+    typed_index_to_i32(locals.bound_vt, sink);
     sink.i32_const(elem_size_signed);
     sink.i32_mul();
     sink.i32_add();
@@ -836,6 +845,55 @@ fn typed_const_one(vt: ValType, sink: &mut InstructionSink<'_>) {
         }
         ValType::F64 => {
             sink.f64_const(1.0_f64.into());
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
+}
+
+/// Narrow the `(end - start)` expression on top of the wasm stack
+/// into an `i32` iteration-count.
+///
+/// For integer ranges the narrow is a plain wrap; for floats it
+/// rounds the gap up via `ceil` before saturating-truncating, so the
+/// allocated output buffer is always large enough to hold every
+/// iteration even when `end - start` is fractional.
+fn typed_len_to_i32(vt: ValType, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {}
+        ValType::I64 => {
+            sink.i32_wrap_i64();
+        }
+        ValType::F32 => {
+            sink.f32_ceil();
+            sink.i32_trunc_sat_f32_s();
+        }
+        ValType::F64 => {
+            sink.f64_ceil();
+            sink.i32_trunc_sat_f64_s();
+        }
+        ValType::V128 | ValType::Ref(_) => {
+            sink.unreachable();
+        }
+    }
+}
+
+/// Narrow the loop-counter `i` (in the bound's wasm valtype) into an
+/// `i32` for buffer-offset arithmetic. The counter is monotonically
+/// incremented from zero, so a saturating truncation is exact for
+/// every iteration in range.
+fn typed_index_to_i32(vt: ValType, sink: &mut InstructionSink<'_>) {
+    match vt {
+        ValType::I32 => {}
+        ValType::I64 => {
+            sink.i32_wrap_i64();
+        }
+        ValType::F32 => {
+            sink.i32_trunc_sat_f32_s();
+        }
+        ValType::F64 => {
+            sink.i32_trunc_sat_f64_s();
         }
         ValType::V128 | ValType::Ref(_) => {
             sink.unreachable();

@@ -625,3 +625,156 @@ fn for_over_f32_array_uses_f32_load_for_var() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn for_over_f32_range_iterates_one_per_step() -> TestResult {
+    // for x in 0.0..3.0 { x * x } -> [0.0, 1.0, 4.0]. The loop
+    // counter advances by 1.0 each iteration; `len = ceil(3.0) = 3`
+    // so the output buffer holds three F32 squares.
+    let mut module = IrModule::new();
+    let var_id = BindingId(13);
+    let f32_ty = primitive(PrimitiveType::F32);
+
+    let lo = IrExpr::Literal {
+        value: Literal::Number(NumberLiteral::suffixed(
+            NumberValue::Float(0.0),
+            NumericSuffix::F32,
+        )),
+        ty: f32_ty.clone(),
+    };
+    let hi = IrExpr::Literal {
+        value: Literal::Number(NumberLiteral::suffixed(
+            NumberValue::Float(3.0),
+            NumericSuffix::F32,
+        )),
+        ty: f32_ty.clone(),
+    };
+    let range = IrExpr::BinaryOp {
+        left: Box::new(lo),
+        right: Box::new(hi),
+        op: BinaryOperator::Range,
+        ty: range_ty(f32_ty.clone()),
+    };
+    let body = IrExpr::BinaryOp {
+        left: Box::new(typed_let_ref(var_id, "x", f32_ty.clone())),
+        right: Box::new(typed_let_ref(var_id, "x", f32_ty.clone())),
+        op: BinaryOperator::Mul,
+        ty: f32_ty.clone(),
+    };
+    let for_loop = IrExpr::For {
+        var: "x".to_owned(),
+        var_ty: f32_ty.clone(),
+        var_binding_id: var_id,
+        collection: Box::new(range),
+        body: Box::new(body),
+        ty: array_ty(f32_ty.clone()),
+    };
+    module
+        .functions
+        .push(function("squares", array_ty(f32_ty), for_loop));
+
+    let bytes = module_lowering::lower_module(&module)?;
+    validate(&bytes)?;
+
+    let (mut store, instance) = instantiate(&bytes)?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "squares")?;
+    let header_ptr = f.call(&mut store, ())?;
+
+    let (buf_ptr, len, cap) = read_header(&mut store, &instance, header_ptr)?;
+    if (len, cap) != (3, 3) {
+        return Err(format!("len/cap: got ({len}, {cap}), want (3, 3)").into());
+    }
+    let buf: [u8; 12] = read_memory(&mut store, &instance, buf_ptr)?;
+    let mut vals = [0_f32; 3];
+    for (slot, chunk) in vals.iter_mut().zip(buf.chunks_exact(4)) {
+        let bytes: [u8; 4] = chunk
+            .try_into()
+            .map_err(|_| -> TestError { "chunk length not 4".into() })?;
+        *slot = f32::from_le_bytes(bytes);
+    }
+    let want = [0.0_f32, 1.0, 4.0];
+    if vals
+        .iter()
+        .zip(want.iter())
+        .any(|(g, w)| (g - w).abs() > f32::EPSILON)
+    {
+        return Err(format!("got {vals:?}, want {want:?}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn for_over_f64_range_iterates_one_per_step() -> TestResult {
+    // for x in 1.0..4.0 { x + x } -> [2.0, 4.0, 6.0]. Mirrors the
+    // F32 path above against the F64 typed-arithmetic helpers.
+    let mut module = IrModule::new();
+    let var_id = BindingId(14);
+    let f64_ty = primitive(PrimitiveType::F64);
+
+    let lo = IrExpr::Literal {
+        value: Literal::Number(NumberLiteral::suffixed(
+            NumberValue::Float(1.0),
+            NumericSuffix::F64,
+        )),
+        ty: f64_ty.clone(),
+    };
+    let hi = IrExpr::Literal {
+        value: Literal::Number(NumberLiteral::suffixed(
+            NumberValue::Float(4.0),
+            NumericSuffix::F64,
+        )),
+        ty: f64_ty.clone(),
+    };
+    let range = IrExpr::BinaryOp {
+        left: Box::new(lo),
+        right: Box::new(hi),
+        op: BinaryOperator::Range,
+        ty: range_ty(f64_ty.clone()),
+    };
+    let body = IrExpr::BinaryOp {
+        left: Box::new(typed_let_ref(var_id, "x", f64_ty.clone())),
+        right: Box::new(typed_let_ref(var_id, "x", f64_ty.clone())),
+        op: BinaryOperator::Add,
+        ty: f64_ty.clone(),
+    };
+    let for_loop = IrExpr::For {
+        var: "x".to_owned(),
+        var_ty: f64_ty.clone(),
+        var_binding_id: var_id,
+        collection: Box::new(range),
+        body: Box::new(body),
+        ty: array_ty(f64_ty.clone()),
+    };
+    module
+        .functions
+        .push(function("doubled", array_ty(f64_ty), for_loop));
+
+    let bytes = module_lowering::lower_module(&module)?;
+    validate(&bytes)?;
+
+    let (mut store, instance) = instantiate(&bytes)?;
+    let f = instance.get_typed_func::<(), i32>(&mut store, "doubled")?;
+    let header_ptr = f.call(&mut store, ())?;
+
+    let (buf_ptr, len, cap) = read_header(&mut store, &instance, header_ptr)?;
+    if (len, cap) != (3, 3) {
+        return Err(format!("len/cap: got ({len}, {cap}), want (3, 3)").into());
+    }
+    let buf: [u8; 24] = read_memory(&mut store, &instance, buf_ptr)?;
+    let mut vals = [0_f64; 3];
+    for (slot, chunk) in vals.iter_mut().zip(buf.chunks_exact(8)) {
+        let bytes: [u8; 8] = chunk
+            .try_into()
+            .map_err(|_| -> TestError { "chunk length not 8".into() })?;
+        *slot = f64::from_le_bytes(bytes);
+    }
+    let want = [2.0_f64, 4.0, 6.0];
+    if vals
+        .iter()
+        .zip(want.iter())
+        .any(|(g, w)| (g - w).abs() > f64::EPSILON)
+    {
+        return Err(format!("got {vals:?}, want {want:?}").into());
+    }
+    Ok(())
+}

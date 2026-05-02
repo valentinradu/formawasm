@@ -60,13 +60,13 @@ here; see "Known restrictions" below.
 - ✅ mc7: WIT `list<T>` mapping. `resolved_wit_type` now returns owned `String`s and recurses on `ResolvedType::Array(elem)` to emit `list<inner>`. Records and function signatures pick this up for free; nested lists (`list<list<s32>>`) compose. Unsupported element types (`Never`, `Struct`, …) propagate the existing `NotYetSupported` error. Round-trips through `wit_parser::Resolve`.
 - ✅ mc8: **Phase 1c milestone hit**: Sieve of Eratosthenes runs under wasmtime's component runtime. `tests/sieve.rs` hand-builds a 3-function `IrModule` (`check-divisor` self-recursive trial-division helper, `is-prime`, and `sieve(limit) -> Array<Boolean>` collecting `is-prime(p)` for `p in 0..limit`), runs it through `Pipeline::emit(module, &WasmBackend::new())`, validates the component-model artifact, instantiates under wasmtime's component runtime, and compares the returned `list<bool>` against the expected primality vector for `limit = 30`. The internal `{ ptr, len, cap }` array-header layout turns out to be canonical-ABI-compatible because `wit-component` reads only `ptr` at offset 0 and `len` at offset 4 when lifting `list<T>` returns — `cap` at offset 8 is benign extra data.
 
-**Known restrictions carried forward from Phase 1c:**
-
-- `lower_for` accepts `Range<I32>` and `Range<I64>` (`tests/lower_for.rs::for_over_i64_range_uses_typed_loop_arithmetic`); `Range<F32>` / `Range<F64>` stay rejected. The typed-scratch-local infrastructure is in place — extending the For-Range emitter to floats is straightforward once iterate-by-1.0 semantics are wanted.
-
 **Closed (post-Phase-1c housekeeping, 2026-04-30):**
 
 - ✅ Indirect closure invocation. Upstream landed `IrExpr::CallClosure` (formalang `2550391`); formawasm wires a funcref `Table`, populates it with every `__closure*` lifted function, registers per-closure-type `call_indirect` signatures (env_ptr prepended), and emits `local.get base; i32_load env; <args>; i32_load funcref; call_indirect`. End-to-end coverage in `tests/lower_call_closure.rs` runs both a no-capture closure and a `make_adder` capture-closing closure under wasmtime.
+
+**Closed (post-Phase-4 housekeeping, 2026-05-02):**
+
+- ✅ `Range<F32>` / `Range<F64>` in `lower_for`. `range_bound_valtype` accepts the four numeric primitives; setup narrows `(end - start)` to i32 via `f32.ceil` / `f64.ceil` followed by `i32_trunc_sat` (so the output buffer is large enough to hold every iteration when the gap is fractional); the per-iteration buffer-offset compute uses `i32_trunc_sat` on the float counter. Iteration semantics: advance by `1.0` each step. End-to-end coverage in `tests/lower_for.rs::for_over_f32_range_iterates_one_per_step` (squares of `0.0..3.0` → `[0.0, 1.0, 4.0]`) and `for_over_f64_range_iterates_one_per_step` (`x + x` over `1.0..4.0` → `[2.0, 4.0, 6.0]`).
 
 > **Quality bar.** This repo mirrors the lint / CI / build setup at
 > `~/projects/smid/smid-ws0` — strict clippy (deny `unwrap_used`,
