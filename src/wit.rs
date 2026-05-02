@@ -189,30 +189,53 @@ fn write_record(out: &mut String, s: &IrStruct) -> Result<(), WitEmitError> {
 fn write_variant(out: &mut String, e: &IrEnum) -> Result<(), WitEmitError> {
     writeln!(out, "  variant {} {{", kebab_case(&e.name)).map_err(invalid_format)?;
     for v in &e.variants {
-        match v.fields.len() {
-            0 => {
-                writeln!(out, "    {},", kebab_case(&v.name)).map_err(invalid_format)?;
-            }
-            1 => {
-                let f = v.fields.first().ok_or_else(|| WitEmitError::NeverParam {
-                    function: format!("variant {}", e.name),
-                    param: "(0-th field)".to_owned(),
-                })?;
-                let wit_ty = resolved_wit_type(&f.ty)?.ok_or_else(|| WitEmitError::NeverParam {
-                    function: format!("variant {}", e.name),
-                    param: f.name.clone(),
-                })?;
-                writeln!(out, "    {}({wit_ty}),", kebab_case(&v.name)).map_err(invalid_format)?;
-            }
-            _ => {
-                return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: format!("variant {} payload with > 1 field", v.name),
-                }));
-            }
+        let arm_name = kebab_case(&v.name);
+        if v.fields.is_empty() {
+            writeln!(out, "    {arm_name},").map_err(invalid_format)?;
+            continue;
         }
+        if v.fields.len() == 1 {
+            let f = v.fields.first().ok_or_else(|| WitEmitError::NeverParam {
+                function: format!("variant {}", e.name),
+                param: "(0-th field)".to_owned(),
+            })?;
+            let wit_ty = variant_field_wit_type(&e.name, f)?;
+            writeln!(out, "    {arm_name}({wit_ty}),").map_err(invalid_format)?;
+            continue;
+        }
+        // Multi-field payloads lift as a positional `tuple<T0, T1, ...>`
+        // — WIT's variant arm syntax accepts a single payload type, and
+        // a tuple is the canonical-ABI representation for a fixed-arity
+        // record. Field names don't survive the boundary (WIT tuples
+        // are positional); the layout planner already lays the fields
+        // out in declaration order so the index→field mapping stays
+        // stable across both sides of the boundary.
+        let mut tuple = String::from("tuple<");
+        for (i, f) in v.fields.iter().enumerate() {
+            if i > 0 {
+                tuple.push_str(", ");
+            }
+            let wit_ty = variant_field_wit_type(&e.name, f)?;
+            tuple.push_str(&wit_ty);
+        }
+        tuple.push('>');
+        writeln!(out, "    {arm_name}({tuple}),").map_err(invalid_format)?;
     }
     writeln!(out, "  }}").map_err(invalid_format)?;
     Ok(())
+}
+
+/// Look up the WIT type name for one variant payload field, surfacing
+/// a `NeverParam` if the field is `Never`-typed (WIT has no zero-sized
+/// element form inside a `tuple<...>` payload).
+fn variant_field_wit_type(
+    enum_name: &str,
+    f: &formalang::ir::IrField,
+) -> Result<String, WitEmitError> {
+    resolved_wit_type(&f.ty)?.ok_or_else(|| WitEmitError::NeverParam {
+        function: format!("variant {enum_name}"),
+        param: f.name.clone(),
+    })
 }
 
 fn write_export(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {

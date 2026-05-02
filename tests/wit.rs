@@ -306,7 +306,7 @@ fn public_enum_emits_variant_with_unit_and_payload_arms() -> TestResult {
 }
 
 #[test]
-fn multi_field_variant_payload_is_rejected() -> TestResult {
+fn multi_field_variant_payload_emits_tuple_arm() -> TestResult {
     let mut module = IrModule::new();
     module.enums.push(IrEnum {
         name: "Pair".to_owned(),
@@ -323,16 +323,78 @@ fn multi_field_variant_payload_is_rejected() -> TestResult {
     });
 
     let surface = survey::survey(&module);
-    match wit::emit_wit(&module, &surface) {
-        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
-            if kind.contains("variant") =>
-        {
-            Ok(())
-        }
-        other => {
-            Err(format!("expected NotYetSupported for multi-field variant, got {other:?}").into())
-        }
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    if !wit.contains("variant pair {") {
+        return Err(format!("missing variant pair declaration:\n{wit}").into());
     }
+    if !wit.contains("both(tuple<s32, s32>),") {
+        return Err(format!("missing tuple-payload arm `both(tuple<s32, s32>)`:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn mixed_type_variant_payload_emits_typed_tuple() -> TestResult {
+    // Three-field arm with a mix of primitive widths exercises the
+    // tuple-element emitter through `resolved_wit_type` for each
+    // field independently — no per-field-type fast path can hide a
+    // bug.
+    let mut module = IrModule::new();
+    module.enums.push(IrEnum {
+        name: "Triple".to_owned(),
+        visibility: Visibility::Public,
+        variants: vec![IrEnumVariant {
+            name: "Mix".to_owned(),
+            fields: vec![
+                primitive_field("a", PrimitiveType::I32),
+                primitive_field("b", PrimitiveType::I64),
+                primitive_field("c", PrimitiveType::Boolean),
+            ],
+        }],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    if !wit.contains("mix(tuple<s32, s64, bool>),") {
+        return Err(format!("missing tuple arm `mix(tuple<s32, s64, bool>)`:\n{wit}").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn multi_field_variant_round_trips_through_wit_parser() -> TestResult {
+    let mut module = IrModule::new();
+    module.enums.push(IrEnum {
+        name: "Pair".to_owned(),
+        visibility: Visibility::Public,
+        variants: vec![
+            IrEnumVariant {
+                name: "Single".to_owned(),
+                fields: vec![primitive_field("v", PrimitiveType::I32)],
+            },
+            IrEnumVariant {
+                name: "Both".to_owned(),
+                fields: vec![
+                    primitive_field("a", PrimitiveType::I32),
+                    primitive_field("b", PrimitiveType::I32),
+                ],
+            },
+        ],
+        generic_params: Vec::new(),
+        doc: None,
+    });
+
+    let surface = survey::survey(&module);
+    let wit = wit::emit_wit(&module, &surface)?;
+
+    let mut resolve = Resolve::default();
+    let pkg = resolve.push_str("formawasm-test.wit", &wit)?;
+    let _world = resolve.select_world(&[pkg], Some(WORLD_NAME))?;
+    Ok(())
 }
 
 #[test]
