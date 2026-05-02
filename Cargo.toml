@@ -26,6 +26,24 @@ wasm-encoder  = "0.247"
 wit-component = "0.247"
 wit-parser    = "0.247"
 
+# Optional binaryen-bindings dep — only pulled in when the `wasm-opt`
+# feature is on. Builds binaryen from source at compile time, so
+# omitting the feature keeps the dependency graph and compile cost
+# unchanged for callers who don't need post-pass optimization.
+# `tempfile` rides the same gate: wasm-opt only exposes a file-based
+# API, so the post-pass shuttles bytes through a temp directory.
+wasm-opt = { version = "0.116", optional = true }
+tempfile = { version = "3", optional = true }
+
+[features]
+# Off by default. When on, `WasmBackend::generate` runs the emitted
+# core wasm bytes through binaryen's wasm-opt at `-Os` (size-leaning
+# optimization) before wrapping the component. Validate
+# `cabi_realloc` and the canonical-ABI param-split wrappers survive
+# the pass — tests under the feature flag re-run every milestone
+# end-to-end.
+wasm-opt = ["dep:wasm-opt", "dep:tempfile"]
+
 [dev-dependencies]
 # wasmparser validates emitted core modules in tests; wasmtime hosts
 # the component for end-to-end smoke tests.

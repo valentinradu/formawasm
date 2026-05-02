@@ -27,6 +27,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "anstyle"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -65,7 +71,7 @@ checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -152,12 +158,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap"
+version = "4.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
+dependencies = [
+ "clap_builder",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f"
+dependencies = [
+ "anstyle",
+ "clap_lex",
+ "strsim",
+]
+
+[[package]]
+name = "clap_lex"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codespan-reporting"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
+dependencies = [
+ "serde",
+ "termcolor",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -254,7 +297,7 @@ dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
  "cranelift-srcgen",
- "heck",
+ "heck 0.5.0",
  "pulley-interpreter",
 ]
 
@@ -373,6 +416,68 @@ dependencies = [
  "dispatch2",
  "nix",
  "windows-sys",
+]
+
+[[package]]
+name = "cxx"
+version = "1.0.194"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "747d8437319e3a2f43d93b341c137927ca70c0f5dabeea7a005a73665e247c7e"
+dependencies = [
+ "cc",
+ "cxx-build",
+ "cxxbridge-cmd",
+ "cxxbridge-flags",
+ "cxxbridge-macro",
+ "foldhash 0.2.0",
+ "link-cplusplus",
+]
+
+[[package]]
+name = "cxx-build"
+version = "1.0.194"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0f4697d190a142477b16aef7da8a99bfdc41e7e8b1687583c0d23a79c7afc1e"
+dependencies = [
+ "cc",
+ "codespan-reporting",
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "scratch",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "cxxbridge-cmd"
+version = "1.0.194"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0956799fa8678d4c50eed028f2de1c0552ae183c76e976cf7ca8c4e36a7c328"
+dependencies = [
+ "clap",
+ "codespan-reporting",
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "cxxbridge-flags"
+version = "1.0.194"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23384a836ab4f0ad98ace7e3955ad2de39de42378ab487dc28d3990392cb283a"
+
+[[package]]
+name = "cxxbridge-macro"
+version = "1.0.194"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6acc6b5822b9526adfb4fc377b67128fdd60aac757cc4a741a6278603f763cf"
+dependencies = [
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -524,8 +629,10 @@ name = "formawasm"
 version = "0.1.0"
 dependencies = [
  "formalang",
+ "tempfile",
  "thiserror 2.0.18",
  "wasm-encoder 0.247.0",
+ "wasm-opt",
  "wasmparser 0.247.0",
  "wasmtime",
  "wit-component 0.247.0",
@@ -703,6 +810,12 @@ dependencies = [
 
 [[package]]
 name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
+name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
@@ -816,6 +929,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "link-cplusplus"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f78c730aaa7d0b9336a299029ea49f9ee53b0ed06e9202e8cb7db9bae7b8c82"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -848,7 +970,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex-syntax 0.8.10",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -979,7 +1101,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1021,7 +1143,7 @@ checksum = "f7dfa8354acc622b3857e1bb1a4e4315d3bc1a44ad31d5653c3e87c0da9306d7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1145,6 +1267,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "scratch"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68f2ec51b097e4c1a75b681a8bec621909b5e91f15bb7b840c4f2f7b01148b2"
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1181,7 +1309,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1258,6 +1386,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "strsim"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
+
+[[package]]
+name = "strum_macros"
+version = "0.24.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
+dependencies = [
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "syn"
+version = "1.0.109"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1322,7 +1486,7 @@ checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1333,7 +1497,7 @@ checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1483,7 +1647,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
  "wasm-bindgen-shared",
 ]
 
@@ -1503,7 +1667,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f05a2b3bad87cc1ce45b63425ec09a854cc4cb369231c9fed1fee31538103efb"
 dependencies = [
  "anyhow",
- "heck",
+ "heck 0.5.0",
  "indexmap",
  "log",
  "petgraph",
@@ -1565,6 +1729,46 @@ dependencies = [
  "indexmap",
  "wasm-encoder 0.247.0",
  "wasmparser 0.247.0",
+]
+
+[[package]]
+name = "wasm-opt"
+version = "0.116.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fd87a4c135535ffed86123b6fb0f0a5a0bc89e50416c942c5f0662c645f679c"
+dependencies = [
+ "anyhow",
+ "libc",
+ "strum",
+ "strum_macros",
+ "tempfile",
+ "thiserror 1.0.69",
+ "wasm-opt-cxx-sys",
+ "wasm-opt-sys",
+]
+
+[[package]]
+name = "wasm-opt-cxx-sys"
+version = "0.116.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c57b28207aa724318fcec6575fe74803c23f6f266fce10cbc9f3f116762f12e"
+dependencies = [
+ "anyhow",
+ "cxx",
+ "cxx-build",
+ "wasm-opt-sys",
+]
+
+[[package]]
+name = "wasm-opt-sys"
+version = "0.116.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a1cce564dc768dacbdb718fc29df2dba80bd21cb47d8f77ae7e3d95ceb98cbe"
+dependencies = [
+ "anyhow",
+ "cc",
+ "cxx",
+ "cxx-build",
 ]
 
 [[package]]
@@ -1729,7 +1933,7 @@ dependencies = [
  "anyhow",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
  "wasmtime-internal-component-util",
  "wasmtime-internal-wit-bindgen",
  "wit-parser 0.246.2",
@@ -1840,7 +2044,7 @@ checksum = "d6af582ec18b674bf7a17775d6fbfbddfcc143f0edbd89c9c1778239c8aa92ed"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1868,7 +2072,7 @@ checksum = "e2150e63d502ab2d64754e5abe8eb737ae674b7dd4ad53144fd16bbeceaf4a19"
 dependencies = [
  "anyhow",
  "bitflags",
- "heck",
+ "heck 0.5.0",
  "indexmap",
  "wit-parser 0.246.2",
 ]
@@ -1994,7 +2198,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea61de684c3ea68cb082b7a88508a8b27fcc8b797d738bfc99a82facf1d752dc"
 dependencies = [
  "anyhow",
- "heck",
+ "heck 0.5.0",
  "wit-parser 0.244.0",
 ]
 
@@ -2005,10 +2209,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7c566e0f4b284dd6561c786d9cb0142da491f46a9fbed79ea69cdad5db17f21"
 dependencies = [
  "anyhow",
- "heck",
+ "heck 0.5.0",
  "indexmap",
  "prettyplease",
- "syn",
+ "syn 2.0.117",
  "wasm-metadata 0.244.0",
  "wit-bindgen-core",
  "wit-component 0.244.0",
@@ -2024,7 +2228,7 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
  "wit-bindgen-core",
  "wit-bindgen-rust",
 ]
