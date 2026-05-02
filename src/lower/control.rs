@@ -10,7 +10,8 @@ use super::aggregate::{
 };
 use super::{LowerContext, LowerError, lower_expr};
 use crate::layout::{
-    ARRAY_HEADER_ALIGN, ENUM_TAG_ALIGN, FieldLayout, plan_array, plan_enum, plan_range,
+    ARRAY_HEADER_ALIGN, ARRAY_HEADER_LEN_OFFSET, ARRAY_HEADER_PTR_OFFSET, ENUM_TAG_ALIGN,
+    FieldLayout, plan_array, plan_enum, plan_range,
 };
 use crate::module::MEMORY_INDEX;
 use crate::types::body_value_type;
@@ -919,7 +920,7 @@ fn emit_for_array_setup(
     let header_align_log2 = align_log2(ARRAY_HEADER_ALIGN);
     sink.local_get(locals.arr);
     sink.i32_load(MemArg {
-        offset: 0,
+        offset: u64::from(ARRAY_HEADER_PTR_OFFSET),
         align: header_align_log2,
         memory_index: MEMORY_INDEX,
     });
@@ -927,7 +928,7 @@ fn emit_for_array_setup(
 
     sink.local_get(locals.arr);
     sink.i32_load(MemArg {
-        offset: 4,
+        offset: u64::from(ARRAY_HEADER_LEN_OFFSET),
         align: header_align_log2,
         memory_index: MEMORY_INDEX,
     });

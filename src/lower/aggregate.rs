@@ -18,8 +18,9 @@ use wasm_encoder::{InstructionSink, MemArg, ValType};
 
 use super::{LowerContext, LowerError, lower_expr};
 use crate::layout::{
-    ARRAY_HEADER_ALIGN, ArrayLayout, ENUM_TAG_ALIGN, FieldLayout, LayoutError, RangeLayout,
-    StructLayout, VariantLayout, plan_array, plan_enum, plan_range, plan_struct,
+    ARRAY_HEADER_ALIGN, ARRAY_HEADER_CAP_OFFSET, ARRAY_HEADER_LEN_OFFSET, ARRAY_HEADER_PTR_OFFSET,
+    ArrayLayout, ENUM_TAG_ALIGN, FieldLayout, LayoutError, RangeLayout, StructLayout,
+    VariantLayout, plan_array, plan_enum, plan_range, plan_struct,
 };
 use crate::module::MEMORY_INDEX;
 
@@ -557,20 +558,20 @@ pub(super) fn finalize_array_header(
         }
     };
 
-    // ptr at offset 0
+    // ptr field
     sink.local_get(header_local);
     sink.local_get(buf_local);
-    sink.i32_store(mem_arg(0));
+    sink.i32_store(mem_arg(u64::from(ARRAY_HEADER_PTR_OFFSET)));
 
-    // len at offset 4
+    // len field
     sink.local_get(header_local);
     push_len(sink);
-    sink.i32_store(mem_arg(4));
+    sink.i32_store(mem_arg(u64::from(ARRAY_HEADER_LEN_OFFSET)));
 
-    // cap at offset 8 (= len; growable arrays land later)
+    // cap field (= len; growable arrays land later)
     sink.local_get(header_local);
     push_len(sink);
-    sink.i32_store(mem_arg(8));
+    sink.i32_store(mem_arg(u64::from(ARRAY_HEADER_CAP_OFFSET)));
 
     // Leave the header pointer on the stack as the array value.
     sink.local_get(header_local);
@@ -875,7 +876,7 @@ fn lower_dict_lookup(
 
     sink.local_get(dict_local);
     sink.i32_load(MemArg {
-        offset: 0,
+        offset: u64::from(ARRAY_HEADER_PTR_OFFSET),
         align: align_to_log2(ARRAY_HEADER_ALIGN),
         memory_index: MEMORY_INDEX,
     });
@@ -883,7 +884,7 @@ fn lower_dict_lookup(
 
     sink.local_get(dict_local);
     sink.i32_load(MemArg {
-        offset: 4,
+        offset: u64::from(ARRAY_HEADER_LEN_OFFSET),
         align: align_to_log2(ARRAY_HEADER_ALIGN),
         memory_index: MEMORY_INDEX,
     });
@@ -982,7 +983,7 @@ fn lower_array_index(
 
     lower_expr(dict, sink, ctx)?;
     sink.i32_load(MemArg {
-        offset: 0,
+        offset: u64::from(ARRAY_HEADER_PTR_OFFSET),
         align: align_to_log2(ARRAY_HEADER_ALIGN),
         memory_index: MEMORY_INDEX,
     });

@@ -403,6 +403,15 @@ pub const ARRAY_HEADER_SIZE: u32 = 12;
 /// Header alignment of an array value (each header field is `i32`).
 pub const ARRAY_HEADER_ALIGN: u32 = 4;
 
+/// Byte offset of the buffer pointer field inside an array header.
+pub const ARRAY_HEADER_PTR_OFFSET: u32 = 0;
+
+/// Byte offset of the length field inside an array header.
+pub const ARRAY_HEADER_LEN_OFFSET: u32 = 4;
+
+/// Byte offset of the capacity field inside an array header.
+pub const ARRAY_HEADER_CAP_OFFSET: u32 = 8;
+
 /// Pointer size used for aggregate element types.
 const POINTER_SIZE: u32 = 4;
 
