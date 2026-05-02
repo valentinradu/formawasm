@@ -382,7 +382,9 @@ fn variant_tag(ty: &ResolvedType) -> String {
         ResolvedType::Tuple(_) => "Tuple".to_owned(),
         ResolvedType::Generic { .. } => "Generic".to_owned(),
         ResolvedType::TypeParam(name) => format!("TypeParam({name})"),
-        ResolvedType::External { name, .. } => format!("External({name})"),
+        ResolvedType::External { name, .. } => format!(
+            "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+        ),
         ResolvedType::Dictionary { .. } => "Dictionary<K, V>".to_owned(),
         ResolvedType::Closure { .. } => "Closure".to_owned(),
         ResolvedType::Error => "Error".to_owned(),

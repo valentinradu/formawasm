@@ -99,7 +99,9 @@ pub fn resolved_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMap
             kind: format!("TypeParam({name})"),
         }),
         ResolvedType::External { name, .. } => Err(TypeMapError::NotYetSupported {
-            kind: format!("External({name})"),
+            kind: format!(
+                "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+            ),
         }),
         ResolvedType::Dictionary { .. } => Err(TypeMapError::NotYetSupported {
             kind: "Dictionary<K, V>".to_owned(),
@@ -187,7 +189,9 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
             kind: format!("TypeParam({name})"),
         }),
         ResolvedType::External { name, .. } => Err(TypeMapError::NotYetSupported {
-            kind: format!("External({name})"),
+            kind: format!(
+                "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+            ),
         }),
         ResolvedType::Error => Err(TypeMapError::NotYetSupported {
             kind: "Error".to_owned(),
