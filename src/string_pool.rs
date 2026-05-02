@@ -36,7 +36,7 @@ pub enum StringPoolError {
 
 /// A growing data buffer plus a `text -> header_offset` map.
 #[derive(Debug, Default, Clone)]
-pub struct StringPool {
+pub(crate) struct StringPool {
     data: Vec<u8>,
     by_text: HashMap<String, u32>,
 }
@@ -44,14 +44,14 @@ pub struct StringPool {
 impl StringPool {
     /// Build an empty pool.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Intern `text` and return the header's byte offset within the
     /// pool's data buffer. Subsequent calls with the same text return
     /// the same offset (no duplicate bytes).
-    pub fn intern(&mut self, text: &str) -> Result<u32, StringPoolError> {
+    pub(crate) fn intern(&mut self, text: &str) -> Result<u32, StringPoolError> {
         if let Some(&offset) = self.by_text.get(text) {
             return Ok(offset);
         }
@@ -84,29 +84,11 @@ impl StringPool {
         Ok(header_offset)
     }
 
-    /// Look up an already-interned string's header offset.
-    #[must_use]
-    pub fn header_offset(&self, text: &str) -> Option<u32> {
-        self.by_text.get(text).copied()
-    }
-
     /// Borrow the data buffer for emission as a wasm `active` data
     /// segment at offset 0.
     #[must_use]
-    pub fn data(&self) -> &[u8] {
+    pub(crate) fn data(&self) -> &[u8] {
         &self.data
-    }
-
-    /// Number of distinct strings interned so far.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.by_text.len()
-    }
-
-    /// Whether the pool is empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.by_text.is_empty()
     }
 
     /// Borrow the text-to-offset lookup map. Lowering threads this
@@ -114,7 +96,7 @@ impl StringPool {
     /// lowerings can resolve their header offsets without a mutable
     /// borrow on the pool.
     #[must_use]
-    pub const fn lookup_map(&self) -> &HashMap<String, u32> {
+    pub(crate) const fn lookup_map(&self) -> &HashMap<String, u32> {
         &self.by_text
     }
 }

@@ -13,7 +13,7 @@ pub mod lower;
 pub mod module;
 pub mod module_lowering;
 pub mod preflight;
-pub mod string_pool;
+pub(crate) mod string_pool;
 pub mod survey;
 pub mod types;
 pub mod wit;
