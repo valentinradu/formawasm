@@ -27,6 +27,29 @@ use crate::wit::{self, WitEmitError};
 /// of an external pass is unwanted on the hot path. Production
 /// callers that want defence against backend bugs can opt into a
 /// `wasmparser::Validator` re-check via [`Self::with_validation`].
+///
+/// # Examples
+///
+/// Plain pipeline against an empty IR module:
+///
+/// ```
+/// use formawasm::{Backend, IrModule, WasmBackend};
+///
+/// let bytes = WasmBackend::new().generate(&IrModule::new()).unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
+///
+/// With the optional validator step on:
+///
+/// ```
+/// use formawasm::{Backend, IrModule, WasmBackend};
+///
+/// let bytes = WasmBackend::new()
+///     .with_validation()
+///     .generate(&IrModule::new())
+///     .unwrap();
+/// assert!(!bytes.is_empty());
+/// ```
 #[derive(Debug, Default, Clone, Copy)]
 #[non_exhaustive]
 pub struct WasmBackend {
@@ -52,6 +75,18 @@ impl WasmBackend {
     /// core module slipping through any future `lower_module` change
     /// would surface here as [`WasmBackendError::Validation`]
     /// instead of as a runtime failure inside the embedding host.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use formawasm::WasmBackend;
+    ///
+    /// let backend = WasmBackend::new().with_validation();
+    /// // `backend.generate(&module)` will now reject malformed wasm
+    /// // before returning. Default-constructed backends skip the
+    /// // pass for speed.
+    /// # let _ = backend;
+    /// ```
     #[must_use]
     pub const fn with_validation(mut self) -> Self {
         self.validate = true;
@@ -176,6 +211,17 @@ fn validate_component(bytes: &[u8]) -> Result<(), WasmBackendError> {
 /// invoke the same post-pass on bytes they obtained another way
 /// (e.g. by calling `module_lowering::lower_module` directly), or
 /// run size-comparison benchmarks against the unoptimized output.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Compile this example with `--features wasm-opt`.
+/// use formawasm::{module_lowering, optimize_core_module, IrModule};
+///
+/// let core = module_lowering::lower_module(&IrModule::new()).unwrap();
+/// let optimized = optimize_core_module(&core).unwrap();
+/// assert!(optimized.len() <= core.len() + 16); // headers stay roughly equal-sized
+/// ```
 ///
 /// Optimization runs over core wasm only — binaryen's component-
 /// model support is still young, and the canonical-ABI wrappers /
