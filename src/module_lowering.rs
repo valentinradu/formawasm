@@ -130,6 +130,11 @@ pub enum ModuleLowerError {
     clippy::too_many_lines,
     reason = "module-level orchestration sequences string interning, function/method index assignment, closure plumbing, and vtable plumbing — splitting hides the dependency order between them"
 )]
+#[tracing::instrument(skip(module), fields(
+    functions = module.functions.len(),
+    impls = module.impls.len(),
+    traits = module.traits.len(),
+))]
 pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     let mut builder = ModuleBuilder::new();
 
@@ -456,6 +461,7 @@ struct ClosurePlumbing {
 /// — the caller leaves the `ClosureCallContext` unset, and a stray
 /// `IrExpr::CallClosure` falls through to a typed
 /// [`LowerError::MissingContext`] downstream.
+#[tracing::instrument(skip_all)]
 fn build_closure_plumbing(
     builder: &mut ModuleBuilder,
     module: &IrModule,
@@ -606,6 +612,7 @@ struct VTablePlumbing {
 /// leaves the [`VTableContext`] unset, and any stray
 /// [`formalang::ir::DispatchKind::Virtual`] call site falls through
 /// to a typed [`LowerError::MissingContext`] downstream.
+#[tracing::instrument(skip_all)]
 fn build_vtable_plumbing(
     builder: &mut ModuleBuilder,
     module: &IrModule,

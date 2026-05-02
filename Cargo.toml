@@ -18,6 +18,14 @@ publish      = false
 formalang = { path = "../formalang" }
 thiserror = "2"
 
+# Lightweight observability. `tracing` itself is a thin facade —
+# only emits work when a subscriber is registered, so the default
+# no-subscriber path is essentially free. Library code uses
+# `#[instrument]` and `tracing::debug!` to mark pipeline stages;
+# consumers that want to see the trace install a subscriber
+# (e.g. `tracing-subscriber`) at startup.
+tracing = "0.1"
+
 # WebAssembly emission stack. wasm-encoder builds core module bytes;
 # wit-component wraps a core module + WIT into a Component Model
 # artifact; wit-parser is the WIT-text frontend `wit-component` builds

@@ -66,19 +66,37 @@ impl Backend for WasmBackend {
     type Output = Vec<u8>;
     type Error = WasmBackendError;
 
+    #[tracing::instrument(skip(self, module), fields(
+        functions = module.functions.len(),
+        structs = module.structs.len(),
+        enums = module.enums.len(),
+        impls = module.impls.len(),
+    ))]
     fn generate(&self, module: &IrModule) -> Result<Self::Output, Self::Error> {
+        tracing::debug!("preflight");
         preflight::check(module)?;
+        tracing::debug!("survey");
         let surface = survey::survey(module);
+        tracing::debug!("lower_module");
         let core_bytes = module_lowering::lower_module(module)?;
+        tracing::debug!(core_bytes = core_bytes.len(), "core module emitted");
         // The `wasm-opt` feature gates a binaryen post-pass that
         // shrinks the emitted core module before it gets wrapped.
         // The pass is only wired in when the feature is on so the
         // default-feature build pulls in zero extra dependencies
         // and pays no runtime cost.
         #[cfg(feature = "wasm-opt")]
-        let core_bytes = optimize_core_module(&core_bytes)?;
+        let core_bytes = {
+            tracing::debug!("optimize_core_module");
+            optimize_core_module(&core_bytes)?
+        };
+        #[cfg(feature = "wasm-opt")]
+        tracing::debug!(core_bytes = core_bytes.len(), "post-wasm-opt size");
+        tracing::debug!("emit_wit");
         let wit_text = wit::emit_wit(module, &surface)?;
+        tracing::debug!("wrap_component");
         let bytes = component::wrap_component(core_bytes, &wit_text)?;
+        tracing::debug!(component_bytes = bytes.len(), "component wrapped");
         Ok(bytes)
     }
 }
