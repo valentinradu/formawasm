@@ -1,7 +1,16 @@
-//! Memory-layout planner for [`IrStruct`] types.
+//! Memory-layout planner for every type the backend lays out in
+//! linear memory.
 //!
-//! Decides where each field lives in linear memory ahead of any
-//! lowering. Following the Component-Model canonical ABI:
+//! One planner per type family: [`plan_struct`] for [`IrStruct`],
+//! [`plan_enum`] for [`IrEnum`], [`plan_array`] / [`plan_range`] /
+//! [`plan_optional`] / [`plan_string`] / [`plan_dictionary`] for the
+//! corresponding `ResolvedType` shapes, and [`plan_vtable`] for
+//! per-trait vtable blobs. Each planner produces a record describing
+//! per-field offsets, total size, and alignment so the lowering
+//! emits stable wasm `i32_load` / `i32_store` instructions against
+//! known constants.
+//!
+//! All sizes follow the Component-Model canonical ABI:
 //!
 //! | type            | size | align |
 //! | --------------- | ---: | ----: |
@@ -10,11 +19,11 @@
 //! | `s64` / `f64`   | 8    | 8     |
 //!
 //! Each field starts at the next offset rounded up to the field's
-//! alignment; the total struct size is rounded up to the struct's
+//! alignment; an aggregate's total size is rounded up to its own
 //! alignment (the maximum of its field alignments, or 1 for an empty
-//! struct). Aggregate fields (nested structs, enums, tuples, arrays,
-//! …) surface as [`LayoutError::NotYetSupported`] until their own
-//! lowerings land in subsequent Phase 1b microcommits.
+//! aggregate). Aggregate-typed fields (nested struct / enum /
+//! optional / array headers) lower as 4-byte pointers into the
+//! pool of bump-allocated linear-memory regions.
 
 use formalang::ast::{PrimitiveType, Visibility};
 use formalang::ir::{IrEnum, IrModule, IrStruct, IrTrait, ResolvedType};

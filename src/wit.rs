@@ -1,11 +1,26 @@
 //! WIT-document generation for the component boundary.
 //!
 //! Turns the `(IrModule, PublicSurface)` pair into a WIT source string
-//! describing one world named `component`, with one `export` per
-//! exported function. Phase 1a covers primitive-only signatures —
-//! aggregate types (struct, enum, tuple, array, …) surface here as
-//! [`TypeMapError::NotYetSupported`] (wrapped in
-//! [`WitEmitError::TypeMap`]) until their lowerings land.
+//! describing one world (named `component`) carrying one `import`
+//! line per `extern_abi`-bearing function in `surface.imports` and
+//! one `export` line per non-extern function in `surface.exports`,
+//! plus a sibling `interface types {}` block for every public struct
+//! / enum the world references.
+//!
+//! Type coverage on the boundary:
+//! - Primitives (`I32` / `I64` / `F32` / `F64` / `Boolean`,
+//!   `String` / `Path` / `Regex` as WIT `string`).
+//! - `Optional<T>` → `option<T>`, `Array<T>` → `list<T>`,
+//!   `Dictionary<K, V>` → `list<tuple<K, V>>`.
+//! - `IrStruct` → `record { ... }`,
+//!   `IrEnum` → `variant { ... }` with multi-field payloads
+//!   emitted as `tuple<T0, T1, ...>` arms (positional — field
+//!   names don't survive the boundary).
+//!
+//! `External` stays rejected with a breadcrumb pointing at the
+//! upstream cross-module-codegen design note. Closures, ranges,
+//! generics, type-params, and unit tuples are not WIT-expressible
+//! and surface as [`WitEmitError::TypeMap`].
 //!
 //! The emitted WIT is parsed back through [`wit_parser::Resolve`]
 //! before returning, so a string this module yields is guaranteed to

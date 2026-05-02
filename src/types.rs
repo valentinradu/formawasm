@@ -1,11 +1,28 @@
 //! Mapping from formalang [`ResolvedType`] / [`PrimitiveType`] to
 //! core-wasm value types.
 //!
-//! Phase 1a covers the numeric primitives, `Boolean`, and `Never`.
-//! Aggregate types (struct, enum, tuple, array, range, optional,
-//! dictionary, closure, external) and `String` / `Path` / `Regex`
-//! land in later phases and surface here as
-//! [`TypeMapError::NotYetSupported`].
+//! Two surfaces:
+//!
+//! - [`resolved_value_type`] / [`primitive_value_type`] — strict WIT
+//!   boundary mapping; used by `wit::emit_wit` so anything that can't
+//!   cross the boundary (cross-module `External`, generic params,
+//!   trait objects, error placeholders) surfaces as
+//!   [`TypeMapError::NotYetSupported`] before component wrap.
+//! - [`body_value_type`] / [`body_result_types`] — the in-body
+//!   convention. Aggregates (struct / tuple / enum / array / range /
+//!   optional / string / dictionary) lower as `i32` pointers, so the
+//!   wasm function signature inside the core module shows a single
+//!   value type per aggregate parameter / result. The strict surface
+//!   is reserved for the WIT side, where aggregate-as-pointer would
+//!   lie about the component-model surface.
+//!
+//! All four numeric primitives (`I32` / `I64` / `F32` / `F64`),
+//! `Boolean` (lowered as `i32`), `Never` (zero-result),
+//! `String` / `Path` / `Regex` (i32 header pointer), structs, enums,
+//! tuples, arrays, ranges, optionals, and dictionaries are wired up.
+//! `External`, `TypeParam`, `Generic`, `Trait`, `Closure`, and `Error`
+//! stay rejected — they're either upstream-blocked, eliminated by
+//! upstream passes, or invariant-violation sentinels.
 
 use formalang::ast::PrimitiveType;
 use formalang::ir::ResolvedType;

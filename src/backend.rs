@@ -1,10 +1,13 @@
 //! `WasmBackend` — entry point that turns an [`IrModule`] into a
 //! WebAssembly component.
 //!
-//! The Phase 1a pipeline is end-to-end: pre-flight rejection, public-
-//! surface survey, core-module lowering, WIT generation, and component
-//! wrap. Phases 1b+ extend the lowering and WIT layers without
-//! changing the shape of this entry point.
+//! The pipeline is: pre-flight rejection (`preflight::check`),
+//! public-surface survey (`survey::survey`), core-module lowering
+//! (`module_lowering::lower_module`), optional `wasm-opt` post-pass
+//! (gated behind the `wasm-opt` cargo feature), WIT generation
+//! (`wit::emit_wit`), and component wrap (`component::wrap_component`).
+//! `WasmBackend::with_validation()` adds a `wasmparser::Validator`
+//! pass against the wrapped bytes; off by default.
 
 use formalang::ir::IrModule;
 use formalang::pipeline::Backend;
