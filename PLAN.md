@@ -273,13 +273,26 @@ the residual case (it'd indicate the caller forgot to run the pass).
 **Known restrictions carried forward from Phase 4:**
 
 - `ResolvedType::External` cross-module references stay rejected
-  by the layout planner / type mapper / lowering. The IR shape
-  exists (a `use other_module::Helper;` produces references
-  carrying `External { module_path, name, kind, type_args }`), but
-  the language has no `use`-syntax driver reaching the backend
-  yet, so the path is dead code today. Nested `module.modules`
-  are still not walked either. Both lift cleanly once a real
-  consumer exercises them.
+  by the layout planner / type mapper / lowering. Investigated
+  2026-05-02 and confirmed to be **upstream-blocked**: the public
+  `compile_to_ir_with_resolver` returns one `IrModule` for the
+  entry-point file and discards the resolver-loaded imports'
+  cached IrModules. With only an opaque
+  `External { module_path, name, kind, type_args }` reference and
+  no access to the imported struct's `IrStruct` / fields / layout,
+  there is no consumer-side fix the backend can make. A design
+  note covering the two viable directions (inline-imports vs.
+  expose-multi-module) lives upstream at
+  `~/projects/formalang/docs/developer/cross-module-codegen.md`
+  on branch `cross-module-codegen-design`. Backend lifting
+  follows once upstream picks a direction.
+- Nested `module.modules` are still not walked. Currently a non-
+  issue: `IrModuleNode` is a tree of indices into the flat
+  top-level vectors, and `lower_module` walks the flat vectors
+  directly — every function / struct / impl in every nested
+  source-level module is already lowered. The `modules` tree
+  would only matter if the backend wanted source-level
+  qualification or per-module visibility; we don't.
 
 After Phase 4 closes, Phase 5+ picks up post-pass optimization
 (`wasm-opt`), DWARF debug info, GC, and async — all separate
