@@ -12,8 +12,8 @@ use std::borrow::Cow;
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
     ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    MemArg, MemorySection, MemoryType, Module, RefType, TableSection, TableType, TypeSection,
-    ValType,
+    MemArg, MemorySection, MemoryType, Module, NameMap, NameSection, RefType, TableSection,
+    TableType, TypeSection, ValType,
 };
 
 /// Alignment, in bytes, the bump allocator rounds every returned address up to.
@@ -134,6 +134,15 @@ pub struct ModuleBuilder {
     /// memory; the bump-allocator's heap starts immediately after this
     /// region.
     static_data: Vec<u8>,
+    /// Source-level function names indexed by wasm function index.
+    /// Populated incrementally via [`Self::set_function_name`] and
+    /// emitted as a `name` custom section in [`Self::finish`] so
+    /// debug tooling sees the original identifiers instead of
+    /// `func[N]`. `None` slots stay anonymous in the output —
+    /// expected for test fixtures that build modules through the
+    /// raw `declare_function*` API without going through
+    /// `module_lowering`.
+    function_names: Vec<Option<String>>,
 }
 
 impl Default for ModuleBuilder {
@@ -177,6 +186,24 @@ impl ModuleBuilder {
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
+            function_names: Vec::new(),
+        }
+    }
+
+    /// Record a source-level name for the wasm function at
+    /// `function_index`. Names land in the `name` custom section
+    /// emitted at [`Self::finish`] time and let debug tooling
+    /// (`wasmtime --debug`, browser devtools, `wasm-tools print`)
+    /// show readable identifiers instead of `func[N]`. Calling for
+    /// an index past the current end-of-vector grows the names
+    /// vector; any unwritten slot stays anonymous.
+    pub fn set_function_name(&mut self, function_index: u32, name: &str) {
+        let idx = function_index as usize;
+        if self.function_names.len() <= idx {
+            self.function_names.resize(idx.saturating_add(1), None);
+        }
+        if let Some(slot) = self.function_names.get_mut(idx) {
+            *slot = Some(name.to_owned());
         }
     }
 
@@ -347,6 +374,10 @@ impl ModuleBuilder {
             .import(module_name, fn_name, EntityType::Function(type_index));
         let func_index = self.import_function_count;
         self.import_function_count = self.import_function_count.saturating_add(1);
+        // Mirror the import's wire name into the `name` section so
+        // host-provided imports show up as `host-double` rather than
+        // `func[0]` in disassembly.
+        self.set_function_name(func_index, fn_name);
         func_index
     }
 
@@ -393,6 +424,7 @@ impl ModuleBuilder {
             .end();
 
         let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, BUMP_ALLOCATOR_NAME);
         self.bump_allocator = Some(idx);
         idx
     }
@@ -522,6 +554,7 @@ impl ModuleBuilder {
 
         let idx =
             self.declare_function_with_body(&[ValType::I32, ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, STR_EQ_NAME);
         self.str_eq = Some(idx);
         idx
     }
@@ -622,6 +655,7 @@ impl ModuleBuilder {
 
         let idx =
             self.declare_function_with_body(&[ValType::I32, ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, STR_CONCAT_NAME);
         self.str_concat = Some(idx);
         idx
     }
@@ -655,6 +689,7 @@ impl ModuleBuilder {
             &[ValType::I32],
             &body,
         );
+        self.set_function_name(idx, CABI_REALLOC_NAME);
         self.export_function(CABI_REALLOC_NAME, idx);
         idx
     }
@@ -723,8 +758,40 @@ impl ModuleBuilder {
         if !self.static_data.is_empty() {
             module.section(&data);
         }
+        // Custom `name` section, last in the module so debug
+        // tooling can read it without affecting any other
+        // section's offsets. Only emitted when at least one
+        // function carries a name — keeps test fixtures that build
+        // anonymous modules byte-identical to before.
+        if let Some(name_section) = build_name_section(&self.function_names) {
+            module.section(&name_section);
+        }
         module.finish()
     }
+}
+
+/// Assemble a `name` custom section from `function_names`. Returns
+/// `None` if every slot is anonymous — emitting an empty
+/// `NameSection` is wasteful and surfaces as zero-byte custom
+/// section in `wasm-tools print` output.
+fn build_name_section(function_names: &[Option<String>]) -> Option<NameSection> {
+    if function_names.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut names = NameMap::new();
+    for (idx, slot) in function_names.iter().enumerate() {
+        if let Some(name) = slot {
+            // Wasm function indices are u32; the `function_names`
+            // vec is sized in lockstep with the function-index
+            // space, so this conversion is exact for any module
+            // the rest of the builder accepts.
+            let idx_u32 = u32::try_from(idx).unwrap_or(u32::MAX);
+            names.append(idx_u32, name);
+        }
+    }
+    let mut section = NameSection::new();
+    section.functions(&names);
+    Some(section)
 }
 
 /// Compute the bump-allocator's initial heap-pointer value given the

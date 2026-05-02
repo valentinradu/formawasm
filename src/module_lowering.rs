@@ -989,6 +989,17 @@ fn emit_function(
         str_concat,
     )?;
     let wasm_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
+    // Record the source-level identifier in the `name` custom
+    // section so disassembly shows it. Methods are qualified with
+    // their containing struct (e.g. `counter::apply`) so
+    // collisions across impls don't merge into a single name.
+    let pretty_name = impl_self_struct_id
+        .and_then(|id| module.structs.get(id.0 as usize))
+        .map_or_else(
+            || kebab_case(&f.name),
+            |struct_def| format!("{}::{}", kebab_case(&struct_def.name), kebab_case(&f.name)),
+        );
+    builder.set_function_name(wasm_idx, &pretty_name);
     // Phase 1a: every non-extern top-level function is exported by
     // its source-level name. Survey-driven export filtering lands
     // alongside WIT generation in the next mc. Impl methods do NOT
@@ -1161,6 +1172,10 @@ fn emit_canonical_abi_wrapper(
     }
 
     let wrapper_idx = builder.declare_function_with_body(&param_valtypes, &result_valtypes, &body);
+    builder.set_function_name(
+        wrapper_idx,
+        &format!("{}::cabi-wrapper", kebab_case(&f.name)),
+    );
     Ok(wrapper_idx)
 }
 

@@ -35,6 +35,26 @@ fn empty_module_generates_a_valid_component() -> TestResult {
 }
 
 #[test]
+fn emitted_module_carries_a_name_section_for_user_functions() -> TestResult {
+    // The custom `name` section is what lets debug tooling show
+    // `fib` instead of `func[N]`. A module with one user function
+    // should embed both the runtime helpers' names (bump
+    // allocator, string helpers, cabi_realloc) and the user fn's
+    // kebab-cased name in the emitted bytes.
+    let mut module = IrModule::new();
+    module.functions.push(fibonacci_function());
+    let bytes = WasmBackend::new().generate(&module)?;
+
+    let hay = String::from_utf8_lossy(&bytes);
+    for needle in ["__alloc", "__str_eq", "__str_concat", "cabi_realloc", "fib"] {
+        if !hay.contains(needle) {
+            return Err(format!("missing `{needle}` in name section of emitted bytes").into());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn with_validation_runs_wasmparser_internally() -> TestResult {
     // The `with_validation` builder switches on a wasmparser pass
     // inside `generate`. On a known-good module it should succeed
