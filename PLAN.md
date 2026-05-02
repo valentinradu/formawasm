@@ -298,6 +298,55 @@ After Phase 4 closes, Phase 5+ picks up post-pass optimization
 (`wasm-opt`), DWARF debug info, GC, and async — all separate
 initiatives per the README roadmap.
 
+**Phase 5 is PARTIALLY COMPLETE** (status as of 2026-05-02):
+
+- ✅ #1 — `wasm-opt` post-pass behind cargo feature
+  (`ac47d26`). New `wasm-opt` cargo feature gates a binaryen
+  post-pass between core-module emission and component wrapping;
+  the default-feature build pulls in zero extra deps. Pass runs
+  with `Feature::All` since our modules use multi-table,
+  reference types, and bulk-memory. Validated end-to-end by
+  re-running every milestone (1b, 2, 3, 4, sieve,
+  wit-string-roundtrip) under `--features wasm-opt`.
+- 🛑 #2 — String `len` / `slice` in-module helpers.
+  **Upstream-blocked**: `String` is a primitive type today and
+  method dispatch resolves only against Struct / Enum / Trait
+  receivers. There's no IR shape for `s.len()` or `s.slice(..)`
+  to consume. Design note pushed to upstream at
+  `~/projects/formalang/docs/developer/string-builtins.md` on
+  branch `string-builtins-design`.
+- 🛑 #3 — Default parameter values. **Upstream-blocked**:
+  semantic validation does an exact arity match
+  (`validation/invocation.rs:426`), so calls that omit a
+  defaults-bearing parameter get rejected before the IR sees them.
+  `IrFunctionParam.default` is preserved end-to-end through the
+  IR but never consulted at lowering or codegen time. Design note
+  pushed to upstream at
+  `~/projects/formalang/docs/developer/default-parameters.md` on
+  branch `default-params-design`.
+- ✅ #4 — Stack-vs-heap split for small aggregates. **Resolved
+  as a design decision: keep uniform heap.** Analysis in
+  `docs/design/stack-vs-heap-aggregates.md`. Cost is invasive
+  across ~25 lowering paths plus boundary trampolines; benefit is
+  speculative for our workload. Revisit only if profiling on a
+  real consumer flips the call. The README's open-question entry
+  for stack-vs-heap is now closed.
+- 🛑 #5 — DWARF debug info. **Upstream-blocked**: the IR carries
+  no source spans on any expression / function / struct / enum.
+  Spans live on the AST and get discarded at IR-lowering time.
+  Without per-IR-node spans, there's nothing to anchor a
+  `.debug_line` or `.debug_info` table against. Design note
+  pushed to upstream at
+  `~/projects/formalang/docs/developer/ir-spans.md` on branch
+  `dwarf-spans-design`.
+
+The four upstream-blocked items have design notes covering both
+the current state and the two options for unblocking. Backend
+lifting is mostly mechanical (one to a few commits each) once
+upstream commits to a direction.
+
+GC and async stay deferred separately per the README.
+
 ---
 
 ## Phase 1 microcommit list (~30 commits to v0.1)
