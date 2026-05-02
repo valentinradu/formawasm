@@ -156,3 +156,39 @@ items can compose against the uniform-heap convention without
 worrying about a future split. If profiling on a real workload
 ever flips the call, the work spins up as its own phase with a
 dedicated milestone.
+
+---
+
+## Plan
+
+**No implementation work.** The decision is recorded above: keep
+uniform heap through Phase 5. This file is a closed-decision
+archive, not a forward-looking plan. Phase 5+ feature work
+composes against the uniform-heap convention; no per-feature
+allowance is needed for a future stack/heap split.
+
+### Re-evaluation triggers
+
+The four triggers in "What would change the call" above are the
+only conditions that re-open this decision:
+
+1. Profiling shows aggregate allocation > 5% of runtime in a real
+   consumer's workload.
+2. A wasm GC proposal lands and is adopted upstream.
+3. The wasm `memargs` proposal grows multi-result-return for
+   pointer-bearing aggregates.
+4. A user-facing `#[stack]` annotation on aggregate definitions
+   surfaces in FormaLang.
+
+If any of these fires, this file is replaced by a new plan note
+for the implementation phase, not amended in place.
+
+### Exit criteria
+
+- This plan file is **deletable at any time** — the decision is
+  preserved in commit history (`4a23c8c` introduced the note), and
+  the README's open-questions entry has been updated.
+- The file is moved to `plans/` only to mirror the formalang
+  parallel-notes layout. Keeping it indefinitely as a permanent
+  decision record (under `plans/closed/` or similar) is also
+  acceptable.
