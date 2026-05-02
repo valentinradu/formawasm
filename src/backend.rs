@@ -83,13 +83,20 @@ impl Backend for WasmBackend {
     }
 }
 
-/// Run binaryen's wasm-opt over the emitted core-module bytes.
+/// Run binaryen's wasm-opt over a core-Wasm byte slice and return
+/// the optimized output.
 ///
-/// Optimization happens before component wrapping so the post-pass
-/// only sees core wasm: binaryen's component-model support is still
-/// young, and the canonical-ABI wrappers / `cabi_realloc` export the
-/// component layer relies on are easier to keep intact when wrapping
-/// happens after.
+/// `WasmBackend::generate` calls this internally between core-module
+/// emission and component wrapping when the `wasm-opt` cargo feature
+/// is on. The function is also exposed publicly so callers can
+/// invoke the same post-pass on bytes they obtained another way
+/// (e.g. by calling `module_lowering::lower_module` directly), or
+/// run size-comparison benchmarks against the unoptimized output.
+///
+/// Optimization runs over core wasm only — binaryen's component-
+/// model support is still young, and the canonical-ABI wrappers /
+/// `cabi_realloc` export the component layer relies on are easier
+/// to keep intact when wrapping happens after.
 ///
 /// Our emitted modules use multi-table (closure + method funcref
 /// tables), reference types (`funcref` element type), and bulk-
@@ -97,7 +104,7 @@ impl Backend for WasmBackend {
 /// baseline rejects some of those, so we enable the full feature
 /// set up-front.
 #[cfg(feature = "wasm-opt")]
-fn optimize_core_module(core_bytes: &[u8]) -> Result<Vec<u8>, WasmBackendError> {
+pub fn optimize_core_module(core_bytes: &[u8]) -> Result<Vec<u8>, WasmBackendError> {
     use std::io::{Read as _, Write as _};
 
     use wasm_opt::OptimizationOptions;

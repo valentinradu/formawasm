@@ -18,6 +18,8 @@ pub mod survey;
 pub mod types;
 pub mod wit;
 
+#[cfg(feature = "wasm-opt")]
+pub use backend::optimize_core_module;
 pub use backend::{WasmBackend, WasmBackendError};
 pub use component::{ComponentWrapError, wrap_component};
 pub use layout::{
