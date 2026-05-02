@@ -978,3 +978,37 @@ fn import_signature_round_trips_through_wit_parser() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn external_typed_export_is_rejected_with_design_note_breadcrumb() -> TestResult {
+    // Cross-module type lowering is upstream-blocked. The WIT
+    // emitter's per-type tag function (`variant_tag` for diagnostics
+    // / `resolved_wit_type` for emission) carries the breadcrumb.
+    // Exercise the rejection through `resolved_wit_type` by building
+    // a function whose return type is `External` and confirming the
+    // emit fails with the right message.
+    let external = ResolvedType::External {
+        module_path: vec!["helper".to_owned()],
+        name: "Helper".to_owned(),
+        kind: formalang::ir::ImportedKind::Struct,
+        type_args: Vec::new(),
+    };
+    let f = function("uses-external", vec![], Some(external));
+
+    let mut module = IrModule::new();
+    module.functions.push(f);
+
+    let surface = survey::survey(&module);
+    match wit::emit_wit(&module, &surface) {
+        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
+            if kind.contains("External(Helper)")
+                && kind.contains("upstream-blocked")
+                && kind.contains("cross-module-codegen.md") =>
+        {
+            Ok(())
+        }
+        other => {
+            Err(format!("expected NotYetSupported with External breadcrumb, got {other:?}").into())
+        }
+    }
+}

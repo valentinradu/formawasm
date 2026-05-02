@@ -109,3 +109,30 @@ fn result_types_for_i64_is_one_i64() -> TestResult {
         Err(format!("expected [I64], got {r:?}").into())
     }
 }
+
+#[test]
+fn external_type_is_rejected_with_design_note_breadcrumb() -> TestResult {
+    // Cross-module type lowering is upstream-blocked. The error
+    // message embeds a path to the upstream design note so anyone
+    // hitting this from the consumer side gets a one-hop
+    // explanation. Confirm both the variant and the breadcrumb so
+    // a refactor that drops the hint fails this test loudly.
+    let external = ResolvedType::External {
+        module_path: vec!["helper".to_owned()],
+        name: "Helper".to_owned(),
+        kind: formalang::ir::ImportedKind::Struct,
+        type_args: Vec::new(),
+    };
+    match types::resolved_value_type(&external) {
+        Err(TypeMapError::NotYetSupported { kind })
+            if kind.contains("External(Helper)")
+                && kind.contains("upstream-blocked")
+                && kind.contains("cross-module-codegen.md") =>
+        {
+            Ok(())
+        }
+        other => {
+            Err(format!("expected NotYetSupported with External breadcrumb, got {other:?}").into())
+        }
+    }
+}

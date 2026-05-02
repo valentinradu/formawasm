@@ -363,3 +363,32 @@ fn string_field_lays_out_as_pointer() -> TestResult {
         }],
     )
 }
+
+#[test]
+fn external_field_is_rejected_with_design_note_breadcrumb() -> TestResult {
+    // Cross-module type lowering is upstream-blocked. Confirm the
+    // layout planner's rejection carries the breadcrumb pointing
+    // at the upstream design note — symmetry with the type-mapper
+    // path covered in `tests/types.rs`. A refactor that drops the
+    // hint trips this test.
+    let external = ResolvedType::External {
+        module_path: vec!["helper".to_owned()],
+        name: "Helper".to_owned(),
+        kind: formalang::ir::ImportedKind::Struct,
+        type_args: Vec::new(),
+    };
+    let s = make_struct("WrapsExternal", vec![field("inner", external)]);
+    let module = IrModule::new();
+    match layout::plan_struct(&s, &module) {
+        Err(LayoutError::NotYetSupported { kind })
+            if kind.contains("External(Helper)")
+                && kind.contains("upstream-blocked")
+                && kind.contains("cross-module-codegen.md") =>
+        {
+            Ok(())
+        }
+        other => {
+            Err(format!("expected NotYetSupported with External breadcrumb, got {other:?}").into())
+        }
+    }
+}
