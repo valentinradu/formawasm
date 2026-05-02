@@ -29,8 +29,13 @@ tracing = "0.1"
 # WebAssembly emission stack. wasm-encoder builds core module bytes;
 # wit-component wraps a core module + WIT into a Component Model
 # artifact; wit-parser is the WIT-text frontend `wit-component` builds
-# its `Resolve` on. wasm-tools crates share a coordinated version line.
+# its `Resolve` on; wasmparser is used by `WasmBackend::with_validation`
+# to optionally re-validate the wrapped component bytes before
+# returning. The crate is in the graph transitively via wit-component
+# already, so promoting it to a direct dep is free in compile cost.
+# wasm-tools crates share a coordinated version line.
 wasm-encoder  = "0.247"
+wasmparser    = "0.247"
 wit-component = "0.247"
 wit-parser    = "0.247"
 
@@ -53,10 +58,10 @@ tempfile = { version = "3", optional = true }
 wasm-opt = ["dep:wasm-opt", "dep:tempfile"]
 
 [dev-dependencies]
-# wasmparser validates emitted core modules in tests; wasmtime hosts
-# the component for end-to-end smoke tests.
-wasmparser = "0.247"
-wasmtime   = "44"
+# wasmtime hosts the component for end-to-end smoke tests.
+# wasmparser is a direct runtime dep above (used by the optional
+# validation builder), so it doesn't repeat here.
+wasmtime = "44"
 
 # ---------------------------------------------------------------------------
 # Lint configuration. Strict by default; every override carries a comment

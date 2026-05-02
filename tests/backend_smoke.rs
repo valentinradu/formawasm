@@ -35,6 +35,25 @@ fn empty_module_generates_a_valid_component() -> TestResult {
 }
 
 #[test]
+fn with_validation_runs_wasmparser_internally() -> TestResult {
+    // The `with_validation` builder switches on a wasmparser pass
+    // inside `generate`. On a known-good module it should succeed
+    // and produce the same bytes as the non-validating path.
+    let module = IrModule::new();
+    let plain = WasmBackend::new().generate(&module)?;
+    let validated = WasmBackend::new().with_validation().generate(&module)?;
+    if plain != validated {
+        return Err(format!(
+            "validation should not alter output: plain = {} bytes, validated = {} bytes",
+            plain.len(),
+            validated.len()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[test]
 fn fibonacci_module_generates_and_runs_under_wasmtime() -> TestResult {
     let mut module = IrModule::new();
     module.functions.push(fibonacci_function());

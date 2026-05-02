@@ -17,14 +17,42 @@ use crate::survey;
 use crate::wit::{self, WitEmitError};
 
 /// Backend that lowers a typed IR module to a WebAssembly component.
-#[derive(Debug, Default)]
+///
+/// Construction goes through [`Self::new`]. By default `generate`
+/// returns the wrapped component bytes without re-validating them —
+/// `wit-component` validates internally during wrap, and the cost
+/// of an external pass is unwanted on the hot path. Production
+/// callers that want defence against backend bugs can opt into a
+/// `wasmparser::Validator` re-check via [`Self::with_validation`].
+#[derive(Debug, Default, Clone, Copy)]
 #[non_exhaustive]
-pub struct WasmBackend;
+pub struct WasmBackend {
+    /// When `true`, [`Backend::generate`] runs the wrapped component
+    /// bytes through `wasmparser::Validator` before returning. Off
+    /// by default. Surfaces internal-error conditions
+    /// (malformed core wasm slipping through, canonical-ABI
+    /// mismatches) as [`WasmBackendError::Validation`] instead of
+    /// failing later inside the host runtime.
+    validate: bool,
+}
 
 impl WasmBackend {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { validate: false }
+    }
+
+    /// Return a new backend that runs the emitted component bytes
+    /// through `wasmparser::Validator` before returning them. The
+    /// pass is purely defensive — `wit-component`'s internal
+    /// validation already covers the canonical ABI, but a malformed
+    /// core module slipping through any future `lower_module` change
+    /// would surface here as [`WasmBackendError::Validation`]
+    /// instead of as a runtime failure inside the embedding host.
+    #[must_use]
+    pub const fn with_validation(mut self) -> Self {
+        self.validate = true;
+        self
     }
 }
 
@@ -58,6 +86,18 @@ pub enum WasmBackendError {
     #[error("wasm-opt post-pass failed: {reason}")]
     WasmOpt {
         /// Binaryen's diagnostic rendered as a string.
+        reason: String,
+    },
+
+    /// `wasmparser::Validator` rejected the emitted component bytes
+    /// when the backend was constructed with [`WasmBackend::with_validation`].
+    /// Indicates a backend bug — by the time validation runs, the
+    /// upstream pipeline has signed off and `wit-component` has
+    /// already wrapped, so a failure here means we emitted
+    /// structurally invalid wasm despite both layers passing.
+    #[error("wasmparser rejected the emitted component: {reason}")]
+    Validation {
+        /// `wasmparser`'s diagnostic rendered as a string.
         reason: String,
     },
 }
@@ -97,8 +137,31 @@ impl Backend for WasmBackend {
         tracing::debug!("wrap_component");
         let bytes = component::wrap_component(core_bytes, &wit_text)?;
         tracing::debug!(component_bytes = bytes.len(), "component wrapped");
+        if self.validate {
+            tracing::debug!("validate");
+            validate_component(&bytes)?;
+        }
         Ok(bytes)
     }
+}
+
+/// Run `wasmparser::Validator` against the wrapped component bytes.
+///
+/// The default `WasmFeatures` set covers the proposals our emitted
+/// modules use (multi-table, reference types, bulk-memory, plus the
+/// component model bits enabled by default in 0.247). A validation
+/// failure here means the backend emitted structurally invalid wasm
+/// despite the upstream pipeline's checks and `wit-component`'s
+/// internal validation — surface it as `WasmBackendError::Validation`.
+fn validate_component(bytes: &[u8]) -> Result<(), WasmBackendError> {
+    use wasmparser::{Validator, WasmFeatures};
+    let mut validator = Validator::new_with_features(WasmFeatures::default());
+    validator
+        .validate_all(bytes)
+        .map_err(|e| WasmBackendError::Validation {
+            reason: format!("{e}"),
+        })?;
+    Ok(())
 }
 
 /// Run binaryen's wasm-opt over a core-Wasm byte slice and return
