@@ -7,7 +7,7 @@ first, then come back here for the "what to do now" view.
 
 ---
 
-## Status (as of 2026-05-02 — Phase 3 complete; Phase 4 next)
+## Status (as of 2026-05-02 — Phase 4 complete; Phase 5+ deferred)
 
 **Upstream — formalang at `~/projects/formalang`:**
 
@@ -247,21 +247,43 @@ the residual case (it'd indicate the caller forgot to run the pass).
   component-model artifact, instantiates under wasmtime's component
   runtime, and confirms each function dispatches to its own impl.
 
-After Phase 3 closes, Phase 4 picks up `extern_abi` imports + cross-
-module `ResolvedType::External` references.
+**Phase 4 is COMPLETE** (closed out 2026-05-02):
 
-## Immediate work — Phase 4: externs + external modules (~6 commits)
+- ✅ mc1 (`b9d839f`): WIT-side `import` emission. Every
+  `extern_abi`-bearing function in `surface.imports` lands in the
+  world block as `import <kebab-name>: func(...) -> ...;`. Round-
+  trips through `wit_parser::Resolve`.
+- ✅ mc2 (`6f3a0ec`): Core-wasm import section. ModuleBuilder grows
+  `declare_function_import` and an `ImportSection`. Imports occupy
+  the leading region of the wasm function-index space; runtime
+  helpers and locally-defined user functions ladder up behind them.
+  Imports lift under module name `cm32p2` (wit-component's
+  canonical-ABI mangling). The old `ExternFunction` reject-on-emit
+  path is gone — extern functions are first-class now;
+  `MissingFunctionBody` survives as a body-None invariant check
+  for malformed non-extern functions.
+- ✅ Phase 4 milestone (`tests/milestone_4.rs`): one extern
+  `host_double(n: I32) -> I32` declaration + one local
+  `call_host(n: I32) -> I32 { host_double(n) }`. Runs through
+  `Pipeline::new()` + `WasmBackend::new()`, validates the
+  component-model artifact, instantiates under wasmtime with a
+  `Linker` that maps `host-double` to `|n| 2 * n`, calls
+  `call_host(21)` and confirms the result is 42.
 
-Per README's roadmap (line 306):
+**Known restrictions carried forward from Phase 4:**
 
-1. WIT-import generation from each `extern_abi` `IrFunction`.
-2. Component import-section emission.
-3. Lowering for `ResolvedType::External` references (cross-module
-   symbol resolution).
-4. Test harness wires host-provided imports via
-   `wasmtime::component::Linker`.
-5. **Milestone**: host-provided extern called from formalang;
-   multi-module program compiles.
+- `ResolvedType::External` cross-module references stay rejected
+  by the layout planner / type mapper / lowering. The IR shape
+  exists (a `use other_module::Helper;` produces references
+  carrying `External { module_path, name, kind, type_args }`), but
+  the language has no `use`-syntax driver reaching the backend
+  yet, so the path is dead code today. Nested `module.modules`
+  are still not walked either. Both lift cleanly once a real
+  consumer exercises them.
+
+After Phase 4 closes, Phase 5+ picks up post-pass optimization
+(`wasm-opt`), DWARF debug info, GC, and async — all separate
+initiatives per the README roadmap.
 
 ---
 
