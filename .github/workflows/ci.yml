@@ -123,3 +123,31 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo deny check
+
+  # ── wasm-opt feature path ────────────────────────────────────────────────
+  #
+  # The optional `wasm-opt` feature pulls in `wasm-opt-sys`, which compiles
+  # binaryen from source — adds a few minutes of build time per run, so
+  # this lives in its own job rather than being layered onto the default
+  # test step. Runs in parallel with the others; not a blocker for merge.
+  # Without this job the feature path silently bit-rots since
+  # `tests/wasm_opt_size.rs` is gated on it.
+  wasm-opt:
+    name: Test (--features wasm-opt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: formawasm
+      - uses: actions/checkout@v4
+        with:
+          repository: valentinradu/formalang
+          path: formalang
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-opt
+          workspaces: formawasm
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - run: cargo test --features wasm-opt
