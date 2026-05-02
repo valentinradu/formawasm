@@ -1,0 +1,10 @@
+---
+source: tests/wit_snapshots.rs
+expression: wit
+---
+package formawasm:generated;
+
+world component {
+  import host-add: func(a: s32, b: s32) -> s32;
+  export use-host: func() -> s32;
+}

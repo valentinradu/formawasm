@@ -1,0 +1,16 @@
+---
+source: tests/wit_snapshots.rs
+expression: wit
+---
+package formawasm:generated;
+
+interface types {
+  record point {
+    x: s32,
+    y: s32,
+  }
+}
+
+world component {
+  use types.{point};
+}

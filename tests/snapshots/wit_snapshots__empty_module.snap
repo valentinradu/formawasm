@@ -1,0 +1,8 @@
+---
+source: tests/wit_snapshots.rs
+expression: wit
+---
+package formawasm:generated;
+
+world component {
+}

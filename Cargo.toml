@@ -63,6 +63,11 @@ wasm-opt = ["dep:wasm-opt", "dep:tempfile"]
 # validation builder), so it doesn't repeat here.
 wasmtime = "44"
 
+# Snapshot-style assertions for the WIT emitter — captures the full
+# emitted text in `tests/snapshots/` so any divergence (whitespace,
+# ordering, sibling lines) trips a review-gated diff.
+insta = "1.43"
+
 # ---------------------------------------------------------------------------
 # Lint configuration. Strict by default; every override carries a comment
 # explaining the reason. Enforced in CI.

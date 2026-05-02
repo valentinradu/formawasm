@@ -1,0 +1,17 @@
+---
+source: tests/wit_snapshots.rs
+expression: wit
+---
+package formawasm:generated;
+
+interface types {
+  variant action {
+    reset,
+    add(s32),
+    replace(tuple<s32, s32>),
+  }
+}
+
+world component {
+  use types.{action};
+}
