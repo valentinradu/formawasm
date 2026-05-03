@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>formawasm — FormaLang to WebAssembly components</title>
+    <meta name="description" content="formawasm compiles a typed FormaLang IR module into a WebAssembly component. Standards-compliant output, auto-generated WIT, runtime-agnostic.">
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+    <link rel="apple-touch-icon" href="./logo-180.png">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <main class="flex-1">
+        <!-- Hero -->
+        <section class="max-w-3xl mx-auto px-6 pt-32 pb-24 text-center">
+            <img src="./logo-180.png" alt="formawasm" class="h-32 w-32 mx-auto mb-12" />
+            <h1 class="text-4xl md:text-5xl font-semibold text-fg leading-tight tracking-tight">
+                FormaLang in,
+                <span class="text-magenta">WebAssembly components</span>
+                out.
+            </h1>
+            <p class="mt-8 text-lg text-fgDark max-w-2xl mx-auto">
+                <code class="text-orange">formawasm</code> takes a typed
+                <code class="text-orange">IrModule</code> from FormaLang and emits a
+                Component-Model <code class="text-orange">.wasm</code> binary —
+                ready for wasmtime, wasmi, the browser, or any other compliant
+                runtime. WIT comes for free from the public surface.
+            </p>
+            <div class="mt-12 flex justify-center gap-4 flex-wrap">
+                <a class="btn-primary" href="https://github.com/valentinradu/formawasm">See on GitHub</a>
+                <a class="btn-ghost" href="./docs/">Read the docs</a>
+            </div>
+            <div class="mt-10 flex flex-wrap justify-center items-center gap-x-8 gap-y-3 text-sm text-dark5">
+                <a href="https://github.com/valentinradu/formalang" class="inline-flex items-center gap-2 hover:text-cyan transition-colors">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="16 18 22 12 16 6"/>
+                        <polyline points="8 6 2 12 8 18"/>
+                    </svg>
+                    FormaLang frontend
+                </a>
+                <a href="https://github.com/WebAssembly/component-model" class="inline-flex items-center gap-2 hover:text-cyan transition-colors">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <path d="M3 9h18M9 21V9"/>
+                    </svg>
+                    Component Model
+                </a>
+                <a href="./docs/" class="inline-flex items-center gap-2 hover:text-cyan transition-colors">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v17a1 1 0 0 1-1 1H6.5a2.5 2.5 0 0 1 0-5H20"/>
+                        <line x1="8" y1="7" x2="16" y2="7"/>
+                        <line x1="8" y1="11" x2="14" y2="11"/>
+                    </svg>
+                    /docs
+                </a>
+            </div>
+        </section>
+
+        <!-- The pipeline -->
+        <section class="max-w-3xl mx-auto px-6 pb-16 text-center">
+            <p class="text-sm text-dark5 mb-3 uppercase tracking-widest">The pipeline</p>
+            <pre class="inline-block text-left text-sm text-fgDark"><span class="text-magenta">.fv source</span> ──► <span class="text-cyan">FormaLang</span> ──► <span class="text-magenta">IrModule</span> ──► <span class="text-cyan">formawasm</span> ──► <span class="text-magenta">.wasm component</span> ──► <span class="text-cyan">your runtime</span></pre>
+        </section>
+
+        <!-- Quick example: CLI -->
+        <section class="max-w-3xl mx-auto px-6 pb-16">
+            <h2 class="text-xl font-semibold text-cyan mb-4 text-center">From source to component in one command</h2>
+            <div class="code-card">
+                <pre class="text-sm leading-relaxed"><span class="text-comment"># Write a FormaLang source file…</span>
+echo <span class="text-green">'pub fn id(x: I32) -> I32 { x }'</span> &gt; id.fv
+
+<span class="text-comment"># …and compile it.</span>
+formawasm-cli id.fv
+<span class="text-comment"># wrote id.wasm (… bytes) from id.fv</span>
+
+<span class="text-comment"># Inspect the auto-generated WIT.</span>
+wasm-tools component wit id.wasm</pre>
+            </div>
+            <div class="code-card mt-4">
+                <pre class="text-sm leading-relaxed"><span class="text-comment">// id.wasm — WIT view</span>
+<span class="text-magenta">package</span> formawasm:generated;
+
+<span class="text-magenta">world</span> <span class="text-blue">component</span> {
+  <span class="text-magenta">export</span> <span class="text-blue">id</span>: <span class="text-magenta">func</span>(x: <span class="text-yellow">s32</span>) -&gt; <span class="text-yellow">s32</span>;
+}</pre>
+            </div>
+        </section>
+
+        <!-- Quick example: library -->
+        <section class="max-w-3xl mx-auto px-6 pb-24">
+            <h2 class="text-xl font-semibold text-cyan mb-4 text-center">…or wire the backend into your build</h2>
+            <div class="code-card">
+                <pre class="text-sm leading-relaxed"><span class="text-comment">// Cargo.toml</span>
+<span class="text-yellow">[dependencies]</span>
+formawasm = { <span class="text-magenta">git</span> = <span class="text-green">"https://github.com/valentinradu/formawasm"</span> }
+
+<span class="text-comment">// main.rs</span>
+<span class="text-magenta">use</span> formalang::{Pipeline, compile_to_ir};
+<span class="text-magenta">use</span> formawasm::WasmBackend;
+
+<span class="text-magenta">let</span> module = <span class="text-blue">compile_to_ir</span>(source)?;
+<span class="text-magenta">let</span> bytes = Pipeline::<span class="text-blue">new</span>()
+    .<span class="text-blue">emit</span>(module, &amp;WasmBackend::<span class="text-blue">new</span>())?;
+<span class="text-comment">// bytes is a Vec&lt;u8&gt; ready for wasmtime, wasmi, jco, …</span></pre>
+            </div>
+        </section>
+
+        <!-- Why -->
+        <section class="max-w-5xl mx-auto px-6 pb-32 text-center">
+            <h2 class="text-2xl font-semibold text-cyan mb-12">Why formawasm</h2>
+            <div class="grid md:grid-cols-3 gap-10">
+                <div>
+                    <h3 class="text-lg font-semibold text-magenta mb-3">Component Model native</h3>
+                    <p class="text-fgDark">
+                        Output is a Component-Model artifact from day one — never
+                        a bare core wasm module. Standards-compliant, runs in
+                        every compliant runtime, future-proof against the
+                        evolution of the platform.
+                    </p>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-magenta mb-3">WIT for free</h3>
+                    <p class="text-fgDark">
+                        The typed boundary is auto-generated from the public
+                        surface of each module. No hand-written
+                        <code class="text-orange">.wit</code> files, no manual
+                        interface bookkeeping. Mark a function
+                        <code class="text-orange">pub</code>; it becomes an export.
+                    </p>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-magenta mb-3">Runtime-agnostic</h3>
+                    <p class="text-fgDark">
+                        The backend stops at bytes. Pick wasmtime for the
+                        server, jco for the browser, wasmi for embedded —
+                        the same artifact runs unchanged. formawasm has no
+                        opinion on where you ship.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- What's in the box -->
+        <section class="max-w-5xl mx-auto px-6 pb-32">
+            <h2 class="text-2xl font-semibold text-cyan mb-8 text-center">What's in the box</h2>
+            <div class="grid md:grid-cols-2 gap-6">
+                <div class="rounded-lg border border-bgHighlight bg-bgDark p-6">
+                    <h3 class="text-base font-semibold text-magenta mb-2">The full FormaLang surface</h3>
+                    <p class="text-fgDark text-sm">
+                        Structs, enums, traits, methods, generics (after
+                        monomorphisation), closures (after closure-conversion),
+                        virtual dispatch, host-provided externs. Strings,
+                        optionals, dictionaries, arrays, ranges — every
+                        container has a memory layout and a WIT mapping.
+                    </p>
+                </div>
+                <div class="rounded-lg border border-bgHighlight bg-bgDark p-6">
+                    <h3 class="text-base font-semibold text-magenta mb-2">Optional optimization passes</h3>
+                    <p class="text-fgDark text-sm">
+                        Cargo features for binaryen
+                        (<code class="text-orange">wasm-opt</code> at
+                        <code class="text-orange">-Os</code>), DWARF debug
+                        sections, and a <code class="text-orange">wasmparser</code>
+                        defensive validation pass. All off by default; pay
+                        only for what you turn on.
+                    </p>
+                </div>
+                <div class="rounded-lg border border-bgHighlight bg-bgDark p-6">
+                    <h3 class="text-base font-semibold text-magenta mb-2">Strict quality bar</h3>
+                    <p class="text-fgDark text-sm">
+                        Strict-clippy, typed errors via
+                        <code class="text-orange">thiserror</code>, no
+                        <code class="text-orange">unwrap</code> /
+                        <code class="text-orange">panic</code> in production
+                        paths. Tests return <code class="text-orange">Result</code>;
+                        every milestone runs end-to-end under wasmtime in CI.
+                    </p>
+                </div>
+                <div class="rounded-lg border border-bgHighlight bg-bgDark p-6">
+                    <h3 class="text-base font-semibold text-magenta mb-2">Drop-in CLI</h3>
+                    <p class="text-fgDark text-sm">
+                        <code class="text-orange">formawasm-cli</code> ships
+                        as a tiny single-file source-to-component driver —
+                        useful for smoke tests, quick experimentation, or as
+                        a build-pipeline step where wiring the Rust API isn't
+                        worth it.
+                    </p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="border-t border-bgHighlight bg-bgDark">
+        <div class="max-w-5xl mx-auto px-6 py-8 flex items-center justify-between text-sm text-dark5">
+            <span>formawasm &middot; MIT / Apache-2.0</span>
+            <span>
+                <a href="./docs/" class="hover:text-cyan">Docs</a>
+                &middot;
+                <a href="https://github.com/valentinradu/formawasm" class="hover:text-cyan">GitHub</a>
+                &middot;
+                <a href="https://github.com/valentinradu/formalang" class="hover:text-cyan">FormaLang</a>
+            </span>
+        </div>
+    </footer>
+</body>
+</html>

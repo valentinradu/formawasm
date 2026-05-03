@@ -1,4 +1,8 @@
-# formawasm
+<p align="center">
+  <img src="website/logo-180.png" alt="formawasm" width="160">
+</p>
+
+<h1 align="center">formawasm</h1>
 
 **formawasm** compiles a [formalang](https://github.com/valentinradu/formalang) Intermediate Representation (IR) module into a [WebAssembly](https://webassembly.org) **component** — a `.wasm` binary that any standards-compliant runtime can execute.
 

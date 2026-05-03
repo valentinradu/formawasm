@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    html {
+        background-color: theme("colors.bg");
+        color: theme("colors.fg");
+        color-scheme: dark;
+    }
+
+    body {
+        font-family: theme("fontFamily.sans");
+        line-height: 1.6;
+    }
+
+    code, pre {
+        font-family: theme("fontFamily.mono");
+    }
+
+    ::selection {
+        background: theme("colors.magenta");
+        color: theme("colors.bg");
+    }
+}
+
+@layer components {
+    .btn-primary {
+        @apply inline-flex items-center justify-center rounded-md bg-magenta px-4 py-2
+               font-medium text-bg hover:bg-cyan transition-colors;
+    }
+    .btn-ghost {
+        @apply inline-flex items-center justify-center rounded-md border border-blue7
+               px-4 py-2 font-medium text-fg hover:border-cyan hover:text-cyan
+               transition-colors;
+    }
+    .code-card {
+        @apply rounded-lg border border-bgHighlight bg-bgDark p-5 overflow-x-auto;
+    }
+}

@@ -6,11 +6,15 @@ language = "en"
 src = "docs"
 
 [output.html]
+theme = "theme"
+additional-css = ["theme/custom.css"]
+additional-js = ["theme/formawasm-hljs.js"]
 default-theme = "ayu"
 preferred-dark-theme = "ayu"
 no-section-label = true
 git-repository-url = "https://github.com/valentinradu/formawasm"
 edit-url-template = "https://github.com/valentinradu/formawasm/edit/main/{path}"
+site-url = "/docs/"
 
 [output.html.fold]
 enable = true

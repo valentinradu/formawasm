@@ -1,0 +1,97 @@
+/*
+ * Tokyo Night palette override for mdBook.
+ *
+ * mdBook scopes its color variables under per-theme classes
+ * (.light, .rust, .coal, .navy, .ayu). We re-declare every theme
+ * with the same Tokyo Night palette so the picker is a no-op; the
+ * picker itself is hidden in custom.css.
+ */
+
+:root {
+    /* Tokyo Night; single source of truth for the whole site. */
+    --tn-bg:           #1a1b26;
+    --tn-bg-dark:      #16161e;
+    --tn-bg-highlight: #292e42;
+    --tn-terminal:     #15161e;
+    --tn-fg:           #c0caf5;
+    --tn-fg-dark:      #a9b1d6;
+    --tn-fg-gutter:    #3b4261;
+    --tn-dark3:        #545c7e;
+    --tn-comment:      #565f89;
+    --tn-dark5:        #737aa2;
+    --tn-blue0:        #3d59a1;
+    --tn-blue:         #7aa2f7;
+    --tn-cyan:         #7dcfff;
+    --tn-blue1:        #2ac3de;
+    --tn-blue2:        #0db9d7;
+    --tn-blue5:        #89ddff;
+    --tn-blue6:        #b4f9f8;
+    --tn-blue7:        #394b70;
+    --tn-magenta:      #bb9af7;
+    --tn-magenta2:     #ff007c;
+    --tn-purple:       #9d7cd8;
+    --tn-orange:       #ff9e64;
+    --tn-yellow:       #e0af68;
+    --tn-green:        #9ece6a;
+    --tn-green1:       #73daca;
+    --tn-green2:       #41a6b5;
+    --tn-teal:         #1abc9c;
+    --tn-red:          #f7768e;
+    --tn-red1:         #db4b4b;
+
+    /* ─── Structural variables (chrome.css / general.css read these) ─── */
+    --sidebar-width: 300px;
+    --sidebar-resize-indicator-width: 8px;
+    --sidebar-resize-indicator-space: 2px;
+    --page-padding: 15px;
+    --content-max-width: 820px;
+    --menu-bar-height: 50px;
+    --mono-font: "JetBrains Mono", "SFMono-Regular", Consolas,
+                 "Liberation Mono", Menlo, monospace;
+    --code-font-size: 0.875em;
+}
+
+/* Apply Tokyo Night to every built-in theme so the dropdown is a no-op. */
+.light, .rust, .coal, .navy, .ayu {
+    --bg:                          var(--tn-bg);
+    --fg:                          var(--tn-fg);
+
+    --sidebar-bg:                  var(--tn-bg-dark);
+    --sidebar-fg:                  var(--tn-fg);
+    --sidebar-non-existant:        var(--tn-comment);
+    --sidebar-active:              var(--tn-magenta);
+    --sidebar-spacer:              var(--tn-bg-highlight);
+
+    --scrollbar:                   var(--tn-bg-highlight);
+
+    --icons:                       var(--tn-dark5);
+    --icons-hover:                 var(--tn-cyan);
+
+    --links:                       var(--tn-cyan);
+
+    --inline-code-color:           var(--tn-orange);
+
+    --theme-popup-bg:              var(--tn-bg-highlight);
+    --theme-popup-border:          var(--tn-blue7);
+    --theme-hover:                 var(--tn-blue7);
+
+    --quote-bg:                    var(--tn-bg-highlight);
+    --quote-border:                var(--tn-magenta);
+
+    --warning-border:              var(--tn-orange);
+
+    --table-border-color:          var(--tn-bg-highlight);
+    --table-header-bg:             var(--tn-bg-highlight);
+    --table-alternate-bg:          var(--tn-bg-dark);
+
+    --searchbar-border-color:      var(--tn-blue7);
+    --searchbar-bg:                var(--tn-bg-highlight);
+    --searchbar-fg:                var(--tn-fg);
+    --searchbar-shadow-color:      var(--tn-terminal);
+    --searchresults-header-fg:     var(--tn-fg-dark);
+    --searchresults-border-color:  var(--tn-bg-highlight);
+    --searchresults-li-bg:         var(--tn-bg-highlight);
+    --search-mark-bg:              var(--tn-yellow);
+
+    --color-scheme:                dark;
+}
