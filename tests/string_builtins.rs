@@ -3,9 +3,8 @@
 //! Upstream ships `extern impl String { fn len(self) -> I32, ... }`
 //! in `prelude.fv`; the backend wires each declared method to a
 //! runtime helper through `module_lowering::prelude_helper_index`.
-//! Wired so far: `len`, `is_empty`, `byte_at`, `slice`,
-//! `starts_with`. Remaining (`contains`) lands in a subsequent
-//! commit.
+//! Every prelude method is wired: `len`, `is_empty`, `byte_at`,
+//! `slice`, `starts_with`, `contains`.
 
 use formalang::pipeline::Pipeline;
 use formalang::{
@@ -274,6 +273,60 @@ fn string_starts_with_distinguishes_prefix_from_non_prefix() -> TestResult {
     let (got_long,) = too_long.call(&mut store, ())?;
     if got_long {
         return Err(format!("too_long() = {got_long}, want false").into());
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+#[test]
+fn string_contains_finds_substring_at_any_offset() -> TestResult {
+    // Source: four pubs covering the substring-search branches.
+    // - middle: needle interior to source ("ell" in "hello")
+    // - prefix: needle at offset 0 ("hel" in "hello") — same path
+    //   as starts_with but exercising the search loop's first
+    //   iteration
+    // - suffix: needle at the end ("llo" in "hello") — exercises
+    //   the loop running through every offset until max_start
+    // - missing: needle not present ("xyz" in "hello") — falls
+    //   through every start position and returns 0
+    let dir = scratch_dir("contains")?;
+    let main_path = dir.join("main.fv");
+    std::fs::write(
+        &main_path,
+        "pub fn middle() -> Boolean { \"hello\".contains(\"ell\") }\n\npub fn prefix() -> Boolean { \"hello\".contains(\"hel\") }\n\npub fn suffix() -> Boolean { \"hello\".contains(\"llo\") }\n\npub fn missing() -> Boolean { \"hello\".contains(\"xyz\") }\n",
+    )?;
+    let source = std::fs::read_to_string(&main_path)?;
+    let resolver = FileSystemResolver::new(dir.clone());
+    let module = compile_to_ir_with_resolver(&source, resolver)
+        .map_err(|errors| format!("compile errors: {errors:?}"))?;
+    let mut pipeline = Pipeline::new()
+        .pass(MonomorphisePass::default())
+        .pass(ResolveReferencesPass::new())
+        .pass(ClosureConversionPass::new())
+        .pass(DeadCodeEliminationPass::new());
+    let bytes = pipeline.emit(module, &WasmBackend::new())?;
+    validate_component(&bytes)?;
+
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_binary(&engine, &bytes)?;
+    let linker = Linker::<()>::new(&engine);
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component)?;
+
+    for (name, want) in [
+        ("middle", true),
+        ("prefix", true),
+        ("suffix", true),
+        ("missing", false),
+    ] {
+        let f = instance.get_typed_func::<(), (bool,)>(&mut store, name)?;
+        let (got,) = f.call(&mut store, ())?;
+        if got != want {
+            return Err(format!("{name}() = {got}, want {want}").into());
+        }
     }
 
     let _ = std::fs::remove_dir_all(&dir);

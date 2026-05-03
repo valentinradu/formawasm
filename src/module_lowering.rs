@@ -52,13 +52,25 @@ pub(crate) const fn impl_target_key(t: ImplTarget) -> ImplTargetKey {
 /// so the dispatch table at [`prelude_helper_index`] can look up by
 /// (primitive, method-name) without threading half a dozen `u32`s
 /// through every caller.
+///
+/// Every field today starts with `str_` because the prelude only
+/// declares String methods. As `Path` / `Regex` / etc. land, their
+/// fields will carry the same `<primitive>_<method>` shape and the
+/// shared prefix per primitive is intentional disambiguation, not
+/// noise.
 #[derive(Copy, Clone, Debug)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "prefix is meaningful: separates string helpers from \
+              future path/regex/etc. helpers within the same struct"
+)]
 struct PreludeHelpers {
     str_len: u32,
     str_is_empty: u32,
     str_byte_at: u32,
     str_slice: u32,
     str_starts_with: u32,
+    str_contains: u32,
 }
 
 /// Look up the wasm function index of the runtime helper that
@@ -81,6 +93,7 @@ fn prelude_helper_index(
         (PrimitiveType::String, "byte_at") => Some(helpers.str_byte_at),
         (PrimitiveType::String, "slice") => Some(helpers.str_slice),
         (PrimitiveType::String, "starts_with") => Some(helpers.str_starts_with),
+        (PrimitiveType::String, "contains") => Some(helpers.str_contains),
         _ => None,
     }
 }
@@ -250,6 +263,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         str_byte_at: builder.declare_str_byte_at(),
         str_slice: builder.declare_str_slice(),
         str_starts_with: builder.declare_str_starts_with(),
+        str_contains: builder.declare_str_contains(),
     };
     // `cabi_realloc` is exported so the component runtime can
     // allocate buffers in our linear memory when lowering `string`

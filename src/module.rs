@@ -52,17 +52,23 @@ pub const STR_IS_EMPTY_NAME: &str = "__str_is_empty";
 /// Backs `String::byte_at` and `s[i]` desugaring.
 pub const STR_BYTE_AT_NAME: &str = "__str_byte_at";
 
-/// Source-level name for the zero-copy substring helper. Allocates
-/// a fresh `{ ptr, len }` header pointing into the source string's
-/// existing backing buffer; traps when `start > end` or `end > len`.
-/// Strings are immutable end-to-end so sharing the buffer is sound.
-/// Backs `String::slice`.
+/// Source-level name for the zero-copy substring helper.
+///
+/// Allocates a fresh `{ ptr, len }` header pointing into the source
+/// string's existing backing buffer; traps when `start > end` or
+/// `end > len`. Strings are immutable end-to-end so sharing the
+/// buffer is sound. Backs `String::slice`.
 pub const STR_SLICE_NAME: &str = "__str_slice";
 
 /// Source-level name for the prefix-match predicate. Returns 1 when
 /// the source string begins with the given prefix string, else 0.
 /// Backs `String::starts_with`.
 pub const STR_STARTS_WITH_NAME: &str = "__str_starts_with";
+
+/// Source-level name for the substring-match predicate. Returns 1
+/// when the source string contains the given needle string at any
+/// byte offset, else 0. Backs `String::contains`.
+pub const STR_CONTAINS_NAME: &str = "__str_contains";
 
 /// Canonical-ABI export name the host calls when it needs to allocate
 /// (or grow) a buffer in our linear memory before passing a `string`
@@ -160,6 +166,9 @@ pub struct ModuleBuilder {
     /// Index of the prefix-match predicate. Lazily declared by
     /// [`Self::declare_str_starts_with`].
     str_starts_with: Option<u32>,
+    /// Index of the substring-match predicate. Lazily declared by
+    /// [`Self::declare_str_contains`].
+    str_contains: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -229,6 +238,7 @@ impl ModuleBuilder {
             str_byte_at: None,
             str_slice: None,
             str_starts_with: None,
+            str_contains: None,
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
@@ -1034,6 +1044,152 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_starts_with_index(&self) -> Option<u32> {
         self.str_starts_with
+    }
+
+    /// Declare and emit the `__str_contains` runtime helper, returning
+    /// its wasm function index. Subsequent calls return the same
+    /// index.
+    ///
+    /// Signature: `__str_contains(s: i32, needle: i32) -> i32`. Naive
+    /// O(n·m) substring search. Returns 1 when `needle` appears in
+    /// `s` at any offset, else 0. Empty needle is always a match
+    /// (early return). Needle longer than source short-circuits to 0.
+    /// Backs `String::contains`.
+    pub fn declare_str_contains(&mut self) -> u32 {
+        if let Some(idx) = self.str_contains {
+            return idx;
+        }
+        let len_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let ptr_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_PTR_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let byte_load = MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: MEMORY_INDEX,
+        };
+
+        // Locals: 4 i32 — local 2 = needle_len, 3 = max_start,
+        // 4 = start, 5 = j. Params at 0/1 (s, needle); replaced
+        // with their `ptr` values once length checks have run.
+        let mut body = Function::new(core::iter::once((4, ValType::I32)));
+        let mut i = body.instructions();
+
+        // needle_len = needle.len; if needle_len == 0 -> return 1
+        i.local_get(1)
+            .i32_load(len_mem_arg)
+            .local_tee(2)
+            .i32_eqz()
+            .if_(BlockType::Empty)
+            .i32_const(1)
+            .return_()
+            .end();
+
+        // if needle_len > s.len -> return 0
+        i.local_get(2)
+            .local_get(0)
+            .i32_load(len_mem_arg)
+            .i32_gt_u()
+            .if_(BlockType::Empty)
+            .i32_const(0)
+            .return_()
+            .end();
+
+        // max_start = s.len - needle_len  (inclusive upper bound)
+        i.local_get(0)
+            .i32_load(len_mem_arg)
+            .local_get(2)
+            .i32_sub()
+            .local_set(3);
+
+        // s_ptr / needle_ptr replace param locals.
+        i.local_get(0).i32_load(ptr_mem_arg).local_set(0);
+        i.local_get(1).i32_load(ptr_mem_arg).local_set(1);
+
+        // start = 0
+        i.i32_const(0).local_set(4);
+
+        // outer_block { outer_loop {
+        //   if start > max_start: br outer_block (-> return 0)
+        //   j = 0
+        //   inner_block { inner_loop {
+        //     if j >= needle_len: { return 1 }   ;; full match
+        //     if s_ptr[start+j] != needle_ptr[j]: br inner_block
+        //     j++
+        //     br inner_loop
+        //   } }
+        //   start++
+        //   br outer_loop
+        // } }
+        i.block(BlockType::Empty)
+            .loop_(BlockType::Empty)
+            .local_get(4)
+            .local_get(3)
+            .i32_gt_u()
+            .br_if(1) // exit outer block
+            .i32_const(0)
+            .local_set(5) // j = 0
+            .block(BlockType::Empty)
+            .loop_(BlockType::Empty)
+            // matched all needle bytes -> return 1
+            .local_get(5)
+            .local_get(2)
+            .i32_ge_u()
+            .if_(BlockType::Empty)
+            .i32_const(1)
+            .return_()
+            .end()
+            // s_ptr[start+j]
+            .local_get(0)
+            .local_get(4)
+            .i32_add()
+            .local_get(5)
+            .i32_add()
+            .i32_load8_u(byte_load)
+            // needle_ptr[j]
+            .local_get(1)
+            .local_get(5)
+            .i32_add()
+            .i32_load8_u(byte_load)
+            .i32_ne()
+            .br_if(1) // mismatch -> exit inner block
+            // j++
+            .local_get(5)
+            .i32_const(1)
+            .i32_add()
+            .local_set(5)
+            .br(0) // continue inner loop
+            .end() // close inner loop
+            .end() // close inner block
+            // start++
+            .local_get(4)
+            .i32_const(1)
+            .i32_add()
+            .local_set(4)
+            .br(0) // continue outer loop
+            .end() // close outer loop
+            .end(); // close outer block
+
+        // Outer block fell through -> no match.
+        i.i32_const(0).end();
+
+        let idx =
+            self.declare_function_with_body(&[ValType::I32, ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, STR_CONTAINS_NAME);
+        self.str_contains = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_contains` helper if declared.
+    #[must_use]
+    pub const fn str_contains_index(&self) -> Option<u32> {
+        self.str_contains
     }
 
     /// Declare and export `cabi_realloc`, the canonical-ABI hook the
