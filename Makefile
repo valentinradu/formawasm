@@ -1,4 +1,4 @@
-.PHONY: help build check ci fmt clippy doc test deny test-wasm-opt
+.PHONY: help build check ci fmt clippy doc test deny test-wasm-opt book book-serve
 
 TEST_ARGS ?=
 
@@ -19,6 +19,8 @@ help:
 	@echo "  make test            Run all tests"
 	@echo "  make test-wasm-opt   Run all tests under --features wasm-opt"
 	@echo "  make deny            Run cargo-deny license + advisory checks"
+	@echo "  make book            Build the mdBook docs into ./book/"
+	@echo "  make book-serve      Serve the mdBook docs locally with live reload"
 
 build:
 	$(CARGO) build --all-targets
@@ -56,3 +58,9 @@ test-wasm-opt:
 
 deny:
 	$(CARGO) deny check
+
+book:
+	mdbook build
+
+book-serve:
+	mdbook serve

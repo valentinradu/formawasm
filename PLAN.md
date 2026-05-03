@@ -297,7 +297,7 @@ initiatives per the README roadmap.
   `tests/default_params.rs` (`add(a: 5)` picks up `b = 10`).
 - ✅ #4 — Stack-vs-heap split for small aggregates. **Resolved
   as a design decision: keep uniform heap.** Analysis in
-  `docs/design/stack-vs-heap-aggregates.md`. Cost is invasive
+  `docs/developer/design/stack-vs-heap-aggregates.md`. Cost is invasive
   across ~25 lowering paths plus boundary trampolines; benefit is
   speculative for our workload. Revisit only if profiling on a
   real consumer flips the call.

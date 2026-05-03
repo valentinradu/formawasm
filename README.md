@@ -1,356 +1,104 @@
 # formawasm
 
-formawasm is a compiler that turns a formalang [Intermediate Representation (IR)](https://github.com/RadValentin/formalang) module into a [WebAssembly](https://webassembly.org) **component** — a `.wasm` binary that any standards-compliant WebAssembly runtime can execute. The host application picks the runtime ([wasmtime](https://wasmtime.dev), [wasmi](https://github.com/wasmi-labs/wasmi), a browser engine, …); formawasm only emits bytes.
+**formawasm** compiles a [formalang](https://github.com/valentinradu/formalang) Intermediate Representation (IR) module into a [WebAssembly](https://webassembly.org) **component** — a `.wasm` binary that any standards-compliant runtime can execute.
 
 ```text
 formalang frontend ──► IrModule ──► formawasm ──► .wasm component ──► host runtime
 ```
 
-Every public formalang declaration becomes a typed entry point in the component's interface. Inside the component, the full formalang language is supported — see the [Feature coverage](#feature-coverage) section for the exact mapping from IR variants to compile phases.
+formawasm is a *backend*: it doesn't parse `.fv` source files itself, and it doesn't run the resulting wasm. Both jobs belong to other libraries (formalang for parsing, [`wasmtime`](https://wasmtime.dev) / [`wasmi`](https://github.com/wasmi-labs/wasmi) / a browser engine for execution). formawasm only emits bytes.
+
+The boundary between a component and its host is described in **WIT** — the small Interface Definition Language of the [Component Model](https://github.com/WebAssembly/component-model). formawasm generates the WIT file automatically from the public surface of each IR module; the host never hand-writes WIT.
 
 ---
 
-## What is WIT?
+## Quickstart
 
-**WIT** stands for **Wasm Interface Types**. It is the Interface Definition Language (IDL) of the WebAssembly **Component Model** — a small, language-agnostic schema language that describes the typed boundary between a component and its host (or between two components). An IDL is a language for declaring data shapes and function signatures independent of any single programming language; the same WIT file can be consumed by Rust, JavaScript, Python, Go, and others.
+Compile a `.fv` source file with the bundled CLI:
 
-A WIT file looks like this:
+```bash
+echo 'pub fn id(x: I32) -> I32 { x }' > id.fv
+cargo run --release --bin formawasm-cli -- id.fv
+# wrote id.wasm (… bytes) from id.fv
+```
+
+Inspect the generated WIT interface:
+
+```bash
+wasm-tools component wit id.wasm
+```
 
 ```wit
-package formawasm:demo;
-
-interface counter {
-    record state { value: s32 }
-    increment: func(s: state) -> state;
-    reset: func() -> state;
-}
+package formawasm:generated;
 
 world component {
-    export counter;
+  export id: func(x: s32) -> s32;
 }
 ```
 
-The Component Model is a layer above core WebAssembly. Core WebAssembly only knows `i32 / i64 / f32 / f64` and linear memory; the Component Model adds typed records, variants, lists, options, strings, and resources, and it specifies a canonical Application Binary Interface (ABI) for crossing the boundary. WIT is how you write that boundary down.
+Run the component under [`wasmtime`](https://docs.rs/wasmtime):
 
-For formawasm, WIT is **auto-generated** from the public surface of each IR module — every `pub` struct, enum, and function in a `.fv` source file becomes a WIT type or function declaration. The host never hand-writes WIT.
+```rust
+use wasmtime::{Config, Engine, Store};
+use wasmtime::component::{Component, Linker};
 
----
+let mut config = Config::new();
+config.wasm_component_model(true);
+let engine = Engine::new(&config)?;
 
-## Toolchain
+let bytes = std::fs::read("id.wasm")?;
+let component = Component::from_binary(&engine, &bytes)?;
+let linker = Linker::<()>::new(&engine);
+let mut store = Store::new(&engine, ());
+let instance = linker.instantiate(&mut store, &component)?;
 
-| Tool | Role |
-|---|---|
-| [`wasm-encoder`](https://docs.rs/wasm-encoder) | Emit core Wasm bytes from typed builders. |
-| [`wasmparser`](https://docs.rs/wasmparser) | Validate emitted modules in tests. |
-| [`wit-component`](https://docs.rs/wit-component) | Wrap a core module + WIT into a Component Model artifact. |
-| [`wasmtime`](https://docs.rs/wasmtime) (dev only) | Smoke-test host for integration tests. |
-| [`thiserror`](https://docs.rs/thiserror) | Backend error types. |
-| [`wasm-tools`](https://github.com/bytecodealliance/wasm-tools) | Command Line Interface (CLI) for diffing, printing, validating during development. Not a Cargo dependency — a developer aid. |
-
-### Output format
-
-Component Model from day one. The core WebAssembly module is an internal step, never the shipped artifact.
-
----
-
-## Repo layout
-
-formawasm is a separate repo from formalang. The two crates evolve on independent release cadences.
-
-```text
-Cargo.toml            # depends on formalang via path during dev,
-                      # crates.io once IR shape stabilises
-src/
-    lib.rs            # public surface re-exports
-    backend.rs        # WasmBackend, Backend impl, optional wasm-opt pass
-    preflight.rs      # rejection of unsupported IR shapes
-    survey.rs         # public-surface classification
-    layout.rs         # memory-layout planning (struct, enum, array,
-                      # range, optional, string, dictionary, vtable)
-    lower/            # per-IrExpr lowering (one submodule per family)
-    module.rs         # core-Wasm ModuleBuilder
-    module_lowering.rs # IrModule → core wasm bytes (orchestration)
-    wit.rs            # WIT auto-generation
-    component.rs      # core module + WIT → component
-    string_pool.rs    # compile-time string-literal interning
-    types.rs          # IR ResolvedType → wasm valtype mapping
-    ident.rs          # source-name → kebab-case helper
-docs/
-    design/           # backend-side design notes
-tests/                # one file per IR construct + per phase milestone
+let id = instance.get_typed_func::<(i32,), (i32,)>(&mut store, "id")?;
+let (got,) = id.call(&mut store, (42,))?;
+assert_eq!(got, 42);
 ```
 
 ---
 
-## Boundary policy
+## Documentation
 
-What crosses the public component boundary is a strict subset of what's supported inside a component. The boundary is defined by what WIT can express; the inside is defined by core WebAssembly's full power.
+The full book lives at [`docs/`](docs/SUMMARY.md) and is built with [mdBook](https://rust-lang.github.io/mdBook/):
 
-**Crosses the boundary:**
+```bash
+mdbook serve            # local dev server with live reload
+```
 
-- Primitives (`I32 / I64 / F32 / F64`, `Boolean`, `String`).
-- `Optional<T>`, `Array<T>`, `Dictionary<K,V>` — mapped to `option`, `list`, `list<tuple<K,V>>` respectively.
-- `IrStruct` → `record`; `IrEnum` (tagged variants with payload) → `variant`.
-  Multi-field variant payloads lower as positional `tuple<T0, T1, ...>` arms; field names don't survive the boundary, but the layout planner lays the fields out in declaration order so the index→field mapping stays stable.
-- Named tuples → `record { name: T, ... }`. formalang tuples carry field names; we deliberately do **not** use WIT positional `tuple` for top-level tuples.
-- `Path` and `Regex` represented as WIT `string` at the boundary; identity preserved internally.
+Highlights:
 
-**Rejected at pre-flight (cannot cross):**
+**For users** (embedding formawasm in a Rust application):
 
-- Closure-typed values in public signatures.
-- Generic traits (matches the existing `MonomorphisePass` constraint).
-- Unresolved type parameters (`ResolvedType::TypeParam`) — must already be monomorphised.
-- `ResolvedType::Error` — sentinel; presence indicates a frontend bug.
+- [Quickstart](docs/user/quickstart.md) — `.fv` → `.wasm` in 30 seconds
+- [Using the Library](docs/user/library.md) — `WasmBackend` from your own crate
+- [Hosting a Component](docs/user/hosting.md) — running components under wasmtime
+- [Boundary Policy](docs/user/boundary.md) — what can cross the WIT boundary
+- [Type Mapping](docs/user/type-mapping.md) — formalang ↔ WIT
+- [Feature Coverage](docs/user/features.md) — what's supported, per IR variant
+- [Cargo Features](docs/user/cargo-features.md) — `wasm-opt`, `dwarf`, validation
+- [Troubleshooting](docs/user/troubleshooting.md) — common errors
 
-`pub` IR functions become component **exports**. `extern` functions (with `extern_abi`) become component **imports**. The WIT world's name is the `IrModule` name.
+**For contributors** (extending the backend):
 
----
-
-## Feature coverage
-
-Every formalang IR construct maps to a compile phase. **Inside a module, every feature is supported**; the boundary restrictions above only apply to types in `pub` signatures.
-
-### `IrExpr` variants
-
-| Variant | Phase | Notes |
-|---|---|---|
-| `Literal` | 1a | Numeric, boolean literals; string literals in 2 |
-| `Reference` (dotted path) | 1a | Resolved to local, global, or function reference |
-| `LetRef` | 1a | Local-variable read |
-| `SelfFieldRef` | 1b | `self.field` inside methods |
-| `FieldAccess` | 1b | `obj.field` |
-| `BinaryOp` (numeric / boolean / comparison) | 1a | Direct Wasm instructions |
-| `BinaryOp::Add` on `String` | 2 | String concatenation runtime helper |
-| `BinaryOp::Range` | 1c | Lowers to `{start, end}` pair in linear memory |
-| `BinaryOp::Eq/Ne` on `String` | 2 | String equality runtime helper |
-| `UnaryOp` | 1a | `Neg`, `Not` |
-| `If` | 1a | Maps to Wasm `if/else` |
-| `Block` | 1a | Sequence of statements + result expression |
-| `For` (over `Array`) | 1c | `loop` + `br_if` with index counter |
-| `For` (over `Range`) | 1c (I32 / I64) + post-Phase-4 housekeeping (F32 / F64) | Same lowering for all four numeric primitives. Float ranges advance by `1.0` per iteration; the output buffer is sized to `ceil(end - start)` so fractional gaps don't overrun. |
-| `Match` | 1b | `br_table` on enum tag, payload extraction by offset |
-| `FunctionCall` (direct) | 1a | Wasm `call` instruction |
-| `MethodCall` (Static dispatch) | 1b | Resolved to direct `call` at compile time |
-| `MethodCall` (Virtual dispatch) | 3 | Vtable lookup + `call_indirect` |
-| `StructInst` | 1b | Bump-allocate, write fields, return pointer |
-| `EnumInst` | 1b | Allocate tag + payload, return pointer |
-| `Array` (literal) | 1c | Allocate `{ptr, len, cap}` header + element buffer |
-| `Tuple` (literal) | 1b | Treated as anonymous struct |
-| `DictLiteral` | 2 | Sorted-pairs array v1 |
-| `DictAccess` | 2 | Lookup runtime helper |
-| `Closure` | — | Eliminated upstream by closure-conversion `IrPass` |
-| `ClosureRef { funcref, env_struct }` | 1b | Synthesised by closure conversion; lowered as funcref index + env pointer |
-
-### `ResolvedType` variants
-
-| Type | Phase | Notes |
-|---|---|---|
-| `Primitive(I32/I64/F32/F64)` | 1a | Native Wasm valtypes |
-| `Primitive(Boolean)` | 1a | Lowered as `i32` (0 or 1) |
-| `Primitive(Never)` | 1a | Zero-sized; functions returning `Never` emit `unreachable` |
-| `Primitive(String)` | 2 | Linear-memory `{ptr, len}` |
-| `Primitive(Path)` | 2 | Same layout as `String`; identity preserved internally |
-| `Primitive(Regex)` | 2 | Same layout as `String`; identity preserved internally |
-| `Struct` | 1b | Heap-allocated record |
-| `Enum` | 1b | Tag (`i32`) + padded payload |
-| `Tuple` | 1b | Same layout as anonymous `Struct` |
-| `Array<T>` | 1c | `{ptr, len, cap}` |
-| `Range<T>` | 1c | `{start, end}` over numeric `T` |
-| `Optional<T>` | 2 | Tag + payload, or null-pointer trick for reference types |
-| `Dictionary<K, V>` | 2 | Sorted-pairs array v1 |
-| `Closure { param_tys, return_ty }` | 1b | Funcref index + env pointer; intramodule only |
-| `External { module_path, name, … }` | 5+ | Upstream-blocked. `compile_to_ir_with_resolver` returns one IrModule and discards imported-module IRs; backend has nothing to resolve `External` against. See the cross-module-codegen design note in the formalang repo. |
-| `Generic { base, args }` | — | Eliminated by upstream `MonomorphisePass` |
-| `TypeParam` | — | Pre-flight rejection |
-| `Trait` | — | Banned as a value at semantic time upstream |
-| `Error` | — | Pre-flight rejection (frontend invariant violation) |
-
-### `ParamConvention` variants
-
-| Convention | Phase | Lowering |
-|---|---|---|
-| `Let` (default) | 1a | Pass by value (or by pointer for aggregates) |
-| `Mut` | 1b | Pass pointer into caller's frame; callee mutates in place |
-| `Sink` | 1b | Move semantics: caller relinquishes the buffer; callee owns it |
-
-### `DispatchKind` variants
-
-| Dispatch | Phase | Lowering |
-|---|---|---|
-| `Static { impl_id }` | 1b | Direct `call` to a known function index |
-| `Virtual { trait_id, method_name }` | 3 | Per-trait vtable in linear memory; `call_indirect` |
-
-### Pattern shapes
-
-formalang's IR flattens patterns to variant-name + simple bindings (no nested patterns, guards, or-patterns, or range patterns at the IR level). The Wasm lowering handles this directly via `br_table` on the variant tag plus offset-based payload extraction. `BindingPattern` destructuring in `let` bindings is also flattened upstream into simple `Let` nodes.
-
-### Operators
-
-`BinaryOp`: `Add, Sub, Mul, Div, Mod, Lt, Gt, Le, Ge, Eq, Ne, And, Or, Range`. `UnaryOp`: `Neg, Not`. Operator lowering is **type-dispatched** — `BinaryOp::Add` on `I32` lowers to a single Wasm instruction, but on `String` it calls a concatenation runtime helper. Type-dispatch tables are part of the lowering layer.
-
----
-
-## Type mapping (formalang → WIT)
-
-Only the boundary types appear in WIT — internal types (closures, ranges) live entirely inside the core module.
-
-| formalang | WIT |
-|---|---|
-| `I32` / `I64` | `s32` / `s64` |
-| `U32` / `U64` | `u32` / `u64` |
-| `F32` / `F64` | `f32` / `f64` |
-| `Boolean` | `bool` |
-| `String`, `Path`, `Regex` | `string` |
-| `Optional<T>` | `option<T>` |
-| `Array<T>` | `list<T>` |
-| `Dictionary<K, V>` | `list<tuple<K, V>>` |
-| named tuple `(x: I32, y: I32)` | `record { x: s32, y: s32 }` |
-| `IrStruct` | `record` |
-| `IrEnum` | `variant` |
-
----
-
-## Per-module compile pipeline
-
-For each `IrModule` passed to `WasmBackend::generate`:
-
-1. **Pre-flight checks.** Reject leftover `IrExpr::Closure`, public closure-typed signatures, generic traits, `ResolvedType::TypeParam`, and `ResolvedType::Error`. Fail fast with a typed error.
-2. **Public-surface survey.** Walk `IrModule`; classify every item as export / import / internal.
-3. **Core-module lowering.** Plan memory layouts (`plan_struct` / `plan_enum` / `plan_array` / `plan_range` / `plan_optional` / `plan_string` / `plan_dictionary` / `plan_vtable`); declare runtime helpers (bump allocator, `__str_eq`, `__str_concat`, `cabi_realloc`); declare extern-function imports under `cm32p2`; declare funcref tables for closures + trait methods; build per-function bodies via the `lower::*` modules; concatenate string-pool bytes + per-impl vtables into a static-data segment.
-4. **Optional `wasm-opt` post-pass.** When the `wasm-opt` cargo feature is on, run binaryen at `-Os` over the core bytes with `Feature::All` (multi-table, reference types, bulk-memory). Off by default — the dependency only compiles in when explicitly requested.
-5. **WIT generation.** Walk the public surface; emit `import` / `export` lines for every `extern_abi` / non-extern function, plus `record` / `variant` declarations for public structs / enums.
-6. **Component wrap.** Feed core module bytes + WIT to `wit-component::ComponentEncoder`.
-7. **Return** the component bytes from `Backend::generate`.
-
-Validation via `wasmparser::Validator` happens in tests, not at backend emission time — emitting invalid bytes is a backend bug we want a panicking test to catch loudly, not a runtime check we silently re-do per generation.
-
----
-
-## Roadmap
-
-The work splits into upstream prerequisites in formalang and four phases inside formawasm.
-
-### Upstream prerequisites in formalang
-
-These must land in the formalang repo *before* formawasm can begin Phase 1.
-
-#### PR 1 — Numeric specialization (~9 commits)
-
-Replace `PrimitiveType::Number` with `I32 / I64 / F32 / F64` (uppercase to match formalang's existing PascalCase primitive convention). Integer-literal default = `I32`. Touches lexer (literal-suffix syntax + defaulting rules), Abstract Syntax Tree (AST), IR, every match site, fixtures. Standalone, lands first, benefits every future backend.
-
-#### PR 2 — Closure-conversion `IrPass` (~10 commits)
-
-New pass at `src/ir/closure_conv.rs`. Runs *after* `MonomorphisePass`, *before* `DeadCodeEliminationPass`. Lifts closure bodies to top-level `IrFunction`s, synthesises capture-environment `IrStruct`s, rewrites body refs to env-field access, and replaces `IrExpr::Closure` with explicit `IrExpr::ClosureRef { funcref, env_struct }`. Inputs already exist — IR lowering already collects typed captures with `ParamConvention`.
-
-### formawasm work
-
-#### PR 3 — Repo bootstrap (3 commits, this repo)
-
-1. `cargo init --lib`, license files, `.gitignore`, Continuous Integration (CI) workflow mirroring formalang.
-2. Add a path dependency on the local formalang checkout; re-export public IR types.
-3. Stub `WasmBackend` impl `Backend::generate` as `todo!()`. One smoke test confirming the type wires up.
-
-#### Phase 1 — v0.1 (~30 commits, target = fibonacci, struct+enum demo, sieve, basic methods)
-
-**1a — primitives, control flow, direct calls:**
-- Cargo deps: `wasm-encoder`, `wasmparser` (dev), `wit-component`, `wasmtime` (dev), `thiserror`.
-- Error types + `Result` plumbing.
-- Pre-flight checks with bad-IR samples (covers `Error`, `TypeParam`, leftover `Closure`, public closure types, generic traits).
-- Public-surface survey.
-- Type mapping for primitives + `Boolean` + `Never`.
-- Module skeleton: empty validating module, one memory, heap-pointer global.
-- Function-signature emission (types + function sections).
-- Lower `Literal`, `Reference`, `LetRef`, `BinaryOp` (numeric/boolean/comparison), `UnaryOp`.
-- Lower `Let`, `Block`.
-- Lower direct `FunctionCall`.
-- Lower `If`.
-- WIT generation for primitive-only signatures.
-- Component wrap via `wit-component::ComponentEncoder`.
-- **Milestone**: fibonacci end-to-end under wasmtime.
-
-**1b — aggregates, methods, calling conventions:**
-- Memory-layout planner for `IrStruct` (offsets, alignment, total size).
-- Bump-allocator runtime helper emitted into the module.
-- Lower `StructInst` + `FieldAccess` + `Tuple` literal.
-- Memory-layout planner for `IrEnum` (tag + padded payload).
-- Lower `EnumInst`.
-- Lower `Match` via `br_table` on enum tag, with payload extraction.
-- Lower `SelfFieldRef`.
-- Lower `MethodCall` static dispatch.
-- Lowering for `ParamConvention::Mut` (pointer into caller's frame).
-- Lowering for `ParamConvention::Sink` (move semantics in linear memory).
-- Lower `ClosureRef` (funcref index + env pointer; intramodule only).
-- WIT mapping `IrStruct` → `record`, `IrEnum` → `variant`. Roundtrip test.
-- **Milestone**: a small program with structs, enums, methods, mutable parameters, and an intramodule closure runs under wasmtime.
-
-**1c — collections and iteration:**
-- Memory-layout for `Array<T>` (`{ptr, len, cap}`).
-- Lower `Array` literal construction.
-- Memory-layout for `Range<T>` (`{start, end}`) and `BinaryOp::Range`.
-- Lower `For` over `Array` and `For` over `Range` as `loop` + `br_if`.
-- WIT mapping `Array<T>` → `list<T>`. Roundtrip test.
-- **Milestone**: sieve-of-Eratosthenes runs under wasmtime.
-
-#### Phase 2 — strings, optionals, dictionaries (~14 commits)
-
-- Memory-layout + lowering for `Optional<T>`; WIT `option<T>`.
-- String memory layout `{ptr, len}`; data-section seeding for literals; equality runtime helper.
-- String concatenation runtime helper (lowering for `BinaryOp::Add` on `String`).
-- WIT mapping `string` + roundtrip test.
-- `Path` and `Regex` mapped to `string` at boundary, identity preserved internally.
-- Dictionary as sorted-pairs array v1; literal lowering; lookup runtime helper.
-- Lower `DictLiteral` and `DictAccess`.
-- WIT mapping `list<tuple<K, V>>` + roundtrip test.
-- **Milestone**: program using strings, optionals, dictionaries, and string concatenation.
-
-#### Phase 3 — virtual dispatch (4 commits)
-
-- Vtable memory layout per trait (table of funcrefs).
-- Element-section entries per `impl Trait for Type`.
-- `DispatchKind::Virtual` lowering: load funcref from vtable + `call_indirect`.
-- **Milestone**: trait-method call across two `impl`s.
-
-#### Phase 4 — externs and external modules (~6 commits)
-
-- WIT-import generation from each `extern_abi` `IrFunction`.
-- Component import-section emission.
-- Lowering for `ResolvedType::External` references (cross-module symbol resolution).
-- Test harness wires host-provided imports via `wasmtime::component::Linker`.
-- **Milestone**: host-provided extern called from formalang; multi-module program compiles.
-
-#### Phase 5+
-
-- ✅ `wasm-opt` post-pass behind the `wasm-opt` cargo feature (shipped). Off by default; on enables a binaryen post-pass over the emitted core module before component wrapping.
-- ✅ String built-in methods. Upstream's prelude.fv ships `extern impl String { fn len, fn is_empty, fn slice, fn starts_with, fn contains, fn byte_at }`; backend wires all six to runtime helpers through `prelude_helper_index`. `slice` is zero-copy, `byte_at` traps on out-of-range, `contains` runs a naive O(n·m) search.
-- ✅ Default parameter values. Upstream's IR-lowering substitutes default expressions at every call site that omits them; backend sees a regular full-arity args list and needs no defaults awareness.
-- ✅ Cross-module type references. Upstream's MonomorphisePass inlines imported items into the entry-point IrModule and rewrites every `ResolvedType::External` to a local id; backend never sees External in real programs.
-- ✅ IR source-span infrastructure (DWARF prerequisite). Upstream landed `IrSpan { span, file: FileId }` on every IR node + an `IrModule.file_table`. Backend currently ignores spans; emitting `.debug_line` / `.debug_info` sections is the next step (ungated cargo feature).
-- Real garbage collector over the bump allocator — separate initiative.
-- Async — separate initiative.
-
----
-
-## Open questions
-
-Resolved during Phases 1–5; preserved here for archaeology.
-
-- ~~Numeric-literal suffix syntax + coercion rules.~~ Resolved upstream during PR 1 (`I32 / I64 / F32 / F64` with literal suffixes `42I32`, `3.14F64`).
-- ~~`IrEnum` payload-variant packing.~~ Resolved as **uniform-size variants** in Phase 1b mc4 — every variant occupies the maximum payload size, simplifying the constructor site at the cost of memory.
-- ~~Stack-vs-heap split for aggregates inside the core module.~~ Resolved as **uniform heap**; analysis in [`docs/design/stack-vs-heap-aggregates.md`](docs/design/stack-vs-heap-aggregates.md).
-- Default parameter values, string ops beyond concat/equality — surfaced as upstream design questions; see Phase 5+ above.
+- [Architecture](docs/developer/architecture.md) — the seven-stage pipeline
+- [Crate Layout](docs/developer/crate-layout.md) — what's in `src/`
+- [Lowering](docs/developer/lowering.md) — memory model, runtime helpers, per-IrExpr lowering
+- [Extending the Backend](docs/developer/extending.md) — adding IR variants, runtime helpers, layouts
+- [Testing](docs/developer/testing.md) — test conventions and milestone tests
+- [Contributing](docs/developer/contributing.md) — code style, quality gates, microcommit cadence
 
 ---
 
 ## Status
 
-Phases 1 through 5 are **closed**. The backend produces a Component-Model artifact for every milestone, and every previously upstream-blocked item has either landed or shipped its enabling upstream change:
+Phases 1 through 5 are closed. The backend produces a Component-Model artifact for every milestone — recursive functions (`fib`), structs + enums + methods (`Counter` / `Action`), arrays + ranges + for-loops (sieve of Eratosthenes), strings + optionals + dictionaries (`greet`), virtual dispatch (`Greet` trait across two impls), and host-provided externs (`call_host(21) → 42` via `host_double`).
 
-- **Phase 1a** (fibonacci): primitives, control flow, direct calls.
-- **Phase 1b** (counter + actions): structs, enums, methods, mutable parameters, intramodule closures.
-- **Phase 1c** (sieve of Eratosthenes): arrays, ranges, for-loops over both, plus float-range iteration.
-- **Phase 2** (greet): strings, optionals, dictionaries.
-- **Phase 3** (trait Greet across Alpha + Beta impls): virtual dispatch via per-trait vtables + method funcref table + `call_indirect`.
-- **Phase 4** (`call_host(21) → 42` via host-provided `host_double`): `extern_abi` imports, core-wasm import section, canonical-ABI wired through `wasmtime::component::Linker`.
-- **Phase 5**: `wasm-opt` post-pass + String built-ins (via prelude `extern impl`) + default parameter values + cross-module type references + IR source-span infrastructure all wired end-to-end. DWARF section emission stays a tick-box behind the spans now landed upstream.
+See [`CHANGELOG.md`](CHANGELOG.md) for the phase-by-phase history and [`PLAN.md`](PLAN.md) for the per-microcommit forward planning view.
 
-See [PLAN.md](PLAN.md) for the per-microcommit history.
+---
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.

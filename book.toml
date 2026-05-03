@@ -1,0 +1,27 @@
+[book]
+title = "formawasm"
+authors = ["Valentin Radu and formawasm contributors"]
+description = "Backend that compiles a typed formalang IR module into a WebAssembly component."
+language = "en"
+src = "docs"
+
+[output.html]
+default-theme = "ayu"
+preferred-dark-theme = "ayu"
+no-section-label = true
+git-repository-url = "https://github.com/valentinradu/formawasm"
+edit-url-template = "https://github.com/valentinradu/formawasm/edit/main/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 25
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+expand = true
+heading-split-level = 3

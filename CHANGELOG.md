@@ -77,7 +77,7 @@ per note.
 ### Resolved as design decisions
 
 - **Stack-vs-heap split for small aggregates**: keep uniform heap.
-  Analysis at `docs/design/stack-vs-heap-aggregates.md`. Cost is
+  Analysis at `docs/developer/design/stack-vs-heap-aggregates.md`. Cost is
   invasive across ~25 lowering paths plus boundary trampolines;
   benefit is speculative for our workload.
 

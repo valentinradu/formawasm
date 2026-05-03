@@ -1,5 +1,8 @@
 /target
 
+# mdBook build output (source lives in docs/).
+/book
+
 # LLVM source-based coverage raw profiles.
 *.profraw
 
