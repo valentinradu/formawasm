@@ -5,7 +5,7 @@
 //! core runtime and check both the equal and unequal cases.
 
 use formalang::ast::{BinaryOperator, Literal, PrimitiveType};
-use formalang::ir::{IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Engine, Instance, Module, Store};
@@ -27,6 +27,7 @@ fn string_literal(text: &str) -> IrExpr {
     IrExpr::Literal {
         value: Literal::String(text.to_owned()),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     }
 }
 
@@ -36,6 +37,7 @@ fn binary_op(op: BinaryOperator, l: IrExpr, r: IrExpr) -> IrExpr {
         right: Box::new(r),
         op,
         ty: primitive(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     }
 }
 
@@ -49,6 +51,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

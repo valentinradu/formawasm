@@ -1,7 +1,7 @@
 //! Tests for `lower::lower_unary_op` (Neg, Not).
 
 use formalang::ast::{PrimitiveType, UnaryOperator};
-use formalang::ir::{BindingId, IrExpr, ReferenceTarget, ResolvedType};
+use formalang::ir::{BindingId, IrExpr, IrSpan, ReferenceTarget, ResolvedType};
 use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
@@ -25,6 +25,7 @@ fn param_ref(id: u32, ty: PrimitiveType) -> IrExpr {
         path: vec![format!("p{id}")],
         target: ReferenceTarget::Param(BindingId(id)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -33,6 +34,7 @@ fn unary_op(op: UnaryOperator, operand: IrExpr, ty: PrimitiveType) -> IrExpr {
         op,
         operand: Box::new(operand),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 

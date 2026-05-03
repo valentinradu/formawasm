@@ -17,8 +17,8 @@ use formalang::ast::{
 };
 use formalang::ir::{
     BindingId, DispatchKind, FieldIdx, ImplId, ImplTarget, IrExpr, IrField, IrFunction,
-    IrFunctionParam, IrFunctionSig, IrImpl, IrModule, IrStruct, IrTrait, IrTraitRef, MethodIdx,
-    ResolvedType, StructId, TraitId,
+    IrFunctionParam, IrFunctionSig, IrImpl, IrModule, IrSpan, IrStruct, IrTrait, IrTraitRef,
+    MethodIdx, ResolvedType, StructId, TraitId,
 };
 use formalang::pipeline::Pipeline;
 use formawasm::WasmBackend;
@@ -40,13 +40,14 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -65,6 +66,7 @@ fn primitive_field(name: &str, ty: PrimitiveType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -76,6 +78,7 @@ fn build_struct(name: &str) -> IrStruct {
         fields: vec![primitive_field("tag", PrimitiveType::I32)],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -87,6 +90,7 @@ fn self_param(struct_ty: ResolvedType) -> IrFunctionParam {
         ty: Some(struct_ty),
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -110,12 +114,15 @@ fn build_greet_trait() -> IrTrait {
                 ty: None,
                 default: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             }],
             return_type: Some(primitive(PrimitiveType::I32)),
             attributes: Vec::new(),
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -129,6 +136,7 @@ fn build_value_impl(struct_id: StructId, returned: i128) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -139,6 +147,7 @@ fn build_impl(struct_id: StructId, returned: i128) -> IrImpl {
         is_extern: false,
         generic_params: Vec::new(),
         functions: vec![build_value_impl(struct_id, returned)],
+        span: IrSpan::default(),
     }
 }
 
@@ -148,6 +157,7 @@ fn build_dispatch_function(name: &str, struct_id: StructId) -> IrFunction {
         type_args: Vec::new(),
         fields: vec![("tag".to_owned(), FieldIdx(0), integer_literal(0))],
         ty: ResolvedType::Struct(struct_id),
+        span: IrSpan::default(),
     };
     let body = IrExpr::MethodCall {
         receiver: Box::new(receiver),
@@ -159,6 +169,7 @@ fn build_dispatch_function(name: &str, struct_id: StructId) -> IrFunction {
             method_name: "value".to_owned(),
         },
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     IrFunction {
         name: name.to_owned(),
@@ -169,6 +180,7 @@ fn build_dispatch_function(name: &str, struct_id: StructId) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

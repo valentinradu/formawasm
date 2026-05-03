@@ -10,7 +10,8 @@ use formalang::ast::{
 };
 use formalang::ir::{
     BindingId, DispatchKind, FieldIdx, ImplId, ImplTarget, IrBlockStatement, IrExpr, IrField,
-    IrFunction, IrFunctionParam, IrImpl, IrModule, IrStruct, MethodIdx, ResolvedType, StructId,
+    IrFunction, IrFunctionParam, IrImpl, IrModule, IrSpan, IrStruct, MethodIdx, ResolvedType,
+    StructId,
 };
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -38,6 +39,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -56,13 +58,19 @@ fn struct_def(name: &str, fields: Vec<(&str, PrimitiveType, bool)>) -> IrStruct 
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             })
             .collect(),
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "end-to-end mut-self fixture builds a struct + impl + caller in one place; splitting hides the per-piece IR shape"
+)]
 #[test]
 fn method_can_mutate_self_field_and_caller_observes_change() -> TestResult {
     // struct Counter { mut v: I32 }
@@ -81,25 +89,30 @@ fn method_can_mutate_self_field_and_caller_observes_change() -> TestResult {
         field: "v".to_owned(),
         field_idx: FieldIdx(0),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let inc = IrExpr::BinaryOp {
         left: Box::new(read_v.clone()),
         right: Box::new(integer_literal(1, PrimitiveType::I32)),
         op: BinaryOperator::Add,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let assign_stmt = IrBlockStatement::Assign {
         target: IrExpr::SelfFieldRef {
             field: "v".to_owned(),
             field_idx: FieldIdx(0),
             ty: primitive(PrimitiveType::I32),
+            span: IrSpan::default(),
         },
         value: inc,
+        span: IrSpan::default(),
     };
     let method_body = IrExpr::Block {
         statements: vec![assign_stmt],
         result: Box::new(read_v),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let bump_method = IrFunction {
@@ -112,12 +125,14 @@ fn method_can_mutate_self_field_and_caller_observes_change() -> TestResult {
             ty: Some(ResolvedType::Struct(StructId(0))),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::I32)),
         body: Some(method_body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
     module.impls.push(IrImpl {
         target: ImplTarget::Struct(StructId(0)),
@@ -125,6 +140,7 @@ fn method_can_mutate_self_field_and_caller_observes_change() -> TestResult {
         is_extern: false,
         generic_params: Vec::new(),
         functions: vec![bump_method],
+        span: IrSpan::default(),
     });
 
     let receiver = IrExpr::StructInst {
@@ -136,6 +152,7 @@ fn method_can_mutate_self_field_and_caller_observes_change() -> TestResult {
             integer_literal(41, PrimitiveType::I32),
         )],
         ty: ResolvedType::Struct(StructId(0)),
+        span: IrSpan::default(),
     };
     let body = IrExpr::MethodCall {
         receiver: Box::new(receiver),
@@ -144,6 +161,7 @@ fn method_can_mutate_self_field_and_caller_observes_change() -> TestResult {
         args: Vec::new(),
         dispatch: DispatchKind::Static { impl_id: ImplId(0) },
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     module.functions.push(IrFunction {
         name: "run".to_owned(),
@@ -154,6 +172,7 @@ fn method_can_mutate_self_field_and_caller_observes_change() -> TestResult {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let bytes = module_lowering::lower_module(&module)?;

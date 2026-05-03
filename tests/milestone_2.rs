@@ -18,8 +18,8 @@ use formalang::ast::{
     PrimitiveType,
 };
 use formalang::ir::{
-    BindingId, IrBlockStatement, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget,
-    ResolvedType,
+    BindingId, IrBlockStatement, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan,
+    ReferenceTarget, ResolvedType,
 };
 use formalang::pipeline::Pipeline;
 use formawasm::WasmBackend;
@@ -55,16 +55,18 @@ fn string_literal(text: &str) -> IrExpr {
     IrExpr::Literal {
         value: Literal::String(text.to_owned()),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     }
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -74,9 +76,14 @@ fn add_strings(left: IrExpr, right: IrExpr) -> IrExpr {
         right: Box::new(right),
         op: BinaryOperator::Add,
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Phase 2 milestone bundles strings + optionals + dictionaries + concat into one fixture; splitting hides the per-feature interaction"
+)]
 #[test]
 fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
     // Source intent (Phase 2 feature dump):
@@ -104,6 +111,7 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
         path: vec!["role".to_owned()],
         target: ReferenceTarget::Param(role_binding),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     };
     let table_ref = || IrExpr::LetRef {
         binding_id: table_binding,
@@ -112,6 +120,7 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
             primitive(PrimitiveType::String),
             primitive(PrimitiveType::String),
         ),
+        span: IrSpan::default(),
     };
 
     let table_literal = IrExpr::DictLiteral {
@@ -124,6 +133,7 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
             primitive(PrimitiveType::String),
             primitive(PrimitiveType::String),
         ),
+        span: IrSpan::default(),
     };
 
     let seen_let = IrBlockStatement::Let {
@@ -132,6 +142,7 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
         mutable: false,
         ty: Some(optional(primitive(PrimitiveType::I32))),
         value: integer_literal(1),
+        span: IrSpan::default(),
     };
     let table_let = IrBlockStatement::Let {
         binding_id: table_binding,
@@ -139,12 +150,14 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
         mutable: false,
         ty: None,
         value: table_literal,
+        span: IrSpan::default(),
     };
 
     let lookup = IrExpr::DictAccess {
         dict: Box::new(table_ref()),
         key: Box::new(role_ref()),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     };
 
     // "Greetings, " + role + ": " + table[role]
@@ -160,6 +173,7 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
         statements: vec![table_let, seen_let],
         result: Box::new(body_expr),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     };
 
     let greet = IrFunction {
@@ -172,12 +186,14 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
             ty: Some(primitive(PrimitiveType::String)),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::String)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module.functions.push(greet);

@@ -9,8 +9,8 @@ use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
 };
 use formalang::ir::{
-    EnumId, FieldIdx, IrEnum, IrEnumVariant, IrExpr, IrField, IrFunction, IrModule, ResolvedType,
-    VariantIdx,
+    EnumId, FieldIdx, IrEnum, IrEnumVariant, IrExpr, IrField, IrFunction, IrModule, IrSpan,
+    ResolvedType, VariantIdx,
 };
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -38,6 +38,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -50,6 +51,7 @@ fn field(name: &str, p: PrimitiveType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -57,6 +59,7 @@ fn variant(name: &str, fields: Vec<(&str, PrimitiveType)>) -> IrEnumVariant {
     IrEnumVariant {
         name: name.to_owned(),
         fields: fields.into_iter().map(|(n, p)| field(n, p)).collect(),
+        span: IrSpan::default(),
     }
 }
 
@@ -67,6 +70,7 @@ fn enum_def(name: &str, variants: Vec<IrEnumVariant>) -> IrEnum {
         variants,
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -86,6 +90,7 @@ fn enum_inst(
             .map(|(i, (name, e))| (name.to_owned(), FieldIdx(u32::try_from(i).unwrap_or(0)), e))
             .collect(),
         ty: ResolvedType::Enum(enum_id),
+        span: IrSpan::default(),
     }
 }
 
@@ -99,6 +104,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

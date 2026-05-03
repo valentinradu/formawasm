@@ -10,7 +10,8 @@ use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
 };
 use formalang::ir::{
-    BindingId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrStruct, ResolvedType, StructId,
+    BindingId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, IrStruct, ResolvedType,
+    StructId,
 };
 use formawasm::module_lowering;
 use formawasm::types::{CLOSURE_ENV_OFFSET, CLOSURE_FUNCREF_OFFSET};
@@ -35,6 +36,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: ResolvedType::Primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -55,6 +57,7 @@ fn closure_ref_materializes_a_pair_in_linear_memory() -> TestResult {
         fields: Vec::new(),
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     // The lifted closure function (just returns 7).
@@ -68,12 +71,14 @@ fn closure_ref_materializes_a_pair_in_linear_memory() -> TestResult {
             ty: Some(ResolvedType::Struct(StructId(0))),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(ResolvedType::Primitive(PrimitiveType::I32)),
         body: Some(integer_literal(7, PrimitiveType::I32)),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
 
     // Build the env-struct construction expression.
@@ -82,6 +87,7 @@ fn closure_ref_materializes_a_pair_in_linear_memory() -> TestResult {
         type_args: Vec::new(),
         fields: Vec::new(),
         ty: ResolvedType::Struct(StructId(0)),
+        span: IrSpan::default(),
     };
     let closure_ty = ResolvedType::Closure {
         param_tys: Vec::new(),
@@ -91,6 +97,7 @@ fn closure_ref_materializes_a_pair_in_linear_memory() -> TestResult {
         funcref: vec!["__closure_0".to_owned()],
         env_struct: Box::new(env),
         ty: closure_ty.clone(),
+        span: IrSpan::default(),
     };
 
     let make_closure = IrFunction {
@@ -102,6 +109,7 @@ fn closure_ref_materializes_a_pair_in_linear_memory() -> TestResult {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
 
     module.functions.push(lifted);

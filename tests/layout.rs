@@ -6,7 +6,7 @@
 //! rejection.
 
 use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
-use formalang::ir::{IrField, IrModule, IrStruct, ResolvedType, StructId};
+use formalang::ir::{IrField, IrModule, IrSpan, IrStruct, ResolvedType, StructId};
 use formawasm::layout::{self, FieldLayout, LayoutError, StructLayout};
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
@@ -25,6 +25,7 @@ fn field(name: &str, ty: ResolvedType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -36,6 +37,7 @@ fn make_struct(name: &str, fields: Vec<IrField>) -> IrStruct {
         fields,
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

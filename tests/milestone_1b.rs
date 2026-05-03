@@ -21,7 +21,7 @@ use formalang::ast::{
 use formalang::ir::{
     BindingId, DispatchKind, EnumId, FieldIdx, ImplId, ImplTarget, IrBlockStatement, IrEnum,
     IrEnumVariant, IrExpr, IrField, IrFunction, IrFunctionParam, IrImpl, IrMatchArm, IrModule,
-    IrStruct, MethodIdx, ReferenceTarget, ResolvedType, StructId, VariantIdx,
+    IrSpan, IrStruct, MethodIdx, ReferenceTarget, ResolvedType, StructId, VariantIdx,
 };
 use formalang::pipeline::Pipeline;
 use formawasm::WasmBackend;
@@ -36,13 +36,14 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -109,6 +110,7 @@ fn self_value() -> IrExpr {
         field: "value".to_owned(),
         field_idx: FieldIdx(0),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -118,6 +120,7 @@ fn new_counter(value: IrExpr) -> IrExpr {
         type_args: Vec::new(),
         fields: vec![("value".to_owned(), FieldIdx(0), value)],
         ty: counter_ty(),
+        span: IrSpan::default(),
     }
 }
 
@@ -127,6 +130,7 @@ fn add_op(left: IrExpr, right: IrExpr) -> IrExpr {
         right: Box::new(right),
         op: BinaryOperator::Add,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -139,6 +143,7 @@ fn primitive_field(name: &str, ty: PrimitiveType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -150,6 +155,7 @@ fn self_param() -> IrFunctionParam {
         ty: Some(counter_ty()),
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -164,6 +170,7 @@ fn build_counter_struct() -> IrStruct {
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -175,18 +182,22 @@ fn build_action_enum() -> IrEnum {
             IrEnumVariant {
                 name: "Inc".to_owned(),
                 fields: Vec::new(),
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Add".to_owned(),
                 fields: vec![primitive_field("0", PrimitiveType::I32)],
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Reset".to_owned(),
                 fields: Vec::new(),
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -198,6 +209,7 @@ fn build_apply_method() -> IrFunction {
             path: vec!["action".to_owned()],
             target: ReferenceTarget::Param(action_param_id),
             ty: action_ty(),
+            span: IrSpan::default(),
         }),
         arms: vec![
             IrMatchArm {
@@ -218,6 +230,7 @@ fn build_apply_method() -> IrFunction {
                         name: "n".to_owned(),
                         binding_id: n_binding,
                         ty: primitive(PrimitiveType::I32),
+                        span: IrSpan::default(),
                     },
                 )),
             },
@@ -230,6 +243,7 @@ fn build_apply_method() -> IrFunction {
             },
         ],
         ty: counter_ty(),
+        span: IrSpan::default(),
     };
     IrFunction {
         name: "apply".to_owned(),
@@ -243,6 +257,7 @@ fn build_apply_method() -> IrFunction {
                 ty: Some(action_ty()),
                 default: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             },
         ],
         return_type: Some(counter_ty()),
@@ -250,6 +265,7 @@ fn build_apply_method() -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -259,9 +275,11 @@ fn build_double_method() -> IrFunction {
         statements: vec![IrBlockStatement::Assign {
             target: self_value(),
             value: add_op(self_value(), self_value()),
+            span: IrSpan::default(),
         }],
         result: Box::new(self_value()),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     IrFunction {
         name: "double".to_owned(),
@@ -272,6 +290,7 @@ fn build_double_method() -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -282,6 +301,7 @@ fn action_value(variant: &str, idx: u32, fields: Vec<(String, FieldIdx, IrExpr)>
         variant_idx: VariantIdx(idx),
         fields,
         ty: action_ty(),
+        span: IrSpan::default(),
     }
 }
 
@@ -299,6 +319,7 @@ fn method_chain(
         args: args.into_iter().map(|a| (None, a)).collect(),
         dispatch: DispatchKind::Static { impl_id: ImplId(0) },
         ty: ret_ty,
+        span: IrSpan::default(),
     }
 }
 
@@ -308,6 +329,7 @@ fn build_run_function() -> IrFunction {
         type_args: Vec::new(),
         fields: vec![("value".to_owned(), FieldIdx(0), integer_literal(10))],
         ty: counter_ty(),
+        span: IrSpan::default(),
     };
     let after_add = method_chain(
         initial,
@@ -344,6 +366,7 @@ fn build_run_function() -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -357,6 +380,7 @@ fn build_milestone_module() -> IrModule {
         is_extern: false,
         generic_params: Vec::new(),
         functions: vec![build_apply_method(), build_double_method()],
+        span: IrSpan::default(),
     });
     module.functions.push(build_run_function());
     module

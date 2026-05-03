@@ -13,8 +13,8 @@
 
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
-    BindingId, IrEnum, IrEnumVariant, IrField, IrFunction, IrFunctionParam, IrModule, IrStruct,
-    ResolvedType,
+    BindingId, IrEnum, IrEnumVariant, IrField, IrFunction, IrFunctionParam, IrModule, IrSpan,
+    IrStruct, ResolvedType,
 };
 use formawasm::survey;
 use formawasm::wit;
@@ -43,6 +43,7 @@ fn function(
                 ty: Some(ty),
                 default: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             })
             .collect(),
         return_type: Some(return_ty),
@@ -50,6 +51,7 @@ fn function(
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -62,6 +64,7 @@ fn primitive_field(name: &str, p: PrimitiveType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -101,6 +104,7 @@ fn snapshot_record_with_two_fields() -> TestResult {
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
     let surface = survey::survey(&module);
     let wit = wit::emit_wit(&module, &surface)?;
@@ -118,10 +122,12 @@ fn snapshot_variant_with_unit_payload_and_tuple_arms() -> TestResult {
             IrEnumVariant {
                 name: "Reset".to_owned(),
                 fields: Vec::new(),
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Add".to_owned(),
                 fields: vec![primitive_field("amount", PrimitiveType::I32)],
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Replace".to_owned(),
@@ -129,10 +135,12 @@ fn snapshot_variant_with_unit_payload_and_tuple_arms() -> TestResult {
                     primitive_field("old", PrimitiveType::I32),
                     primitive_field("new", PrimitiveType::I32),
                 ],
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
     let surface = survey::survey(&module);
     let wit = wit::emit_wit(&module, &surface)?;

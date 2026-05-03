@@ -12,7 +12,7 @@ use formalang::ast::{
     PrimitiveType,
 };
 use formalang::ir::{
-    BindingId, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget, ResolvedType,
+    BindingId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, ReferenceTarget, ResolvedType,
 };
 use formawasm::layout::{OPTIONAL_TAG_NIL, OPTIONAL_TAG_SOME, plan_optional};
 use formawasm::module_lowering;
@@ -36,13 +36,14 @@ fn optional(inner: ResolvedType) -> ResolvedType {
     ResolvedType::Optional(Box::new(inner))
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -50,6 +51,7 @@ fn nil_literal() -> IrExpr {
     IrExpr::Literal {
         value: Literal::Nil,
         ty: optional(primitive(PrimitiveType::Never)),
+        span: IrSpan::default(),
     }
 }
 
@@ -84,6 +86,7 @@ fn function_param(name: &str, ty: ResolvedType) -> IrFunctionParam {
         ty: Some(ty),
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -102,6 +105,7 @@ fn function(
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -159,18 +163,21 @@ fn if_branch_some_wrap_then_arm_passthrough_else_arm_nil() -> TestResult {
         path: vec!["n".to_owned()],
         target: ReferenceTarget::Param(n_binding),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let cond = IrExpr::BinaryOp {
         left: Box::new(n_ref.clone()),
         op: BinaryOperator::Gt,
         right: Box::new(integer_literal(0)),
         ty: primitive(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     };
     let body = IrExpr::If {
         condition: Box::new(cond),
         then_branch: Box::new(n_ref),
         else_branch: Some(Box::new(nil_literal())),
         ty: optional(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
 
     let mut module = IrModule::new();
@@ -226,18 +233,21 @@ fn if_branch_nil_then_some_else_swaps_arms_correctly() -> TestResult {
         path: vec!["n".to_owned()],
         target: ReferenceTarget::Param(n_binding),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let cond = IrExpr::BinaryOp {
         left: Box::new(n_ref.clone()),
         op: BinaryOperator::Gt,
         right: Box::new(integer_literal(0)),
         ty: primitive(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     };
     let body = IrExpr::If {
         condition: Box::new(cond),
         then_branch: Box::new(nil_literal()),
         else_branch: Some(Box::new(n_ref)),
         ty: optional(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
 
     let mut module = IrModule::new();

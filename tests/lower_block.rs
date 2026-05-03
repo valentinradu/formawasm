@@ -7,7 +7,7 @@
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
 };
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, ReferenceTarget, ResolvedType};
+use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrSpan, ReferenceTarget, ResolvedType};
 use formawasm::lower::{self, FunctionMap, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::ValType;
@@ -35,6 +35,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -43,6 +44,7 @@ fn let_ref(id: u32, ty: PrimitiveType) -> IrExpr {
         name: format!("v{id}"),
         binding_id: BindingId(id),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -51,6 +53,7 @@ fn param_ref(id: u32, ty: PrimitiveType) -> IrExpr {
         path: vec![format!("p{id}")],
         target: ReferenceTarget::Param(BindingId(id)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -60,6 +63,7 @@ fn binary_op(op: BinaryOperator, left: IrExpr, right: IrExpr, ty: PrimitiveType)
         right: Box::new(right),
         op,
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -70,6 +74,7 @@ fn empty_block_with_literal_result() -> TestResult {
         statements: Vec::new(),
         result: Box::new(integer_literal(42, PrimitiveType::I32)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
@@ -88,9 +93,11 @@ fn let_binding_then_ref() -> TestResult {
             mutable: false,
             ty: Some(primitive_ty(PrimitiveType::I32)),
             value: integer_literal(7, PrimitiveType::I32),
+            span: IrSpan::default(),
         }],
         result: Box::new(let_ref(0, PrimitiveType::I32)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
@@ -114,9 +121,11 @@ fn let_uses_param_then_returns_arithmetic() -> TestResult {
                 param_ref(0, PrimitiveType::I32),
                 PrimitiveType::I32,
             ),
+            span: IrSpan::default(),
         }],
         result: Box::new(let_ref(1, PrimitiveType::I32)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let body =
@@ -137,6 +146,7 @@ fn multiple_lets_with_dependencies() -> TestResult {
                 mutable: false,
                 ty: Some(primitive_ty(PrimitiveType::I32)),
                 value: integer_literal(3, PrimitiveType::I32),
+                span: IrSpan::default(),
             },
             IrBlockStatement::Let {
                 binding_id: BindingId(1),
@@ -149,6 +159,7 @@ fn multiple_lets_with_dependencies() -> TestResult {
                     integer_literal(1, PrimitiveType::I32),
                     PrimitiveType::I32,
                 ),
+                span: IrSpan::default(),
             },
             IrBlockStatement::Let {
                 binding_id: BindingId(2),
@@ -161,10 +172,12 @@ fn multiple_lets_with_dependencies() -> TestResult {
                     let_ref(0, PrimitiveType::I32),
                     PrimitiveType::I32,
                 ),
+                span: IrSpan::default(),
             },
         ],
         result: Box::new(let_ref(2, PrimitiveType::I32)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
@@ -183,6 +196,7 @@ fn expr_statement_is_dropped_before_result() -> TestResult {
         ))],
         result: Box::new(integer_literal(7, PrimitiveType::I32)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let body = lower::lower_function_body(&block, &[], &FunctionMap::new())?;
@@ -197,9 +211,11 @@ fn assign_statement_is_not_yet_implemented() -> TestResult {
         statements: vec![IrBlockStatement::Assign {
             target: param_ref(0, PrimitiveType::I32),
             value: integer_literal(0, PrimitiveType::I32),
+            span: IrSpan::default(),
         }],
         result: Box::new(integer_literal(0, PrimitiveType::I32)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     match lower::lower_function_body(&block, &[(BindingId(0), ValType::I32)], &FunctionMap::new()) {
@@ -218,6 +234,7 @@ fn nested_block_inside_block_resolves_correctly() -> TestResult {
             mutable: false,
             ty: Some(primitive_ty(PrimitiveType::I32)),
             value: integer_literal(4, PrimitiveType::I32),
+            span: IrSpan::default(),
         }],
         result: Box::new(binary_op(
             BinaryOperator::Add,
@@ -226,6 +243,7 @@ fn nested_block_inside_block_resolves_correctly() -> TestResult {
             PrimitiveType::I32,
         )),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let outer_block = IrExpr::Block {
@@ -235,9 +253,11 @@ fn nested_block_inside_block_resolves_correctly() -> TestResult {
             mutable: false,
             ty: Some(primitive_ty(PrimitiveType::I32)),
             value: inner_block,
+            span: IrSpan::default(),
         }],
         result: Box::new(let_ref(1, PrimitiveType::I32)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let body = lower::lower_function_body(&outer_block, &[], &FunctionMap::new())?;

@@ -11,7 +11,7 @@ use formalang::ast::{
 };
 use formalang::ir::{
     BindingId, DispatchKind, FieldIdx, ImplId, ImplTarget, IrExpr, IrField, IrFunction,
-    IrFunctionParam, IrImpl, IrModule, IrStruct, MethodIdx, ResolvedType, StructId,
+    IrFunctionParam, IrImpl, IrModule, IrSpan, IrStruct, MethodIdx, ResolvedType, StructId,
 };
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -39,6 +39,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -57,10 +58,12 @@ fn struct_def(name: &str, fields: Vec<(&str, PrimitiveType)>) -> IrStruct {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             })
             .collect(),
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -74,6 +77,7 @@ fn struct_inst(struct_id: StructId, fields: Vec<(&str, IrExpr)>) -> IrExpr {
             .map(|(i, (name, e))| (name.to_owned(), FieldIdx(u32::try_from(i).unwrap_or(0)), e))
             .collect(),
         ty: ResolvedType::Struct(struct_id),
+        span: IrSpan::default(),
     }
 }
 
@@ -85,6 +89,7 @@ fn self_param(struct_id: StructId, binding_id: u32) -> IrFunctionParam {
         ty: Some(ResolvedType::Struct(struct_id)),
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -103,6 +108,7 @@ fn method_fn(
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -121,6 +127,7 @@ fn method_call(
         args: args.into_iter().map(|e| (None, e)).collect(),
         dispatch: DispatchKind::Static { impl_id },
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -140,6 +147,7 @@ fn calls_inherent_method_returning_self_field() -> TestResult {
         field: "a".to_owned(),
         field_idx: FieldIdx(0),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     module.impls.push(IrImpl {
         target: ImplTarget::Struct(StructId(0)),
@@ -152,6 +160,7 @@ fn calls_inherent_method_returning_self_field() -> TestResult {
             PrimitiveType::I32,
             method_body,
         )],
+        span: IrSpan::default(),
     });
 
     // Top-level caller.
@@ -179,6 +188,7 @@ fn calls_inherent_method_returning_self_field() -> TestResult {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let bytes = module_lowering::lower_module(&module)?;
@@ -212,17 +222,20 @@ fn method_with_extra_arg_is_routed_correctly() -> TestResult {
         field: "v".to_owned(),
         field_idx: FieldIdx(0),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let n_ref = IrExpr::Reference {
         path: vec!["n".to_owned()],
         target: ReferenceTarget::Param(BindingId(1)),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let method_body = IrExpr::BinaryOp {
         left: Box::new(self_v),
         right: Box::new(n_ref),
         op: BinaryOperator::Add,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let mut add_method = method_fn("add", StructId(0), PrimitiveType::I32, method_body);
     add_method.params.push(IrFunctionParam {
@@ -232,6 +245,7 @@ fn method_with_extra_arg_is_routed_correctly() -> TestResult {
         ty: Some(primitive(PrimitiveType::I32)),
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     });
     module.impls.push(IrImpl {
         target: ImplTarget::Struct(StructId(0)),
@@ -239,6 +253,7 @@ fn method_with_extra_arg_is_routed_correctly() -> TestResult {
         is_extern: false,
         generic_params: Vec::new(),
         functions: vec![add_method],
+        span: IrSpan::default(),
     });
 
     let receiver = struct_inst(
@@ -262,6 +277,7 @@ fn method_with_extra_arg_is_routed_correctly() -> TestResult {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let bytes = module_lowering::lower_module(&module)?;

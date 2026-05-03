@@ -12,7 +12,7 @@
 
 use formalang::ast::{BinaryOperator, Literal, ParamConvention, PrimitiveType};
 use formalang::ir::{
-    BindingId, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget, ResolvedType,
+    BindingId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, ReferenceTarget, ResolvedType,
 };
 use formalang::pipeline::Pipeline;
 use formawasm::WasmBackend;
@@ -31,6 +31,7 @@ fn string_literal(text: &str) -> IrExpr {
     IrExpr::Literal {
         value: Literal::String(text.to_owned()),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     }
 }
 
@@ -49,9 +50,11 @@ fn string_to_string_export_round_trips_through_component_runtime() -> TestResult
             path: vec!["name".to_owned()],
             target: ReferenceTarget::Param(name_binding),
             ty: primitive(PrimitiveType::String),
+            span: IrSpan::default(),
         }),
         op: BinaryOperator::Add,
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     };
     let greet = IrFunction {
         name: "greet".to_owned(),
@@ -63,12 +66,14 @@ fn string_to_string_export_round_trips_through_component_runtime() -> TestResult
             ty: Some(primitive(PrimitiveType::String)),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::String)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module.functions.push(greet);

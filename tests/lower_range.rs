@@ -10,7 +10,7 @@
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
 };
-use formalang::ir::{IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Engine, Instance, Module, Store};
@@ -41,6 +41,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -50,6 +51,7 @@ fn range_expr(start: IrExpr, end: IrExpr, elem_ty: ResolvedType) -> IrExpr {
         right: Box::new(end),
         op: BinaryOperator::Range,
         ty: range_ty(elem_ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -63,6 +65,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

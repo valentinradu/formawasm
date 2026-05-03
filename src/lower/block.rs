@@ -74,7 +74,7 @@ fn lower_block_statement(
             }
             Ok(())
         }
-        IrBlockStatement::Assign { target, value } => lower_assign(target, value, sink, ctx),
+        IrBlockStatement::Assign { target, value, .. } => lower_assign(target, value, sink, ctx),
     }
 }
 
@@ -201,7 +201,7 @@ fn walk_block_statements(
                 out.push((*binding_id, vt));
                 walk_for_locals(value, out)?;
             }
-            IrBlockStatement::Assign { target, value } => {
+            IrBlockStatement::Assign { target, value, .. } => {
                 walk_for_locals(target, out)?;
                 walk_for_locals(value, out)?;
             }
@@ -501,7 +501,7 @@ fn walk_count_block_statement(
             }
             walk_count(value, module, out)
         }
-        IrBlockStatement::Assign { target, value } => {
+        IrBlockStatement::Assign { target, value, .. } => {
             walk_count(target, module, out)?;
             walk_count(value, module, out)
         }
@@ -566,7 +566,7 @@ fn walk_count(
                 }
             }
         }
-        IrExpr::Tuple { fields, ty } => {
+        IrExpr::Tuple { fields, ty, .. } => {
             bump_count(&mut out.i32)?;
             // Tuple field types come straight from the resolved
             // `Tuple` type — no module lookup needed.
@@ -611,6 +611,7 @@ fn walk_count(
             then_branch,
             else_branch,
             ty,
+            ..
         } => {
             walk_count(condition, module, out)?;
             // Each branch's value is coerced to the if's overall type
@@ -723,6 +724,7 @@ fn walk_count(
             scrutinee,
             arms,
             ty,
+            ..
         } => {
             // Each `Match` reserves one i32 scratch local for the
             // scrutinee pointer.
@@ -739,7 +741,7 @@ fn walk_count(
             bump_count(&mut out.i32)?;
             walk_count(env_struct, module, out)?;
         }
-        IrExpr::Array { elements, ty } => {
+        IrExpr::Array { elements, ty, .. } => {
             // Each Array literal reserves two i32 scratch locals — one
             // for the element-buffer base pointer, one for the
             // header pointer.

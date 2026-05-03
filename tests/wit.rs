@@ -7,7 +7,7 @@
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
     BindingId, FunctionId, IrEnum, IrEnumVariant, IrField, IrFunction, IrFunctionParam, IrModule,
-    IrStruct, ResolvedType, StructId,
+    IrSpan, IrStruct, ResolvedType, StructId,
 };
 use formawasm::survey::{self, PublicSurface};
 use formawasm::types::TypeMapError;
@@ -38,6 +38,7 @@ fn function(
                 ty: Some(ty),
                 default: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             })
             .collect(),
         return_type: return_ty,
@@ -45,6 +46,7 @@ fn function(
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -237,6 +239,7 @@ fn primitive_field(name: &str, p: PrimitiveType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -253,6 +256,7 @@ fn public_struct_emits_record_with_kebab_case_fields() -> TestResult {
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let surface = survey::survey(&module);
@@ -280,14 +284,17 @@ fn public_enum_emits_variant_with_unit_and_payload_arms() -> TestResult {
             IrEnumVariant {
                 name: "None".to_owned(),
                 fields: Vec::new(),
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Some".to_owned(),
                 fields: vec![primitive_field("v", PrimitiveType::I32)],
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let surface = survey::survey(&module);
@@ -317,9 +324,11 @@ fn multi_field_variant_payload_emits_tuple_arm() -> TestResult {
                 primitive_field("a", PrimitiveType::I32),
                 primitive_field("b", PrimitiveType::I32),
             ],
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let surface = survey::survey(&module);
@@ -351,9 +360,11 @@ fn mixed_type_variant_payload_emits_typed_tuple() -> TestResult {
                 primitive_field("b", PrimitiveType::I64),
                 primitive_field("c", PrimitiveType::Boolean),
             ],
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let surface = survey::survey(&module);
@@ -375,6 +386,7 @@ fn multi_field_variant_round_trips_through_wit_parser() -> TestResult {
             IrEnumVariant {
                 name: "Single".to_owned(),
                 fields: vec![primitive_field("v", PrimitiveType::I32)],
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Both".to_owned(),
@@ -382,10 +394,12 @@ fn multi_field_variant_round_trips_through_wit_parser() -> TestResult {
                     primitive_field("a", PrimitiveType::I32),
                     primitive_field("b", PrimitiveType::I32),
                 ],
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let surface = survey::survey(&module);
@@ -410,6 +424,7 @@ fn record_and_variant_round_trip_through_wit_parser() -> TestResult {
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
     module.enums.push(IrEnum {
         name: "Color".to_owned(),
@@ -418,18 +433,22 @@ fn record_and_variant_round_trip_through_wit_parser() -> TestResult {
             IrEnumVariant {
                 name: "Red".to_owned(),
                 fields: Vec::new(),
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Green".to_owned(),
                 fields: Vec::new(),
+                span: IrSpan::default(),
             },
             IrEnumVariant {
                 name: "Blue".to_owned(),
                 fields: Vec::new(),
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let surface = survey::survey(&module);
@@ -872,10 +891,12 @@ fn record_with_list_field_round_trips() -> TestResult {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let surface = survey::survey(&module);

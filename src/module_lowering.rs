@@ -33,7 +33,9 @@ type ParamBinding = (BindingId, ValType);
 ///
 /// `ImplTarget` itself doesn't implement `Hash` upstream, so vtable
 /// keying flattens it into a `(tag, raw_id)` tuple — `tag = 0` for a
-/// struct target, `tag = 1` for an enum target.
+/// struct target, `tag = 1` for an enum target, `tag = 2` for a
+/// primitive (extern-impl) target with `raw_id` carrying the
+/// primitive's discriminant via `primitive_target_id`.
 pub(crate) type ImplTargetKey = (u32, u32);
 
 /// Encode an [`ImplTarget`] into the vtable-key form.
@@ -41,6 +43,29 @@ pub(crate) const fn impl_target_key(t: ImplTarget) -> ImplTargetKey {
     match t {
         ImplTarget::Struct(id) => (0, id.0),
         ImplTarget::Enum(id) => (1, id.0),
+        ImplTarget::Primitive(p) => (2, primitive_target_id(p)),
+    }
+}
+
+/// Stable id per [`PrimitiveType`] used in the vtable-key tag = 2
+/// slot. The id is purely an internal hash key; it has no wasm-
+/// level meaning.
+const fn primitive_target_id(p: formalang::ast::PrimitiveType) -> u32 {
+    use formalang::ast::PrimitiveType;
+    match p {
+        PrimitiveType::I32 => 0,
+        PrimitiveType::I64 => 1,
+        PrimitiveType::F32 => 2,
+        PrimitiveType::F64 => 3,
+        PrimitiveType::Boolean => 4,
+        PrimitiveType::Never => 5,
+        PrimitiveType::String => 6,
+        PrimitiveType::Path => 7,
+        PrimitiveType::Regex => 8,
+        // PrimitiveType is `#[non_exhaustive]` upstream — future
+        // variants ride this arm with a sentinel id; new primitives
+        // should land their own branch when they arrive.
+        _ => u32::MAX,
     }
 }
 
@@ -335,7 +360,7 @@ fn walk_block_statement_for_strings(
         IrBlockStatement::Let { value, .. } | IrBlockStatement::Expr(value) => {
             walk_for_strings(value, pool)
         }
-        IrBlockStatement::Assign { target, value } => {
+        IrBlockStatement::Assign { target, value, .. } => {
             walk_for_strings(target, pool)?;
             walk_for_strings(value, pool)
         }
@@ -891,7 +916,7 @@ where
             for stmt in statements {
                 match stmt {
                     IrBlockStatement::Let { value, .. } => visit(value)?,
-                    IrBlockStatement::Assign { target, value } => {
+                    IrBlockStatement::Assign { target, value, .. } => {
                         visit(target)?;
                         visit(value)?;
                     }
@@ -923,7 +948,11 @@ fn emit_impl(
 ) -> Result<(), ModuleLowerError> {
     let self_struct_id = match imp.target {
         ImplTarget::Struct(id) => Some(id),
-        ImplTarget::Enum(_) => None, // enum methods land later; tests cover struct methods
+        // Enum methods land later; tests cover struct methods.
+        // Primitive impls (extern impl <String> etc.) carry no
+        // self-struct context — their bodies are extern stubs the
+        // backend resolves to runtime helpers per-method.
+        ImplTarget::Enum(_) | ImplTarget::Primitive(_) => None,
     };
     for f in &imp.functions {
         emit_function(

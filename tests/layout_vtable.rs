@@ -6,7 +6,7 @@
 //! `MethodIdx → byte-offset` mapping.
 
 use formalang::ast::{ParamConvention, Visibility};
-use formalang::ir::{BindingId, IrFunctionParam, IrFunctionSig, IrModule, IrTrait};
+use formalang::ir::{BindingId, IrFunctionParam, IrFunctionSig, IrModule, IrSpan, IrTrait};
 use formawasm::layout::{self, VTABLE_SLOT_ALIGN, VTABLE_SLOT_SIZE, VTableLayout};
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
@@ -20,6 +20,7 @@ fn self_param() -> IrFunctionParam {
         ty: None,
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -31,6 +32,7 @@ fn make_trait(name: &str, method_names: &[&str]) -> IrTrait {
             params: vec![self_param()],
             return_type: None,
             attributes: Vec::new(),
+            span: IrSpan::default(),
         })
         .collect();
     IrTrait {
@@ -41,6 +43,7 @@ fn make_trait(name: &str, method_names: &[&str]) -> IrTrait {
         methods,
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

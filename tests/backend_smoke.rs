@@ -9,7 +9,7 @@ use formalang::ast::{
     PrimitiveType,
 };
 use formalang::ir::{
-    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget,
+    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, ReferenceTarget,
     ResolvedType,
 };
 use formawasm::{Backend, WasmBackend};
@@ -113,6 +113,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -121,6 +122,7 @@ fn param_ref(id: u32, ty: PrimitiveType) -> IrExpr {
         path: vec![format!("p{id}")],
         target: ReferenceTarget::Param(BindingId(id)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -130,6 +132,7 @@ fn binary_op(op: BinaryOperator, left: IrExpr, right: IrExpr, ty: PrimitiveType)
         right: Box::new(right),
         op,
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -153,6 +156,7 @@ fn fibonacci_function() -> IrFunction {
             ),
         )],
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let recurse_two_less = IrExpr::FunctionCall {
         path: vec!["fib".to_owned()],
@@ -167,6 +171,7 @@ fn fibonacci_function() -> IrFunction {
             ),
         )],
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let sum = binary_op(
         BinaryOperator::Add,
@@ -179,6 +184,7 @@ fn fibonacci_function() -> IrFunction {
         then_branch: Box::new(param_ref(0, PrimitiveType::I32)),
         else_branch: Some(Box::new(sum)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     IrFunction {
         name: "fib".to_owned(),
@@ -190,11 +196,13 @@ fn fibonacci_function() -> IrFunction {
             ty: Some(primitive_ty(PrimitiveType::I32)),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive_ty(PrimitiveType::I32)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }

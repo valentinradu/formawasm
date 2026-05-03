@@ -6,7 +6,9 @@
 //! the tag + payload are read back from linear memory.
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{
+    BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, IrSpan, ResolvedType,
+};
 use formawasm::layout::{OPTIONAL_TAG_SOME, plan_optional};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -29,7 +31,7 @@ fn optional(inner: ResolvedType) -> ResolvedType {
     ResolvedType::Optional(Box::new(inner))
 }
 
-const fn integer_literal(value: i128, prim: PrimitiveType) -> IrExpr {
+fn integer_literal(value: i128, prim: PrimitiveType) -> IrExpr {
     let suffix = if matches!(prim, PrimitiveType::I64) {
         NumericSuffix::I64
     } else {
@@ -38,13 +40,15 @@ const fn integer_literal(value: i128, prim: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(prim),
+        span: IrSpan::default(),
     }
 }
 
-const fn boolean_literal(b: bool) -> IrExpr {
+fn boolean_literal(b: bool) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Boolean(b),
         ty: primitive(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     }
 }
 
@@ -58,6 +62,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -97,13 +102,16 @@ fn make_some_wrap_module(payload_prim: PrimitiveType, value_expr: IrExpr) -> IrM
             mutable: false,
             ty: Some(target_ty.clone()),
             value: value_expr,
+            span: IrSpan::default(),
         }],
         result: Box::new(IrExpr::LetRef {
             binding_id,
             name: "x".to_owned(),
             ty: target_ty.clone(),
+            span: IrSpan::default(),
         }),
         ty: target_ty.clone(),
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module.functions.push(function("make", target_ty, body));

@@ -15,7 +15,7 @@ use formalang::ast::{
     PrimitiveType,
 };
 use formalang::ir::{
-    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, ResolvedType,
+    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, ResolvedType,
 };
 use formalang::pipeline::Pipeline;
 use formawasm::WasmBackend;
@@ -38,20 +38,22 @@ fn range_ty(elem: ResolvedType) -> ResolvedType {
     ResolvedType::Range(Box::new(elem))
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
-const fn bool_literal(value: bool) -> IrExpr {
+fn bool_literal(value: bool) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Boolean(value),
         ty: primitive_ty(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     }
 }
 
@@ -60,6 +62,7 @@ fn let_ref(binding_id: BindingId, name: &str, ty: ResolvedType) -> IrExpr {
         name: name.to_owned(),
         binding_id,
         ty,
+        span: IrSpan::default(),
     }
 }
 
@@ -69,6 +72,7 @@ fn binary_op(op: BinaryOperator, left: IrExpr, right: IrExpr, ty: PrimitiveType)
         right: Box::new(right),
         op,
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -83,6 +87,7 @@ fn function_call(
         function_id: Some(function_id),
         args: args.into_iter().map(|a| (None, a)).collect(),
         ty: primitive_ty(ret),
+        span: IrSpan::default(),
     }
 }
 
@@ -104,6 +109,7 @@ fn function(
                 ty: Some(ty),
                 default: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             })
             .collect(),
         return_type: Some(return_ty),
@@ -111,6 +117,7 @@ fn function(
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -132,11 +139,13 @@ fn check_divisor_function(self_id: FunctionId) -> IrFunction {
         path: vec!["n".to_owned()],
         target: formalang::ir::ReferenceTarget::Param(BindingId(0)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let d = || IrExpr::Reference {
         path: vec!["d".to_owned()],
         target: formalang::ir::ReferenceTarget::Param(BindingId(1)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let d_squared = binary_op(BinaryOperator::Mul, d(), d(), PrimitiveType::I32);
@@ -169,8 +178,10 @@ fn check_divisor_function(self_id: FunctionId) -> IrFunction {
             then_branch: Box::new(bool_literal(false)),
             else_branch: Some(Box::new(recurse)),
             ty: primitive_ty(PrimitiveType::Boolean),
+            span: IrSpan::default(),
         })),
         ty: primitive_ty(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     };
 
     function(
@@ -192,6 +203,7 @@ fn is_prime_function(check_divisor_id: FunctionId) -> IrFunction {
         path: vec!["n".to_owned()],
         target: formalang::ir::ReferenceTarget::Param(BindingId(0)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let n_lt_2 = binary_op(
@@ -211,6 +223,7 @@ fn is_prime_function(check_divisor_id: FunctionId) -> IrFunction {
         then_branch: Box::new(bool_literal(false)),
         else_branch: Some(Box::new(trial)),
         ty: primitive_ty(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     };
 
     function(
@@ -231,6 +244,7 @@ fn sieve_function(is_prime_id: FunctionId) -> IrFunction {
         path: vec!["limit".to_owned()],
         target: formalang::ir::ReferenceTarget::Param(BindingId(0)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let p_id = BindingId(1);
     let range = IrExpr::BinaryOp {
@@ -238,6 +252,7 @@ fn sieve_function(is_prime_id: FunctionId) -> IrFunction {
         right: Box::new(limit),
         op: BinaryOperator::Range,
         ty: range_ty(primitive_ty(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
     let body = function_call(
         "is_prime",
@@ -252,6 +267,7 @@ fn sieve_function(is_prime_id: FunctionId) -> IrFunction {
         collection: Box::new(range),
         body: Box::new(body),
         ty: array_ty(primitive_ty(PrimitiveType::Boolean)),
+        span: IrSpan::default(),
     };
 
     function(

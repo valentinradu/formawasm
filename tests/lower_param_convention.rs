@@ -11,7 +11,7 @@ use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
 };
 use formalang::ir::{
-    BindingId, FieldIdx, IrExpr, IrField, IrFunction, IrFunctionParam, IrModule, IrStruct,
+    BindingId, FieldIdx, IrExpr, IrField, IrFunction, IrFunctionParam, IrModule, IrSpan, IrStruct,
     ReferenceTarget, ResolvedType, StructId,
 };
 use formawasm::module_lowering;
@@ -40,6 +40,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -57,6 +58,7 @@ fn pair_struct() -> IrStruct {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             },
             IrField {
                 name: "b".to_owned(),
@@ -66,10 +68,12 @@ fn pair_struct() -> IrStruct {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -90,6 +94,7 @@ fn pair_inst(a: i128, b: i128) -> IrExpr {
             ),
         ],
         ty: ResolvedType::Struct(StructId(0)),
+        span: IrSpan::default(),
     }
 }
 
@@ -106,12 +111,14 @@ fn sink_aggregate_param_routes_pointer() -> TestResult {
         path: vec!["p".to_owned()],
         target: ReferenceTarget::Param(BindingId(0)),
         ty: ResolvedType::Struct(StructId(0)),
+        span: IrSpan::default(),
     };
     let body = IrExpr::FieldAccess {
         object: Box::new(p_ref),
         field: "a".to_owned(),
         field_idx: FieldIdx(0),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let first = IrFunction {
         name: "first".to_owned(),
@@ -123,12 +130,14 @@ fn sink_aggregate_param_routes_pointer() -> TestResult {
             ty: Some(ResolvedType::Struct(StructId(0))),
             default: None,
             convention: ParamConvention::Sink,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::I32)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
     module.functions.push(first);
 
@@ -139,6 +148,7 @@ fn sink_aggregate_param_routes_pointer() -> TestResult {
         function_id: Some(formalang::ir::FunctionId(0)),
         args: vec![(None, pair)],
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     module.functions.push(IrFunction {
         name: "run".to_owned(),
@@ -149,6 +159,7 @@ fn sink_aggregate_param_routes_pointer() -> TestResult {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let bytes = module_lowering::lower_module(&module)?;
@@ -177,12 +188,14 @@ fn mut_aggregate_param_passes_through() -> TestResult {
         path: vec!["p".to_owned()],
         target: ReferenceTarget::Param(BindingId(0)),
         ty: ResolvedType::Struct(StructId(0)),
+        span: IrSpan::default(),
     };
     let body = IrExpr::FieldAccess {
         object: Box::new(p_ref),
         field: "b".to_owned(),
         field_idx: FieldIdx(1),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let f = IrFunction {
         name: "second".to_owned(),
@@ -194,12 +207,14 @@ fn mut_aggregate_param_passes_through() -> TestResult {
             ty: Some(ResolvedType::Struct(StructId(0))),
             default: None,
             convention: ParamConvention::Mut,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::I32)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
     module.functions.push(f);
 
@@ -209,6 +224,7 @@ fn mut_aggregate_param_passes_through() -> TestResult {
         function_id: Some(formalang::ir::FunctionId(0)),
         args: vec![(None, pair)],
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     module.functions.push(IrFunction {
         name: "run".to_owned(),
@@ -219,6 +235,7 @@ fn mut_aggregate_param_passes_through() -> TestResult {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let bytes = module_lowering::lower_module(&module)?;

@@ -22,6 +22,7 @@ pub fn lower_binary_op(
         right,
         op,
         ty,
+        ..
     } = expr
     else {
         return Err(LowerError::NotYetImplemented {

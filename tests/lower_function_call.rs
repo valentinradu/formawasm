@@ -3,7 +3,7 @@
 //! caller whose body is a `FunctionCall` to the callee.
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
-use formalang::ir::{FunctionId, IrExpr, ResolvedType};
+use formalang::ir::{FunctionId, IrExpr, IrSpan, ResolvedType};
 use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
@@ -31,6 +31,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -48,6 +49,7 @@ fn no_arg_call_emits_call_instruction() -> TestResult {
         function_id: Some(FunctionId(0)),
         args: Vec::new(),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let bindings = BindingMap::new();
@@ -79,6 +81,7 @@ fn two_arg_call_evaluates_args_left_to_right() -> TestResult {
             (Some("b".to_owned()), integer_literal(4, PrimitiveType::I32)),
         ],
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let bindings = BindingMap::new();
@@ -101,6 +104,7 @@ fn rejects_unresolved_function_call() -> TestResult {
         function_id: None,
         args: Vec::new(),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let bindings = BindingMap::new();
@@ -126,6 +130,7 @@ fn rejects_unknown_function_id() -> TestResult {
         function_id: Some(FunctionId(42)),
         args: Vec::new(),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let bindings = BindingMap::new();

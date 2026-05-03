@@ -24,7 +24,7 @@ pub fn lower_literal(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    let IrExpr::Literal { value, ty } = expr else {
+    let IrExpr::Literal { value, ty, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
             what: "lower_literal called with non-literal expression".to_owned(),
         });

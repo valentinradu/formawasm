@@ -6,7 +6,7 @@
 //! canonical-ABI offsets.
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
-use formalang::ir::{FieldIdx, IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{FieldIdx, IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Engine, Instance, Module, Store};
@@ -33,6 +33,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -49,6 +50,7 @@ fn tuple_inst(ty: ResolvedType, fields: Vec<(&str, IrExpr)>) -> IrExpr {
     IrExpr::Tuple {
         fields: fields.into_iter().map(|(n, e)| (n.to_owned(), e)).collect(),
         ty,
+        span: IrSpan::default(),
     }
 }
 
@@ -58,6 +60,7 @@ fn field_access(object: IrExpr, field: &str, idx: u32, ty: PrimitiveType) -> IrE
         field: field.to_owned(),
         field_idx: FieldIdx(idx),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -71,6 +74,7 @@ fn function(name: &str, return_ty: PrimitiveType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -97,6 +101,7 @@ fn tuple_construction_returns_a_valid_pointer() -> TestResult {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     let bytes = module_lowering::lower_module(&module)?;

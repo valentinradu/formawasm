@@ -5,7 +5,7 @@
 use formalang::ast::{Literal, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
     BindingId, IrEnum, IrEnumVariant, IrExpr, IrField, IrFunction, IrFunctionParam, IrFunctionSig,
-    IrLet, IrModule, IrStruct, IrTrait, ResolvedType,
+    IrLet, IrModule, IrSpan, IrStruct, IrTrait, ResolvedType,
 };
 use formawasm::preflight::{self, PreflightError};
 
@@ -20,10 +20,11 @@ const fn bool_ty() -> ResolvedType {
     ResolvedType::Primitive(PrimitiveType::Boolean)
 }
 
-const fn bool_literal() -> IrExpr {
+fn bool_literal() -> IrExpr {
     IrExpr::Literal {
         value: Literal::Boolean(true),
         ty: bool_ty(),
+        span: IrSpan::default(),
     }
 }
 
@@ -36,6 +37,7 @@ fn closure_expr() -> IrExpr {
             param_tys: Vec::new(),
             return_ty: Box::new(bool_ty()),
         },
+        span: IrSpan::default(),
     }
 }
 
@@ -49,6 +51,7 @@ fn empty_function(name: &str, body: Option<IrExpr>) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -61,6 +64,7 @@ fn field(name: &str, ty: ResolvedType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -96,6 +100,7 @@ fn rejects_closure_in_let_value() -> TestResult {
         ty: bool_ty(),
         value: closure_expr(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     match preflight::check(&module) {
@@ -127,6 +132,7 @@ fn rejects_closure_field_on_public_struct() -> TestResult {
         fields: vec![field("on_click", closure_ty)],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     match preflight::check(&module) {
@@ -157,6 +163,7 @@ fn allows_closure_field_on_private_struct() -> TestResult {
         fields: vec![field("invoke", closure_ty)],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     preflight::check(&module).map_err(|e| -> TestError {
@@ -182,6 +189,7 @@ fn rejects_generic_trait() -> TestResult {
             constraints: Vec::new(),
         }],
         doc: None,
+        span: IrSpan::default(),
     });
 
     match preflight::check(&module) {
@@ -214,9 +222,11 @@ fn allows_non_generic_trait() -> TestResult {
             params: Vec::new(),
             return_type: Some(bool_ty()),
             attributes: Vec::new(),
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     preflight::check(&module)
@@ -240,12 +250,14 @@ fn rejects_type_param_in_function_param() -> TestResult {
             ty: Some(ResolvedType::TypeParam("T".to_owned())),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(bool_ty()),
         body: None,
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     match preflight::check(&module) {
@@ -272,6 +284,7 @@ fn rejects_type_param_nested_in_array() -> TestResult {
         ty: ResolvedType::Array(Box::new(ResolvedType::TypeParam("E".to_owned()))),
         value: bool_literal(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     match preflight::check(&module) {
@@ -299,6 +312,7 @@ fn rejects_error_type_in_struct_field() -> TestResult {
         fields: vec![field("oops", ResolvedType::Error)],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     match preflight::check(&module) {
@@ -321,9 +335,11 @@ fn rejects_error_type_in_enum_variant_field() -> TestResult {
         variants: vec![IrEnumVariant {
             name: "Failed".to_owned(),
             fields: vec![field("cause", ResolvedType::Error)],
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     match preflight::check(&module) {

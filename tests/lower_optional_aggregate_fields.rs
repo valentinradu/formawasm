@@ -11,7 +11,7 @@ use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
 };
 use formalang::ir::{
-    FieldIdx, IrExpr, IrField, IrFunction, IrModule, IrStruct, ResolvedType, StructId,
+    FieldIdx, IrExpr, IrField, IrFunction, IrModule, IrSpan, IrStruct, ResolvedType, StructId,
 };
 use formawasm::layout::{OPTIONAL_TAG_SOME, plan_optional, plan_struct};
 use formawasm::module_lowering;
@@ -35,13 +35,14 @@ fn optional(inner: ResolvedType) -> ResolvedType {
     ResolvedType::Optional(Box::new(inner))
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -55,6 +56,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -107,9 +109,11 @@ fn struct_optional_field_some_wraps_plain_initializer() -> TestResult {
             default: None,
             doc: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
     module.structs.push(struct_def);
 
@@ -118,6 +122,7 @@ fn struct_optional_field_some_wraps_plain_initializer() -> TestResult {
         type_args: Vec::new(),
         fields: vec![("value".to_owned(), FieldIdx(0), integer_literal(42))],
         ty: ResolvedType::Struct(StructId(0)),
+        span: IrSpan::default(),
     };
     module
         .functions
@@ -187,6 +192,7 @@ fn array_optional_element_some_wraps_each_initializer() -> TestResult {
     let body = IrExpr::Array {
         elements: vec![integer_literal(1), integer_literal(2), integer_literal(3)],
         ty: ResolvedType::Array(Box::new(elem_ty.clone())),
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module.functions.push(function(

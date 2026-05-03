@@ -5,7 +5,7 @@
 //! resulting module.
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{BindingId, IrExpr, ReferenceTarget, ResolvedType};
+use formalang::ir::{BindingId, IrExpr, IrSpan, ReferenceTarget, ResolvedType};
 use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
@@ -34,6 +34,7 @@ fn lowers_param_reference_to_local_get() -> TestResult {
         path: vec!["x".to_owned()],
         target: ReferenceTarget::Param(BindingId(0)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let functions = FunctionMap::new();
@@ -62,6 +63,7 @@ fn lowers_let_ref_to_local_get() -> TestResult {
         name: "y".to_owned(),
         binding_id: BindingId(1),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let functions = FunctionMap::new();
@@ -90,6 +92,7 @@ fn lowers_local_reference_to_local_get() -> TestResult {
         path: vec!["y".to_owned()],
         target: ReferenceTarget::Local(BindingId(1)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let functions = FunctionMap::new();
@@ -112,6 +115,7 @@ fn rejects_unknown_binding_id() -> TestResult {
         name: "ghost".to_owned(),
         binding_id: BindingId(99),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let functions = FunctionMap::new();
     let ctx = LowerContext::new(&bindings, &functions);
@@ -130,6 +134,7 @@ fn rejects_unresolved_reference_target() -> TestResult {
         path: vec!["x".to_owned()],
         target: ReferenceTarget::Unresolved,
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let functions = FunctionMap::new();
     let ctx = LowerContext::new(&bindings, &functions);
@@ -148,6 +153,7 @@ fn module_let_reference_is_not_yet_implemented() -> TestResult {
         path: vec!["MAX".to_owned()],
         target: ReferenceTarget::ModuleLet(formalang::ir::LetId(0)),
         ty: primitive_ty(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let functions = FunctionMap::new();
     let ctx = LowerContext::new(&bindings, &functions);

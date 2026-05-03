@@ -463,7 +463,7 @@ pub fn lower_array(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    let IrExpr::Array { elements, ty } = expr else {
+    let IrExpr::Array { elements, ty, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
             what: "lower_array called with non-Array expression".to_owned(),
         });
@@ -629,7 +629,7 @@ pub fn lower_dict_literal(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    let IrExpr::DictLiteral { entries, ty } = expr else {
+    let IrExpr::DictLiteral { entries, ty, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
             what: "lower_dict_literal called with non-DictLiteral expression".to_owned(),
         });
@@ -771,6 +771,7 @@ pub fn lower_dict_access(
 fn dict_pair_struct(key_ty: &ResolvedType, value_ty: &ResolvedType) -> IrStruct {
     use formalang::ast::ParamConvention;
     use formalang::ast::Visibility;
+    use formalang::ir::IrSpan;
     let field = |name: &str, ty: ResolvedType| IrField {
         name: name.to_owned(),
         ty,
@@ -779,6 +780,7 @@ fn dict_pair_struct(key_ty: &ResolvedType, value_ty: &ResolvedType) -> IrStruct 
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     };
     IrStruct {
         name: "__dict_pair".to_owned(),
@@ -787,6 +789,7 @@ fn dict_pair_struct(key_ty: &ResolvedType, value_ty: &ResolvedType) -> IrStruct 
         fields: vec![field("k", key_ty.clone()), field("v", value_ty.clone())],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -1241,10 +1244,12 @@ pub(super) fn synthetic_struct_for_tuple(ty: &ResolvedType) -> Result<IrStruct, 
                 default: None,
                 doc: None,
                 convention: formalang::ast::ParamConvention::Let,
+                span: formalang::ir::IrSpan::default(),
             })
             .collect(),
         generic_params: Vec::new(),
         doc: None,
+        span: formalang::ir::IrSpan::default(),
     })
 }
 

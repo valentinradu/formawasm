@@ -10,8 +10,8 @@
 use formalang::ast::{ParamConvention, PrimitiveType};
 use formalang::ir::{
     BindingId, FieldIdx, ImplTarget, IrBlockStatement, IrExpr, IrField, IrFunction,
-    IrFunctionParam, IrImpl, IrModule, IrStruct, MethodIdx, ResolvedType, StructId, TraitId,
-    VariantIdx,
+    IrFunctionParam, IrImpl, IrModule, IrSpan, IrStruct, MethodIdx, ResolvedType, StructId,
+    TraitId, VariantIdx,
 };
 use formawasm::module_lowering::{self, ModuleLowerError};
 
@@ -32,6 +32,7 @@ fn function_with_body(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFu
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -52,7 +53,9 @@ fn zero_sized_let_binding_is_rejected() -> TestResult {
             value: IrExpr::Literal {
                 value: formalang::ast::Literal::Boolean(false),
                 ty: never_ty,
+                span: IrSpan::default(),
             },
+            span: IrSpan::default(),
         }],
         result: Box::new(IrExpr::Literal {
             value: formalang::ast::Literal::Number(formalang::ast::NumberLiteral::suffixed(
@@ -60,8 +63,10 @@ fn zero_sized_let_binding_is_rejected() -> TestResult {
                 formalang::ast::NumericSuffix::I32,
             )),
             ty: primitive(PrimitiveType::I32),
+            span: IrSpan::default(),
         }),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module.functions.push(function_with_body(
@@ -97,6 +102,7 @@ fn external_struct_inst_is_rejected() -> TestResult {
             kind: formalang::ir::ImportedKind::Struct,
             type_args: Vec::new(),
         },
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module.functions.push(function_with_body(
@@ -111,6 +117,10 @@ fn external_struct_inst_is_rejected() -> TestResult {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive trait/struct/impl IR fixture; splitting hides which span values flow where"
+)]
 #[test]
 fn unsupported_virtual_receiver_is_rejected() -> TestResult {
     // Virtual dispatch on a primitive receiver isn't a shape the
@@ -125,6 +135,7 @@ fn unsupported_virtual_receiver_is_rejected() -> TestResult {
                 formalang::ast::NumericSuffix::I32,
             )),
             ty: primitive(PrimitiveType::I32),
+            span: IrSpan::default(),
         }),
         method: "value".to_owned(),
         method_idx: MethodIdx(0),
@@ -134,6 +145,7 @@ fn unsupported_virtual_receiver_is_rejected() -> TestResult {
             method_name: "value".to_owned(),
         },
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     // Wire up enough trait/impl context that the module-level pre-
     // walk produces a vtable plumbing entry — otherwise the lowering
@@ -153,12 +165,15 @@ fn unsupported_virtual_receiver_is_rejected() -> TestResult {
                 ty: None,
                 default: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             }],
             return_type: Some(primitive(PrimitiveType::I32)),
             attributes: Vec::new(),
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
     module.structs.push(IrStruct {
         name: "Receiver".to_owned(),
@@ -172,9 +187,11 @@ fn unsupported_virtual_receiver_is_rejected() -> TestResult {
             default: None,
             doc: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
     module.impls.push(IrImpl {
         target: ImplTarget::Struct(StructId(0)),
@@ -191,6 +208,7 @@ fn unsupported_virtual_receiver_is_rejected() -> TestResult {
                 ty: Some(ResolvedType::Struct(StructId(0))),
                 default: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             }],
             return_type: Some(primitive(PrimitiveType::I32)),
             body: Some(IrExpr::Literal {
@@ -199,11 +217,14 @@ fn unsupported_virtual_receiver_is_rejected() -> TestResult {
                     formalang::ast::NumericSuffix::I32,
                 )),
                 ty: primitive(PrimitiveType::I32),
+                span: IrSpan::default(),
             }),
             extern_abi: None,
             attributes: Vec::new(),
             doc: None,
+            span: IrSpan::default(),
         }],
+        span: IrSpan::default(),
     });
     module.functions.push(function_with_body(
         "trips",
@@ -234,6 +255,7 @@ fn unknown_variant_in_match_arm_is_rejected() -> TestResult {
         variant_idx: VariantIdx(0),
         fields: Vec::new(),
         ty: ResolvedType::Enum(formalang::ir::EnumId(0)),
+        span: IrSpan::default(),
     };
     let body = IrExpr::Match {
         scrutinee: Box::new(scrutinee),
@@ -248,9 +270,11 @@ fn unknown_variant_in_match_arm_is_rejected() -> TestResult {
                     formalang::ast::NumericSuffix::I32,
                 )),
                 ty: primitive(PrimitiveType::I32),
+                span: IrSpan::default(),
             },
         }],
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let mut module = IrModule::new();
@@ -260,9 +284,11 @@ fn unknown_variant_in_match_arm_is_rejected() -> TestResult {
         variants: vec![IrEnumVariant {
             name: "A".to_owned(),
             fields: Vec::new(),
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
     module.functions.push(function_with_body(
         "trips",
@@ -301,9 +327,11 @@ fn field_index_out_of_range_is_rejected_for_unknown_field_name() -> TestResult {
             default: None,
             doc: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
     let s_ty = ResolvedType::Struct(StructId(0));
     let body = IrExpr::FieldAccess {
@@ -311,10 +339,12 @@ fn field_index_out_of_range_is_rejected_for_unknown_field_name() -> TestResult {
             path: vec!["s".to_owned()],
             target: ReferenceTarget::Param(BindingId(0)),
             ty: s_ty.clone(),
+            span: IrSpan::default(),
         }),
         field: "y".to_owned(),
         field_idx: FieldIdx(99),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     module.functions.push(IrFunction {
         name: "trips".to_owned(),
@@ -326,12 +356,14 @@ fn field_index_out_of_range_is_rejected_for_unknown_field_name() -> TestResult {
             ty: Some(s_ty),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::I32)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     });
 
     match module_lowering::lower_module(&module) {

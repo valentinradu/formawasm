@@ -13,7 +13,7 @@
 
 use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
-    BindingId, FieldIdx, IrExpr, IrField, IrFunction, IrFunctionParam, IrModule, IrStruct,
+    BindingId, FieldIdx, IrExpr, IrField, IrFunction, IrFunctionParam, IrModule, IrSpan, IrStruct,
     ResolvedType, StructId,
 };
 use formawasm::module_lowering;
@@ -47,10 +47,12 @@ fn struct_def(name: &str, fields: Vec<(&str, PrimitiveType)>) -> IrStruct {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             })
             .collect(),
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -62,6 +64,7 @@ fn self_param(struct_id: StructId, binding_id: u32) -> IrFunctionParam {
         ty: Some(ResolvedType::Struct(struct_id)),
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -70,6 +73,7 @@ fn self_field_ref(field: &str, idx: u32, ty: PrimitiveType) -> IrExpr {
         field: field.to_owned(),
         field_idx: FieldIdx(idx),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -83,6 +87,7 @@ fn method(name: &str, struct_id: StructId, return_ty: PrimitiveType, body: IrExp
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

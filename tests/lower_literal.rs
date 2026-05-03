@@ -5,7 +5,7 @@
 //! well-typed against the function signature.
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
-use formalang::ir::{IrExpr, ResolvedType};
+use formalang::ir::{IrExpr, IrSpan, ResolvedType};
 use formawasm::lower::{self, BindingMap, FunctionMap, LowerContext, LowerError};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::{Function, ValType};
@@ -46,31 +46,35 @@ const fn primitive_ty(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-const fn integer_literal_unsuffixed(value: i128, ty: ResolvedType) -> IrExpr {
+fn integer_literal_unsuffixed(value: i128, ty: ResolvedType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::unsuffixed(value)),
         ty,
+        span: IrSpan::default(),
     }
 }
 
-const fn integer_literal_suffixed(value: i128, suffix: NumericSuffix, ty: ResolvedType) -> IrExpr {
+fn integer_literal_suffixed(value: i128, suffix: NumericSuffix, ty: ResolvedType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty,
+        span: IrSpan::default(),
     }
 }
 
-const fn float_literal_unsuffixed(value: f64, ty: ResolvedType) -> IrExpr {
+fn float_literal_unsuffixed(value: f64, ty: ResolvedType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::unsuffixed_float(value)),
         ty,
+        span: IrSpan::default(),
     }
 }
 
-const fn boolean_literal(b: bool) -> IrExpr {
+fn boolean_literal(b: bool) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Boolean(b),
         ty: primitive_ty(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     }
 }
 
@@ -157,6 +161,7 @@ fn string_literal_without_pool_surfaces_missing_context() -> TestResult {
     let expr = IrExpr::Literal {
         value: Literal::String("hi".to_owned()),
         ty: primitive_ty(PrimitiveType::String),
+        span: IrSpan::default(),
     };
     let mut body = Function::new(core::iter::empty());
     let bindings = BindingMap::new();
@@ -176,6 +181,7 @@ fn rejects_boolean_with_non_boolean_type() -> TestResult {
     let expr = IrExpr::Literal {
         value: Literal::Boolean(true),
         ty: primitive_ty(PrimitiveType::I64),
+        span: IrSpan::default(),
     };
     let mut body = Function::new(core::iter::empty());
     let bindings = BindingMap::new();

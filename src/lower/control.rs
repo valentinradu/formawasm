@@ -140,6 +140,7 @@ pub fn lower_if(
         then_branch,
         else_branch,
         ty,
+        ..
     } = expr
     else {
         return Err(LowerError::NotYetImplemented {

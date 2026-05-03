@@ -26,7 +26,7 @@
 //! pool of bump-allocated linear-memory regions.
 
 use formalang::ast::{PrimitiveType, Visibility};
-use formalang::ir::{IrEnum, IrModule, IrStruct, IrTrait, ResolvedType};
+use formalang::ir::{IrEnum, IrModule, IrSpan, IrStruct, IrTrait, ResolvedType};
 use thiserror::Error;
 
 /// Errors produced by [`plan_struct`].
@@ -327,6 +327,7 @@ pub fn plan_enum(e: &IrEnum, module: &IrModule) -> Result<EnumLayout, LayoutErro
             fields: variant.fields.clone(),
             generic_params: Vec::new(),
             doc: None,
+            span: IrSpan::default(),
         };
         let payload = plan_struct(&placeholder, module)?;
         if payload.align > max_payload_align {

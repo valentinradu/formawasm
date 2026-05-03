@@ -11,7 +11,7 @@ use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
 };
 use formalang::ir::{
-    FieldIdx, IrExpr, IrField, IrFunction, IrModule, IrStruct, ResolvedType, StructId,
+    FieldIdx, IrExpr, IrField, IrFunction, IrModule, IrSpan, IrStruct, ResolvedType, StructId,
 };
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -43,13 +43,15 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
-const fn boolean_literal(b: bool) -> IrExpr {
+fn boolean_literal(b: bool) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Boolean(b),
         ty: primitive(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     }
 }
 
@@ -57,6 +59,7 @@ fn array_literal(elements: Vec<IrExpr>, elem_ty: ResolvedType) -> IrExpr {
     IrExpr::Array {
         elements,
         ty: array_ty(elem_ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -70,6 +73,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -264,6 +268,7 @@ fn array_of_struct_pointers_stores_aggregate_pointers() -> TestResult {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             },
             IrField {
                 name: "b".to_owned(),
@@ -273,10 +278,12 @@ fn array_of_struct_pointers_stores_aggregate_pointers() -> TestResult {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             },
         ],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     };
     module.structs.push(pair);
 
@@ -296,6 +303,7 @@ fn array_of_struct_pointers_stores_aggregate_pointers() -> TestResult {
             ),
         ],
         ty: ResolvedType::Struct(StructId(0)),
+        span: IrSpan::default(),
     };
 
     module.functions.push(function(

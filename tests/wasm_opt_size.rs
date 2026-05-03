@@ -20,7 +20,7 @@ use formalang::ast::{
     PrimitiveType,
 };
 use formalang::ir::{
-    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget,
+    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, ReferenceTarget,
     ResolvedType,
 };
 use formawasm::module_lowering;
@@ -34,13 +34,14 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -55,6 +56,7 @@ fn param_ref(id: u32) -> IrExpr {
         path: vec![format!("p{id}")],
         target: ReferenceTarget::Param(BindingId(id)),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -64,6 +66,7 @@ fn binary_op(op: BinaryOperator, left: IrExpr, right: IrExpr, ty: PrimitiveType)
         right: Box::new(right),
         op,
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -78,12 +81,14 @@ fn function(name: &str, body: IrExpr) -> IrFunction {
             ty: Some(primitive(PrimitiveType::I32)),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::I32)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -116,6 +121,7 @@ fn build_representative_module() -> IrModule {
         function_id: Some(FunctionId(0)),
         args: vec![(None, arg)],
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let fib_body = IrExpr::If {
         condition: Box::new(n_lt_2),
@@ -127,6 +133,7 @@ fn build_representative_module() -> IrModule {
             PrimitiveType::I32,
         ))),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let mut module = IrModule::new();

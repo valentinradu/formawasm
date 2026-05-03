@@ -19,7 +19,7 @@ use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
 };
 use formalang::ir::{
-    FieldIdx, IrExpr, IrField, IrFunction, IrModule, IrStruct, ResolvedType, StructId,
+    FieldIdx, IrExpr, IrField, IrFunction, IrModule, IrSpan, IrStruct, ResolvedType, StructId,
 };
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -47,13 +47,15 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
-const fn boolean_literal(b: bool) -> IrExpr {
+fn boolean_literal(b: bool) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Boolean(b),
         ty: primitive(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     }
 }
 
@@ -72,10 +74,12 @@ fn struct_def(name: &str, fields: Vec<(&str, PrimitiveType)>) -> IrStruct {
                 default: None,
                 doc: None,
                 convention: ParamConvention::Let,
+                span: IrSpan::default(),
             })
             .collect(),
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -89,6 +93,7 @@ fn struct_inst(struct_id: StructId, ty: ResolvedType, fields: Vec<(&str, IrExpr)
             .map(|(i, (name, e))| (name.to_owned(), FieldIdx(u32::try_from(i).unwrap_or(0)), e))
             .collect(),
         ty,
+        span: IrSpan::default(),
     }
 }
 
@@ -102,6 +107,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

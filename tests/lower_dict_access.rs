@@ -11,7 +11,9 @@
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
 };
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{
+    BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, IrSpan, ResolvedType,
+};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Engine, Instance, Module, Store};
@@ -46,6 +48,7 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -53,6 +56,7 @@ fn array_literal(elements: Vec<IrExpr>, elem_ty: ResolvedType) -> IrExpr {
     IrExpr::Array {
         elements,
         ty: array_ty(elem_ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -61,6 +65,7 @@ fn dict_access(dict: IrExpr, key: IrExpr, value_ty: ResolvedType) -> IrExpr {
         dict: Box::new(dict),
         key: Box::new(key),
         ty: value_ty,
+        span: IrSpan::default(),
     }
 }
 
@@ -69,6 +74,7 @@ fn let_ref(binding_id: BindingId, name: &str, ty: ResolvedType) -> IrExpr {
         name: name.to_owned(),
         binding_id,
         ty,
+        span: IrSpan::default(),
     }
 }
 
@@ -82,6 +88,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -227,6 +234,7 @@ fn for_over_range_indexes_outer_array_with_modulus() -> TestResult {
         right: Box::new(integer_literal(3, PrimitiveType::I32)),
         op: BinaryOperator::Mod,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
 
     let body = dict_access(arr_ref, mod_three, primitive(PrimitiveType::I32));
@@ -236,6 +244,7 @@ fn for_over_range_indexes_outer_array_with_modulus() -> TestResult {
         right: Box::new(integer_literal(6, PrimitiveType::I32)),
         op: BinaryOperator::Range,
         ty: range_ty(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
 
     let for_loop = IrExpr::For {
@@ -245,6 +254,7 @@ fn for_over_range_indexes_outer_array_with_modulus() -> TestResult {
         collection: Box::new(range),
         body: Box::new(body),
         ty: array_ty(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
 
     let block = IrExpr::Block {
@@ -254,9 +264,11 @@ fn for_over_range_indexes_outer_array_with_modulus() -> TestResult {
             mutable: false,
             ty: Some(array_ty(primitive(PrimitiveType::I32))),
             value: arr_lit,
+            span: IrSpan::default(),
         }],
         result: Box::new(for_loop),
         ty: array_ty(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
 
     module.functions.push(function(

@@ -7,7 +7,7 @@
 //! comparing keys (string keys via `__str_eq`).
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
-use formalang::ir::{IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Engine, Instance, Module, Store};
@@ -36,16 +36,18 @@ fn string_literal(text: &str) -> IrExpr {
     IrExpr::Literal {
         value: Literal::String(text.to_owned()),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     }
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -59,6 +61,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -84,11 +87,13 @@ fn dict_literal_lookup_returns_matching_value() -> TestResult {
             (string_literal("c"), integer_literal(3)),
         ],
         ty: dict_type,
+        span: IrSpan::default(),
     };
     let access = IrExpr::DictAccess {
         dict: Box::new(dict_literal),
         key: Box::new(string_literal("b")),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module
@@ -123,11 +128,13 @@ fn dict_lookup_first_and_last_entries() -> TestResult {
                 (string_literal("last"), integer_literal(30)),
             ],
             ty: dict_type.clone(),
+            span: IrSpan::default(),
         };
         IrExpr::DictAccess {
             dict: Box::new(dict_literal),
             key: Box::new(string_literal(key)),
             ty: primitive(PrimitiveType::I32),
+            span: IrSpan::default(),
         }
     };
     let mut module = IrModule::new();
@@ -168,11 +175,13 @@ fn dict_missing_key_traps() -> TestResult {
     let dict_literal = IrExpr::DictLiteral {
         entries: vec![(string_literal("only"), integer_literal(7))],
         ty: dict_type,
+        span: IrSpan::default(),
     };
     let access = IrExpr::DictAccess {
         dict: Box::new(dict_literal),
         key: Box::new(string_literal("missing")),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let mut module = IrModule::new();
     module

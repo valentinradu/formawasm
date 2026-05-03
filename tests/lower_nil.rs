@@ -7,7 +7,9 @@
 //! through the exported memory.
 
 use formalang::ast::{Literal, PrimitiveType};
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{
+    BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, IrSpan, ResolvedType,
+};
 use formawasm::layout::{OPTIONAL_TAG_NIL, OPTIONAL_TAG_SIZE};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -34,6 +36,7 @@ fn nil_literal() -> IrExpr {
     IrExpr::Literal {
         value: Literal::Nil,
         ty: optional(primitive(PrimitiveType::Never)),
+        span: IrSpan::default(),
     }
 }
 
@@ -47,6 +50,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -115,13 +119,16 @@ fn nil_widens_into_optional_i32_let_binding() -> TestResult {
             mutable: false,
             ty: Some(optional(primitive(PrimitiveType::I32))),
             value: nil_literal(),
+            span: IrSpan::default(),
         }],
         result: Box::new(IrExpr::LetRef {
             binding_id,
             name: "x".to_owned(),
             ty: optional(primitive(PrimitiveType::Never)),
+            span: IrSpan::default(),
         }),
         ty: optional(primitive(PrimitiveType::Never)),
+        span: IrSpan::default(),
     };
 
     let mut module = IrModule::new();

@@ -10,7 +10,9 @@
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
 };
-use formalang::ir::{BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{
+    BindingId, IrBlockStatement, IrExpr, IrFunction, IrModule, IrSpan, ResolvedType,
+};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
 use wasmtime::{Engine, Instance, Module, Store};
@@ -36,13 +38,14 @@ fn range_ty(elem: ResolvedType) -> ResolvedType {
     ResolvedType::Range(Box::new(elem))
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -55,6 +58,7 @@ fn typed_integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -62,6 +66,7 @@ fn array_literal(elements: Vec<IrExpr>, elem_ty: ResolvedType) -> IrExpr {
     IrExpr::Array {
         elements,
         ty: array_ty(elem_ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -70,6 +75,7 @@ fn typed_let_ref(binding_id: BindingId, name: &str, ty: ResolvedType) -> IrExpr 
         name: name.to_owned(),
         binding_id,
         ty,
+        span: IrSpan::default(),
     }
 }
 
@@ -88,6 +94,7 @@ fn for_over_array(
         collection: Box::new(collection),
         body: Box::new(body),
         ty: array_ty(body_ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -97,6 +104,7 @@ fn range_expr(start: IrExpr, end: IrExpr) -> IrExpr {
         right: Box::new(end),
         op: BinaryOperator::Range,
         ty: range_ty(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     }
 }
 
@@ -105,6 +113,7 @@ fn let_ref(binding_id: BindingId, name: &str) -> IrExpr {
         name: name.to_owned(),
         binding_id,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -122,6 +131,7 @@ fn for_expr(
         collection: Box::new(collection),
         body: Box::new(body),
         ty: array_ty(body_ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -135,6 +145,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -256,6 +267,7 @@ fn for_over_i64_range_uses_typed_loop_arithmetic() -> TestResult {
             NumericSuffix::I64,
         )),
         ty: i64_ty.clone(),
+        span: IrSpan::default(),
     };
     let hi = IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
@@ -263,12 +275,14 @@ fn for_over_i64_range_uses_typed_loop_arithmetic() -> TestResult {
             NumericSuffix::I64,
         )),
         ty: i64_ty.clone(),
+        span: IrSpan::default(),
     };
     let range = IrExpr::BinaryOp {
         left: Box::new(lo),
         right: Box::new(hi),
         op: BinaryOperator::Range,
         ty: range_ty(i64_ty.clone()),
+        span: IrSpan::default(),
     };
     let body = typed_let_ref(var_id, "p", i64_ty.clone());
     let for_loop = IrExpr::For {
@@ -278,6 +292,7 @@ fn for_over_i64_range_uses_typed_loop_arithmetic() -> TestResult {
         collection: Box::new(range),
         body: Box::new(body),
         ty: array_ty(i64_ty.clone()),
+        span: IrSpan::default(),
     };
     module
         .functions
@@ -318,6 +333,7 @@ fn for_with_body_arithmetic_collects_squared_values() -> TestResult {
         right: Box::new(let_ref(var_id, "p")),
         op: BinaryOperator::Mul,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     module.functions.push(function(
         "squares",
@@ -371,6 +387,7 @@ fn for_over_i32_array_passes_each_element_into_body() -> TestResult {
         right: Box::new(integer_literal(1)),
         op: BinaryOperator::Add,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     module.functions.push(function(
         "bumped",
@@ -457,6 +474,7 @@ fn for_over_i64_array_uses_eight_byte_stride_for_element_load() -> TestResult {
         right: Box::new(typed_let_ref(var_id, "x", primitive(PrimitiveType::I64))),
         op: BinaryOperator::Mul,
         ty: primitive(PrimitiveType::I64),
+        span: IrSpan::default(),
     };
     module.functions.push(function(
         "squared",
@@ -515,6 +533,7 @@ fn for_over_array_inside_block_uses_outer_let_binding() -> TestResult {
         right: Box::new(integer_literal(10)),
         op: BinaryOperator::Mul,
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let for_loop = for_over_array(
         "x",
@@ -531,9 +550,11 @@ fn for_over_array_inside_block_uses_outer_let_binding() -> TestResult {
             mutable: false,
             ty: Some(array_ty(primitive(PrimitiveType::I32))),
             value: arr_lit,
+            span: IrSpan::default(),
         }],
         result: Box::new(for_loop),
         ty: array_ty(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
 
     module.functions.push(function(
@@ -576,6 +597,7 @@ fn for_over_f32_array_uses_f32_load_for_var() -> TestResult {
                     NumericSuffix::F32,
                 )),
                 ty: primitive(PrimitiveType::F32),
+                span: IrSpan::default(),
             },
             IrExpr::Literal {
                 value: Literal::Number(NumberLiteral::suffixed(
@@ -583,15 +605,18 @@ fn for_over_f32_array_uses_f32_load_for_var() -> TestResult {
                     NumericSuffix::F32,
                 )),
                 ty: primitive(PrimitiveType::F32),
+                span: IrSpan::default(),
             },
         ],
         ty: array_ty(primitive(PrimitiveType::F32)),
+        span: IrSpan::default(),
     };
     let body = IrExpr::BinaryOp {
         left: Box::new(typed_let_ref(var_id, "x", primitive(PrimitiveType::F32))),
         right: Box::new(typed_let_ref(var_id, "x", primitive(PrimitiveType::F32))),
         op: BinaryOperator::Add,
         ty: primitive(PrimitiveType::F32),
+        span: IrSpan::default(),
     };
     module.functions.push(function(
         "doubled",
@@ -641,6 +666,7 @@ fn for_over_f32_range_iterates_one_per_step() -> TestResult {
             NumericSuffix::F32,
         )),
         ty: f32_ty.clone(),
+        span: IrSpan::default(),
     };
     let hi = IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
@@ -648,18 +674,21 @@ fn for_over_f32_range_iterates_one_per_step() -> TestResult {
             NumericSuffix::F32,
         )),
         ty: f32_ty.clone(),
+        span: IrSpan::default(),
     };
     let range = IrExpr::BinaryOp {
         left: Box::new(lo),
         right: Box::new(hi),
         op: BinaryOperator::Range,
         ty: range_ty(f32_ty.clone()),
+        span: IrSpan::default(),
     };
     let body = IrExpr::BinaryOp {
         left: Box::new(typed_let_ref(var_id, "x", f32_ty.clone())),
         right: Box::new(typed_let_ref(var_id, "x", f32_ty.clone())),
         op: BinaryOperator::Mul,
         ty: f32_ty.clone(),
+        span: IrSpan::default(),
     };
     let for_loop = IrExpr::For {
         var: "x".to_owned(),
@@ -668,6 +697,7 @@ fn for_over_f32_range_iterates_one_per_step() -> TestResult {
         collection: Box::new(range),
         body: Box::new(body),
         ty: array_ty(f32_ty.clone()),
+        span: IrSpan::default(),
     };
     module
         .functions
@@ -717,6 +747,7 @@ fn for_over_f64_range_iterates_one_per_step() -> TestResult {
             NumericSuffix::F64,
         )),
         ty: f64_ty.clone(),
+        span: IrSpan::default(),
     };
     let hi = IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
@@ -724,18 +755,21 @@ fn for_over_f64_range_iterates_one_per_step() -> TestResult {
             NumericSuffix::F64,
         )),
         ty: f64_ty.clone(),
+        span: IrSpan::default(),
     };
     let range = IrExpr::BinaryOp {
         left: Box::new(lo),
         right: Box::new(hi),
         op: BinaryOperator::Range,
         ty: range_ty(f64_ty.clone()),
+        span: IrSpan::default(),
     };
     let body = IrExpr::BinaryOp {
         left: Box::new(typed_let_ref(var_id, "x", f64_ty.clone())),
         right: Box::new(typed_let_ref(var_id, "x", f64_ty.clone())),
         op: BinaryOperator::Add,
         ty: f64_ty.clone(),
+        span: IrSpan::default(),
     };
     let for_loop = IrExpr::For {
         var: "x".to_owned(),
@@ -744,6 +778,7 @@ fn for_over_f64_range_iterates_one_per_step() -> TestResult {
         collection: Box::new(range),
         body: Box::new(body),
         ty: array_ty(f64_ty.clone()),
+        span: IrSpan::default(),
     };
     module
         .functions

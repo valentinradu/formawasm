@@ -10,7 +10,7 @@ use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType,
 };
 use formalang::ir::{
-    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget,
+    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, ReferenceTarget,
     ResolvedType,
 };
 use formawasm::layout::{OPTIONAL_TAG_SOME, plan_optional};
@@ -35,13 +35,14 @@ fn optional(inner: ResolvedType) -> ResolvedType {
     ResolvedType::Optional(Box::new(inner))
 }
 
-const fn integer_literal(value: i128) -> IrExpr {
+fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(
             NumberValue::Integer(value),
             NumericSuffix::I32,
         )),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     }
 }
 
@@ -53,6 +54,7 @@ fn function_param(name: &str, ty: ResolvedType) -> IrFunctionParam {
         ty: Some(ty),
         default: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -71,6 +73,7 @@ fn function(
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -114,6 +117,7 @@ fn function_call_arg_some_wraps_plain_value() -> TestResult {
         path: vec!["x".to_owned()],
         target: ReferenceTarget::Param(echo_param_id),
         ty: optional(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
     let echo = function(
         "echo",
@@ -127,6 +131,7 @@ fn function_call_arg_some_wraps_plain_value() -> TestResult {
         function_id: Some(FunctionId(0)),
         args: vec![(Some("x".to_owned()), integer_literal(42))],
         ty: optional(primitive(PrimitiveType::I32)),
+        span: IrSpan::default(),
     };
     let caller = function(
         "caller",

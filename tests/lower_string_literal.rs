@@ -7,7 +7,7 @@
 //! seeded bytes from linear memory.
 
 use formalang::ast::{Literal, PrimitiveType};
-use formalang::ir::{IrExpr, IrFunction, IrModule, ResolvedType};
+use formalang::ir::{IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};
 use formawasm::layout::{STRING_LEN_OFFSET, STRING_PTR_OFFSET, plan_string};
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
@@ -30,6 +30,7 @@ fn string_literal(text: &str) -> IrExpr {
     IrExpr::Literal {
         value: Literal::String(text.to_owned()),
         ty: primitive(PrimitiveType::String),
+        span: IrSpan::default(),
     }
 }
 
@@ -43,6 +44,7 @@ fn function(name: &str, return_ty: ResolvedType, body: IrExpr) -> IrFunction {
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

@@ -203,6 +203,7 @@ fn check_impl(i: &IrImpl, module: &IrModule) -> Result<(), PreflightError> {
         formalang::ir::ImplTarget::Enum(id) => module
             .get_enum(id)
             .map_or_else(|| format!("enum#{}", id.0), |e| e.name.clone()),
+        formalang::ir::ImplTarget::Primitive(p) => format!("primitive {p:?}"),
     };
     for f in &i.functions {
         check_function(f, &format!("impl '{target_name}' method '{}'", f.name))?;
@@ -411,7 +412,7 @@ fn check_block_statement(stmt: &IrBlockStatement, location: &str) -> Result<(), 
             }
             check_expr(value, location)
         }
-        IrBlockStatement::Assign { target, value } => {
+        IrBlockStatement::Assign { target, value, .. } => {
             check_expr(target, location)?;
             check_expr(value, location)
         }

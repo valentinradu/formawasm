@@ -16,7 +16,7 @@
 
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType};
 use formalang::ir::{
-    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, ReferenceTarget,
+    BindingId, FunctionId, IrExpr, IrFunction, IrFunctionParam, IrModule, IrSpan, ReferenceTarget,
     ResolvedType,
 };
 use formalang::pipeline::Pipeline;
@@ -49,12 +49,14 @@ fn host_double_extern() -> IrFunction {
             ty: Some(primitive(PrimitiveType::I32)),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::I32)),
         body: None,
         extern_abi: Some(ExternAbi::C),
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -63,12 +65,14 @@ fn call_host_function() -> IrFunction {
         path: vec!["n".to_owned()],
         target: ReferenceTarget::Param(BindingId(0)),
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     let body = IrExpr::FunctionCall {
         path: vec!["host_double".to_owned()],
         function_id: Some(FunctionId(0)),
         args: vec![(None, n_ref)],
         ty: primitive(PrimitiveType::I32),
+        span: IrSpan::default(),
     };
     IrFunction {
         name: "call_host".to_owned(),
@@ -80,12 +84,14 @@ fn call_host_function() -> IrFunction {
             ty: Some(primitive(PrimitiveType::I32)),
             default: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         return_type: Some(primitive(PrimitiveType::I32)),
         body: Some(body),
         extern_abi: None,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

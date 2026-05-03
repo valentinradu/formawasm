@@ -1,7 +1,7 @@
 //! Tests for `layout::plan_enum`.
 
 use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
-use formalang::ir::{IrEnum, IrEnumVariant, IrField, IrModule, ResolvedType};
+use formalang::ir::{IrEnum, IrEnumVariant, IrField, IrModule, IrSpan, ResolvedType};
 use formawasm::layout::{
     self, ENUM_TAG_ALIGN, ENUM_TAG_SIZE, EnumLayout, FieldLayout, LayoutError,
 };
@@ -22,6 +22,7 @@ fn field(name: &str, ty: ResolvedType) -> IrField {
         default: None,
         doc: None,
         convention: ParamConvention::Let,
+        span: IrSpan::default(),
     }
 }
 
@@ -32,6 +33,7 @@ fn variant(name: &str, fields: Vec<(&str, PrimitiveType)>) -> IrEnumVariant {
             .into_iter()
             .map(|(n, p)| field(n, primitive(p)))
             .collect(),
+        span: IrSpan::default(),
     }
 }
 
@@ -42,6 +44,7 @@ fn make_enum(name: &str, variants: Vec<IrEnumVariant>) -> IrEnum {
         variants,
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

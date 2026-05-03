@@ -2,7 +2,8 @@
 
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
-    EnumId, FunctionId, IrEnum, IrField, IrFunction, IrModule, IrStruct, ResolvedType, StructId,
+    EnumId, FunctionId, IrEnum, IrField, IrFunction, IrModule, IrSpan, IrStruct, ResolvedType,
+    StructId,
 };
 use formawasm::survey;
 
@@ -23,6 +24,7 @@ fn function(name: &str, extern_abi: Option<ExternAbi>) -> IrFunction {
         extern_abi,
         attributes: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -39,9 +41,11 @@ fn empty_struct(name: &str, visibility: Visibility) -> IrStruct {
             default: None,
             doc: None,
             convention: ParamConvention::Let,
+            span: IrSpan::default(),
         }],
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 
@@ -52,6 +56,7 @@ fn empty_enum(name: &str, visibility: Visibility) -> IrEnum {
         variants: Vec::new(),
         generic_params: Vec::new(),
         doc: None,
+        span: IrSpan::default(),
     }
 }
 

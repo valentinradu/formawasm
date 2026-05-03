@@ -3,7 +3,7 @@
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
 };
-use formalang::ir::{BindingId, IrExpr, ReferenceTarget, ResolvedType};
+use formalang::ir::{BindingId, IrExpr, IrSpan, ReferenceTarget, ResolvedType};
 use formawasm::lower::{self, FunctionMap};
 use formawasm::module::ModuleBuilder;
 use wasm_encoder::ValType;
@@ -31,13 +31,15 @@ fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Number(NumberLiteral::suffixed(NumberValue::Integer(value), suffix)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
-const fn boolean_literal(b: bool) -> IrExpr {
+fn boolean_literal(b: bool) -> IrExpr {
     IrExpr::Literal {
         value: Literal::Boolean(b),
         ty: primitive_ty(PrimitiveType::Boolean),
+        span: IrSpan::default(),
     }
 }
 
@@ -46,6 +48,7 @@ fn param_ref(id: u32, ty: PrimitiveType) -> IrExpr {
         path: vec![format!("p{id}")],
         target: ReferenceTarget::Param(BindingId(id)),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -55,6 +58,7 @@ fn binary_op(op: BinaryOperator, left: IrExpr, right: IrExpr, ty: PrimitiveType)
         right: Box::new(right),
         op,
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
@@ -69,6 +73,7 @@ fn if_expr(
         then_branch: Box::new(then_branch),
         else_branch: else_branch.map(Box::new),
         ty: primitive_ty(ty),
+        span: IrSpan::default(),
     }
 }
 
