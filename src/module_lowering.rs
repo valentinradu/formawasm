@@ -58,6 +58,7 @@ struct PreludeHelpers {
     str_is_empty: u32,
     str_byte_at: u32,
     str_slice: u32,
+    str_starts_with: u32,
 }
 
 /// Look up the wasm function index of the runtime helper that
@@ -79,6 +80,7 @@ fn prelude_helper_index(
         (PrimitiveType::String, "is_empty") => Some(helpers.str_is_empty),
         (PrimitiveType::String, "byte_at") => Some(helpers.str_byte_at),
         (PrimitiveType::String, "slice") => Some(helpers.str_slice),
+        (PrimitiveType::String, "starts_with") => Some(helpers.str_starts_with),
         _ => None,
     }
 }
@@ -247,6 +249,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         str_is_empty: builder.declare_str_is_empty(),
         str_byte_at: builder.declare_str_byte_at(),
         str_slice: builder.declare_str_slice(),
+        str_starts_with: builder.declare_str_starts_with(),
     };
     // `cabi_realloc` is exported so the component runtime can
     // allocate buffers in our linear memory when lowering `string`

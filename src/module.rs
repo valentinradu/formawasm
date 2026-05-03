@@ -59,6 +59,11 @@ pub const STR_BYTE_AT_NAME: &str = "__str_byte_at";
 /// Backs `String::slice`.
 pub const STR_SLICE_NAME: &str = "__str_slice";
 
+/// Source-level name for the prefix-match predicate. Returns 1 when
+/// the source string begins with the given prefix string, else 0.
+/// Backs `String::starts_with`.
+pub const STR_STARTS_WITH_NAME: &str = "__str_starts_with";
+
 /// Canonical-ABI export name the host calls when it needs to allocate
 /// (or grow) a buffer in our linear memory before passing a `string`
 /// or `list<T>` argument across the component boundary.
@@ -152,6 +157,9 @@ pub struct ModuleBuilder {
     /// Index of the zero-copy substring helper. Lazily declared by
     /// [`Self::declare_str_slice`].
     str_slice: Option<u32>,
+    /// Index of the prefix-match predicate. Lazily declared by
+    /// [`Self::declare_str_starts_with`].
+    str_starts_with: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -220,6 +228,7 @@ impl ModuleBuilder {
             str_is_empty: None,
             str_byte_at: None,
             str_slice: None,
+            str_starts_with: None,
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
@@ -913,6 +922,118 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_slice_index(&self) -> Option<u32> {
         self.str_slice
+    }
+
+    /// Declare and emit the `__str_starts_with` runtime helper,
+    /// returning its wasm function index. Subsequent calls return
+    /// the same index.
+    ///
+    /// Signature: `__str_starts_with(s: i32, prefix: i32) -> i32`.
+    /// Returns 1 when `s` begins with `prefix`, 0 otherwise. Empty
+    /// prefix is always a match (loop body runs zero times).
+    /// Implementation: short-circuits when `prefix.len > s.len`, then
+    /// runs a byte-equality loop bounded by `prefix.len`. Backs
+    /// `String::starts_with`.
+    pub fn declare_str_starts_with(&mut self) -> u32 {
+        if let Some(idx) = self.str_starts_with {
+            return idx;
+        }
+        let len_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let ptr_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_PTR_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        // Locals: 2 i32 — local 2 = prefix_len, 3 = i. Params at 0/1
+        // (s, prefix); we replace them in-place with their `ptr`
+        // values once the length check has run.
+        let mut body = Function::new(core::iter::once((2, ValType::I32)));
+        let mut i = body.instructions();
+
+        // prefix_len = prefix.len
+        // if prefix_len > s.len -> return 0
+        i.local_get(1)
+            .i32_load(len_mem_arg)
+            .local_tee(2)
+            .local_get(0)
+            .i32_load(len_mem_arg)
+            .i32_gt_u()
+            .if_(BlockType::Empty)
+            .i32_const(0)
+            .return_()
+            .end();
+
+        // s_ptr / prefix_ptr replace the param locals.
+        i.local_get(0).i32_load(ptr_mem_arg).local_set(0);
+        i.local_get(1).i32_load(ptr_mem_arg).local_set(1);
+
+        // i = 0
+        i.i32_const(0).local_set(3);
+
+        // block { loop {
+        //   if i >= prefix_len: br_done
+        //   if s_ptr[i] != prefix_ptr[i]: return 0
+        //   i++
+        //   br loop
+        // } }
+        i.block(BlockType::Empty)
+            .loop_(BlockType::Empty)
+            .local_get(3)
+            .local_get(2)
+            .i32_ge_u()
+            .br_if(1)
+            // s_ptr + i
+            .local_get(0)
+            .local_get(3)
+            .i32_add()
+            .i32_load8_u(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: MEMORY_INDEX,
+            })
+            // prefix_ptr + i
+            .local_get(1)
+            .local_get(3)
+            .i32_add()
+            .i32_load8_u(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_ne()
+            .if_(BlockType::Empty)
+            .i32_const(0)
+            .return_()
+            .end()
+            // i = i + 1
+            .local_get(3)
+            .i32_const(1)
+            .i32_add()
+            .local_set(3)
+            .br(0)
+            .end()
+            .end();
+
+        // Loop completed without mismatch — every prefix byte
+        // matched, so `s` starts with `prefix`. Return 1.
+        i.i32_const(1).end();
+
+        let idx =
+            self.declare_function_with_body(&[ValType::I32, ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, STR_STARTS_WITH_NAME);
+        self.str_starts_with = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_starts_with` helper if
+    /// declared.
+    #[must_use]
+    pub const fn str_starts_with_index(&self) -> Option<u32> {
+        self.str_starts_with
     }
 
     /// Declare and export `cabi_realloc`, the canonical-ABI hook the

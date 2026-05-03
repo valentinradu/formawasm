@@ -3,8 +3,9 @@
 //! Upstream ships `extern impl String { fn len(self) -> I32, ... }`
 //! in `prelude.fv`; the backend wires each declared method to a
 //! runtime helper through `module_lowering::prelude_helper_index`.
-//! Wired so far: `len`, `is_empty`, `byte_at`, `slice`. Remaining
-//! (`starts_with`, `contains`) land in subsequent commits.
+//! Wired so far: `len`, `is_empty`, `byte_at`, `slice`,
+//! `starts_with`. Remaining (`contains`) lands in a subsequent
+//! commit.
 
 use formalang::pipeline::Pipeline;
 use formalang::{
@@ -221,6 +222,58 @@ fn string_slice_returns_zero_copy_substring() -> TestResult {
     let (got_first,) = first.call(&mut store, ())?;
     if got_first != i32::from(b'e') {
         return Err(format!("first() = {got_first}, want {}", b'e').into());
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+#[test]
+fn string_starts_with_distinguishes_prefix_from_non_prefix() -> TestResult {
+    // Source: three pubs returning Boolean. `"hello".starts_with("he")`
+    // is true, `"hello".starts_with("ho")` is false (length matches
+    // but bytes differ at position 1), `"hi".starts_with("hello")` is
+    // false (prefix longer than source short-circuits to 0).
+    let dir = scratch_dir("starts-with")?;
+    let main_path = dir.join("main.fv");
+    std::fs::write(
+        &main_path,
+        "pub fn matches() -> Boolean { \"hello\".starts_with(\"he\") }\n\npub fn diverges() -> Boolean { \"hello\".starts_with(\"ho\") }\n\npub fn too_long() -> Boolean { \"hi\".starts_with(\"hello\") }\n",
+    )?;
+    let source = std::fs::read_to_string(&main_path)?;
+    let resolver = FileSystemResolver::new(dir.clone());
+    let module = compile_to_ir_with_resolver(&source, resolver)
+        .map_err(|errors| format!("compile errors: {errors:?}"))?;
+    let mut pipeline = Pipeline::new()
+        .pass(MonomorphisePass::default())
+        .pass(ResolveReferencesPass::new())
+        .pass(ClosureConversionPass::new())
+        .pass(DeadCodeEliminationPass::new());
+    let bytes = pipeline.emit(module, &WasmBackend::new())?;
+    validate_component(&bytes)?;
+
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_binary(&engine, &bytes)?;
+    let linker = Linker::<()>::new(&engine);
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component)?;
+    let matches = instance.get_typed_func::<(), (bool,)>(&mut store, "matches")?;
+    let diverges = instance.get_typed_func::<(), (bool,)>(&mut store, "diverges")?;
+    let too_long = instance.get_typed_func::<(), (bool,)>(&mut store, "too-long")?;
+
+    let (got_match,) = matches.call(&mut store, ())?;
+    if !got_match {
+        return Err(format!("matches() = {got_match}, want true").into());
+    }
+    let (got_div,) = diverges.call(&mut store, ())?;
+    if got_div {
+        return Err(format!("diverges() = {got_div}, want false").into());
+    }
+    let (got_long,) = too_long.call(&mut store, ())?;
+    if got_long {
+        return Err(format!("too_long() = {got_long}, want false").into());
     }
 
     let _ = std::fs::remove_dir_all(&dir);
