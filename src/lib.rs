@@ -7,6 +7,8 @@
 
 mod backend;
 pub mod component;
+#[cfg(feature = "dwarf")]
+pub mod dwarf;
 pub(crate) mod ident;
 pub mod layout;
 pub mod lower;

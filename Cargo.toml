@@ -48,6 +48,12 @@ wit-parser    = "0.247"
 wasm-opt = { version = "0.116", optional = true }
 tempfile = { version = "3", optional = true }
 
+# Optional DWARF emission. Builds `.debug_*` custom sections from the
+# IrSpan + file_table data upstream attaches to every IR node.
+# Default-feature builds skip it entirely (no extra crate compile
+# cost, no extra bytes in the emitted component).
+gimli = { version = "0.32", default-features = false, features = ["std", "write"], optional = true }
+
 [features]
 # Off by default. When on, `WasmBackend::generate` runs the emitted
 # core wasm bytes through binaryen's wasm-opt at `-Os` (size-leaning
@@ -56,6 +62,15 @@ tempfile = { version = "3", optional = true }
 # the pass — tests under the feature flag re-run every milestone
 # end-to-end.
 wasm-opt = ["dep:wasm-opt", "dep:tempfile"]
+
+# Off by default. When on, `WasmBackend::generate` attaches DWARF
+# `.debug_info` / `.debug_abbrev` / `.debug_line` / `.debug_str`
+# custom sections to the emitted core module. Granularity is
+# function-level: one subprogram DIE per user function with name +
+# decl_file + decl_line + low_pc / high_pc, plus a `.debug_line`
+# row pointing at each function's first source line. Per-statement
+# line tables can layer on later.
+dwarf = ["dep:gimli"]
 
 [dev-dependencies]
 # wasmtime hosts the component for end-to-end smoke tests.
