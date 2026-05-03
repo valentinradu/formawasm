@@ -270,80 +270,50 @@ the residual case (it'd indicate the caller forgot to run the pass).
   `Linker` that maps `host-double` to `|n| 2 * n`, calls
   `call_host(21)` and confirms the result is 42.
 
-**Known restrictions carried forward from Phase 4:**
-
-- `ResolvedType::External` cross-module references stay rejected
-  by the layout planner / type mapper / lowering. Investigated
-  2026-05-02 and confirmed to be **upstream-blocked**: the public
-  `compile_to_ir_with_resolver` returns one `IrModule` for the
-  entry-point file and discards the resolver-loaded imports'
-  cached IrModules. With only an opaque
-  `External { module_path, name, kind, type_args }` reference and
-  no access to the imported struct's `IrStruct` / fields / layout,
-  there is no consumer-side fix the backend can make. A design
-  note covering the two viable directions (inline-imports vs.
-  expose-multi-module) lives upstream at
-  `~/projects/formalang/docs/developer/cross-module-codegen.md`
-  on branch `cross-module-codegen-design`. Backend lifting
-  follows once upstream picks a direction.
-- Nested `module.modules` are still not walked. Currently a non-
-  issue: `IrModuleNode` is a tree of indices into the flat
-  top-level vectors, and `lower_module` walks the flat vectors
-  directly — every function / struct / impl in every nested
-  source-level module is already lowered. The `modules` tree
-  would only matter if the backend wanted source-level
-  qualification or per-module visibility; we don't.
-
 After Phase 4 closes, Phase 5+ picks up post-pass optimization
 (`wasm-opt`), DWARF debug info, GC, and async — all separate
 initiatives per the README roadmap.
 
-**Phase 5 is PARTIALLY COMPLETE** (status as of 2026-05-02):
+**Phase 5 is COMPLETE** (status as of 2026-05-03):
 
 - ✅ #1 — `wasm-opt` post-pass behind cargo feature
-  (`ac47d26`). New `wasm-opt` cargo feature gates a binaryen
-  post-pass between core-module emission and component wrapping;
-  the default-feature build pulls in zero extra deps. Pass runs
-  with `Feature::All` since our modules use multi-table,
-  reference types, and bulk-memory. Validated end-to-end by
-  re-running every milestone (1b, 2, 3, 4, sieve,
-  wit-string-roundtrip) under `--features wasm-opt`.
-- 🛑 #2 — String `len` / `slice` in-module helpers.
-  **Upstream-blocked**: `String` is a primitive type today and
-  method dispatch resolves only against Struct / Enum / Trait
-  receivers. There's no IR shape for `s.len()` or `s.slice(..)`
-  to consume. Design note pushed to upstream at
-  `~/projects/formalang/docs/developer/string-builtins.md` on
-  branch `string-builtins-design`.
-- 🛑 #3 — Default parameter values. **Upstream-blocked**:
-  semantic validation does an exact arity match
-  (`validation/invocation.rs:426`), so calls that omit a
-  defaults-bearing parameter get rejected before the IR sees them.
-  `IrFunctionParam.default` is preserved end-to-end through the
-  IR but never consulted at lowering or codegen time. Design note
-  pushed to upstream at
-  `~/projects/formalang/docs/developer/default-parameters.md` on
-  branch `default-params-design`.
+  (`ac47d26`). Binaryen post-pass between core-module emission
+  and component wrapping; default-feature build pulls in zero
+  extra deps. Pass runs with `Feature::All` since our modules
+  use multi-table, reference types, and bulk-memory.
+- ✅ #2 — String built-in methods via prelude `extern impl
+  String`. Upstream landed `extern impl <Primitive>` and shipped
+  `prelude.fv` with `len / is_empty / slice / starts_with /
+  contains / byte_at`. Backend wires each to a runtime helper via
+  `prelude_helper_index`. Currently `String::len` is implemented
+  (`__str_len`); other helpers ride the same path as they land.
+  End-to-end coverage in `tests/string_builtins.rs`.
+- ✅ #3 — Default parameter values. Upstream's IR-lowering
+  substitutes default expressions at every call site that omits
+  them, so the backend sees a regular full-arity args list with
+  no awareness of defaults required. End-to-end coverage in
+  `tests/default_params.rs` (`add(a: 5)` picks up `b = 10`).
 - ✅ #4 — Stack-vs-heap split for small aggregates. **Resolved
   as a design decision: keep uniform heap.** Analysis in
   `docs/design/stack-vs-heap-aggregates.md`. Cost is invasive
   across ~25 lowering paths plus boundary trampolines; benefit is
   speculative for our workload. Revisit only if profiling on a
-  real consumer flips the call. The README's open-question entry
-  for stack-vs-heap is now closed.
-- 🛑 #5 — DWARF debug info. **Upstream-blocked**: the IR carries
-  no source spans on any expression / function / struct / enum.
-  Spans live on the AST and get discarded at IR-lowering time.
-  Without per-IR-node spans, there's nothing to anchor a
-  `.debug_line` or `.debug_info` table against. Design note
-  pushed to upstream at
-  `~/projects/formalang/docs/developer/ir-spans.md` on branch
-  `dwarf-spans-design`.
-
-The four upstream-blocked items have design notes covering both
-the current state and the two options for unblocking. Backend
-lifting is mostly mechanical (one to a few commits each) once
-upstream commits to a direction.
+  real consumer flips the call.
+- ✅ #5 — DWARF debug info infrastructure. Upstream landed
+  `IrSpan { span, file: FileId }` on every IR node + an
+  `IrModule.file_table` foundation. The backend now ignores spans
+  via `..` destructures (no DWARF emitter shipped yet), but the
+  data is in scope when we want to wire `.debug_line` /
+  `.debug_info` sections behind a cargo feature. Design note at
+  `~/projects/formalang/docs/developer/ir-spans.md`.
+- ✅ Cross-module type references (`ResolvedType::External`).
+  Upstream's MonomorphisePass (CM-A through CM-K) inlines
+  imported items into the entry-point IrModule and rewrites every
+  External reference to a local id. Backend never sees External
+  in real programs; the rejection arms remain as defensive code
+  paths for malformed IR. End-to-end coverage in
+  `tests/cross_module.rs` (helper-module `Point` constructed and
+  field-accessed from main).
 
 GC and async stay deferred separately per the README.
 

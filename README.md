@@ -321,10 +321,10 @@ New pass at `src/ir/closure_conv.rs`. Runs *after* `MonomorphisePass`, *before* 
 #### Phase 5+
 
 - ✅ `wasm-opt` post-pass behind the `wasm-opt` cargo feature (shipped). Off by default; on enables a binaryen post-pass over the emitted core module before component wrapping.
-- 🛑 String built-in methods (`len`, `slice`, formatting) — upstream-blocked (no method dispatch on `Primitive(String)` receivers). Design note at [`~/projects/formalang/docs/developer/string-builtins.md`](https://github.com/RadValentin/formalang) (branch `string-builtins-design`).
-- 🛑 Default parameter values — upstream-blocked (semantic validation does an exact arity match before defaults can fire). Design note at [`~/projects/formalang/docs/developer/default-parameters.md`](https://github.com/RadValentin/formalang) (branch `default-params-design`).
-- 🛑 DWARF debug info — upstream-blocked (no source spans on any IR node). Design note at [`~/projects/formalang/docs/developer/ir-spans.md`](https://github.com/RadValentin/formalang) (branch `dwarf-spans-design`).
-- 🛑 Cross-module type references (`ResolvedType::External`) — upstream-blocked (`compile_to_ir_with_resolver` returns one IrModule and discards the imported-module IRs). Design note at [`~/projects/formalang/docs/developer/cross-module-codegen.md`](https://github.com/RadValentin/formalang) (branch `cross-module-codegen-design`).
+- ✅ String built-in methods. Upstream's prelude.fv ships `extern impl String { fn len, fn is_empty, fn slice, fn starts_with, fn contains, fn byte_at }`; backend wires each to a runtime helper through `prelude_helper_index`. Currently `String::len` is implemented; other helpers ride the same path as they land.
+- ✅ Default parameter values. Upstream's IR-lowering substitutes default expressions at every call site that omits them; backend sees a regular full-arity args list and needs no defaults awareness.
+- ✅ Cross-module type references. Upstream's MonomorphisePass inlines imported items into the entry-point IrModule and rewrites every `ResolvedType::External` to a local id; backend never sees External in real programs.
+- ✅ IR source-span infrastructure (DWARF prerequisite). Upstream landed `IrSpan { span, file: FileId }` on every IR node + an `IrModule.file_table`. Backend currently ignores spans; emitting `.debug_line` / `.debug_info` sections is the next step (ungated cargo feature).
 - Real garbage collector over the bump allocator — separate initiative.
 - Async — separate initiative.
 
@@ -343,7 +343,7 @@ Resolved during Phases 1–5; preserved here for archaeology.
 
 ## Status
 
-Phases 1 through 4 are **closed**; Phase 5 is **partially complete**. Upstream prerequisites in formalang are merged (numeric specialization `ff2a6c1`, closure-conversion pass `92fdf7c`, numeric-literal precision, resolve-references). The backend produces a Component-Model artifact for every milestone:
+Phases 1 through 5 are **closed**. The backend produces a Component-Model artifact for every milestone, and every previously upstream-blocked item has either landed or shipped its enabling upstream change:
 
 - **Phase 1a** (fibonacci): primitives, control flow, direct calls.
 - **Phase 1b** (counter + actions): structs, enums, methods, mutable parameters, intramodule closures.
@@ -351,6 +351,6 @@ Phases 1 through 4 are **closed**; Phase 5 is **partially complete**. Upstream p
 - **Phase 2** (greet): strings, optionals, dictionaries.
 - **Phase 3** (trait Greet across Alpha + Beta impls): virtual dispatch via per-trait vtables + method funcref table + `call_indirect`.
 - **Phase 4** (`call_host(21) → 42` via host-provided `host_double`): `extern_abi` imports, core-wasm import section, canonical-ABI wired through `wasmtime::component::Linker`.
-- **Phase 5** (partial): `wasm-opt` post-pass shipped; remaining items (String built-ins, default params, DWARF, cross-module types) upstream-blocked with design notes pushed.
+- **Phase 5**: `wasm-opt` post-pass + String built-ins (via prelude `extern impl`) + default parameter values + cross-module type references + IR source-span infrastructure all wired end-to-end. DWARF section emission stays a tick-box behind the spans now landed upstream.
 
-See [PLAN.md](PLAN.md) for the per-microcommit history and the current upstream-blocked queue.
+See [PLAN.md](PLAN.md) for the per-microcommit history.
