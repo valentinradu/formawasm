@@ -47,22 +47,34 @@ pub(crate) const fn impl_target_key(t: ImplTarget) -> ImplTargetKey {
     }
 }
 
+/// Wasm function indices for every runtime helper backing a
+/// prelude `extern impl <Primitive>` method. Grouped into a struct
+/// so the dispatch table at [`prelude_helper_index`] can look up by
+/// (primitive, method-name) without threading half a dozen `u32`s
+/// through every caller.
+#[derive(Copy, Clone, Debug)]
+struct PreludeHelpers {
+    str_len: u32,
+    str_is_empty: u32,
+}
+
 /// Look up the wasm function index of the runtime helper that
 /// implements `<primitive>::<method_name>` on the prelude's
 /// `extern impl <Primitive>` surface.
 ///
-/// The set is currently small — `String::len` only — so the lookup
-/// is a hand-written dispatch on the (primitive, name) pair. As
-/// more prelude helpers land (`__str_byte_at`, `__str_slice`, etc.),
-/// each gets its own arm here.
+/// The set is hand-written — one arm per (primitive, name) pair the
+/// backend has wired. Calls into prelude methods that lack a runtime
+/// helper get caught at lowering time as `UnknownMethod` rather than
+/// failing module-compile.
 fn prelude_helper_index(
     primitive: formalang::ast::PrimitiveType,
     method_name: &str,
-    str_len_idx: u32,
+    helpers: PreludeHelpers,
 ) -> Option<u32> {
     use formalang::ast::PrimitiveType;
     match (primitive, method_name) {
-        (PrimitiveType::String, "len") => Some(str_len_idx),
+        (PrimitiveType::String, "len") => Some(helpers.str_len),
+        (PrimitiveType::String, "is_empty") => Some(helpers.str_is_empty),
         _ => None,
     }
 }
@@ -220,12 +232,16 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     // Bodies that never touch strings pay a small dead-code cost.
     let str_eq_idx = builder.declare_str_eq();
     let str_concat_idx = builder.declare_str_concat();
-    // Pre-declare the byte-length helper so prelude-style
-    // `extern impl String { fn len(self) -> I32 }` impls resolve
-    // their MethodMap entries without lazy plumbing later. Other
-    // String helpers (slice / starts_with / contains / byte_at)
-    // ride this same path as they land.
-    let str_len_idx = builder.declare_str_len();
+    // Pre-declare every prelude-method helper so the impl walk
+    // below resolves MethodMap entries without lazy plumbing. Each
+    // helper is lazy in the builder — declaring it here is cheap
+    // when the program never calls into the corresponding method,
+    // since `declare_function_with_body` only adds a few bytes per
+    // helper to the encoded module.
+    let helpers = PreludeHelpers {
+        str_len: builder.declare_str_len(),
+        str_is_empty: builder.declare_str_is_empty(),
+    };
     // `cabi_realloc` is exported so the component runtime can
     // allocate buffers in our linear memory when lowering `string`
     // / `list<T>` arguments. Always declared so any public function
@@ -287,7 +303,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
                     // implement). As helpers land, each prelude
                     // method's `prelude_helper_index` arm activates
                     // it.
-                    if let Some(helper_idx) = prelude_helper_index(p, &m.name, str_len_idx) {
+                    if let Some(helper_idx) = prelude_helper_index(p, &m.name, helpers) {
                         method_map.insert((ImplId(impl_id_raw), MethodIdx(m_idx_raw)), helper_idx);
                     }
                 }

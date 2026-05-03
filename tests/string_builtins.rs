@@ -3,8 +3,8 @@
 //! Upstream ships `extern impl String { fn len(self) -> I32, ... }`
 //! in `prelude.fv`; the backend wires each declared method to a
 //! runtime helper through `module_lowering::prelude_helper_index`.
-//! Currently `String::len` is the only wired method — additional
-//! helpers land in subsequent commits.
+//! Wired so far: `len`, `is_empty`. Remaining (`slice`,
+//! `starts_with`, `contains`, `byte_at`) land in subsequent commits.
 
 use formalang::pipeline::Pipeline;
 use formalang::{
@@ -77,6 +77,53 @@ fn string_len_returns_byte_count() -> TestResult {
     let (got,) = five.call(&mut store, ())?;
     if got != 5 {
         return Err(format!("five() = {got}, want 5").into());
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+#[test]
+fn string_is_empty_distinguishes_zero_length_from_nonzero() -> TestResult {
+    // Source: two pubs returning `Boolean`, one over `""` (truthy) and
+    // one over `"hi"` (falsy). Boolean maps to WIT `bool` at the
+    // component boundary. The prelude's `is_empty` wires through
+    // `__str_is_empty` which returns `len == 0` as i32 0/1.
+    let dir = scratch_dir("is-empty")?;
+    let main_path = dir.join("main.fv");
+    std::fs::write(
+        &main_path,
+        "pub fn empty() -> Boolean { \"\".is_empty() }\n\npub fn full() -> Boolean { \"hi\".is_empty() }\n",
+    )?;
+    let source = std::fs::read_to_string(&main_path)?;
+    let resolver = FileSystemResolver::new(dir.clone());
+    let module = compile_to_ir_with_resolver(&source, resolver)
+        .map_err(|errors| format!("compile errors: {errors:?}"))?;
+    let mut pipeline = Pipeline::new()
+        .pass(MonomorphisePass::default())
+        .pass(ResolveReferencesPass::new())
+        .pass(ClosureConversionPass::new())
+        .pass(DeadCodeEliminationPass::new());
+    let bytes = pipeline.emit(module, &WasmBackend::new())?;
+    validate_component(&bytes)?;
+
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_binary(&engine, &bytes)?;
+    let linker = Linker::<()>::new(&engine);
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component)?;
+    let empty = instance.get_typed_func::<(), (bool,)>(&mut store, "empty")?;
+    let full = instance.get_typed_func::<(), (bool,)>(&mut store, "full")?;
+
+    let (got_empty,) = empty.call(&mut store, ())?;
+    if !got_empty {
+        return Err(format!("empty() = {got_empty}, want true").into());
+    }
+    let (got_full,) = full.call(&mut store, ())?;
+    if got_full {
+        return Err(format!("full() = {got_full}, want false").into());
     }
 
     let _ = std::fs::remove_dir_all(&dir);

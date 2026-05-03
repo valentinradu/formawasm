@@ -43,6 +43,10 @@ pub const STR_CONCAT_NAME: &str = "__str_concat";
 /// `extern impl String { fn len(self) -> I32 }`.
 pub const STR_LEN_NAME: &str = "__str_len";
 
+/// Source-level name for the empty-string predicate. Returns 1 when
+/// the string's `len` is 0, else 0. Backs `String::is_empty`.
+pub const STR_IS_EMPTY_NAME: &str = "__str_is_empty";
+
 /// Canonical-ABI export name the host calls when it needs to allocate
 /// (or grow) a buffer in our linear memory before passing a `string`
 /// or `list<T>` argument across the component boundary.
@@ -127,6 +131,9 @@ pub struct ModuleBuilder {
     /// Index of the byte-length helper. Lazily declared by
     /// [`Self::declare_str_len`].
     str_len: Option<u32>,
+    /// Index of the empty-string predicate. Lazily declared by
+    /// [`Self::declare_str_is_empty`].
+    str_is_empty: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -192,6 +199,7 @@ impl ModuleBuilder {
             str_eq: None,
             str_concat: None,
             str_len: None,
+            str_is_empty: None,
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
@@ -703,6 +711,39 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_len_index(&self) -> Option<u32> {
         self.str_len
+    }
+
+    /// Declare and emit the `__str_is_empty` runtime helper, returning
+    /// its wasm function index. Subsequent calls return the same index.
+    ///
+    /// Signature: `__str_is_empty(s: i32) -> i32`. Loads the `len`
+    /// slot from the input's `{ ptr, len }` header and returns 1 when
+    /// `len == 0`, else 0. Backs the prelude's
+    /// `extern impl String { fn is_empty(self) -> Boolean }`.
+    pub fn declare_str_is_empty(&mut self) -> u32 {
+        if let Some(idx) = self.str_is_empty {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_eqz()
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, STR_IS_EMPTY_NAME);
+        self.str_is_empty = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_is_empty` helper if declared.
+    #[must_use]
+    pub const fn str_is_empty_index(&self) -> Option<u32> {
+        self.str_is_empty
     }
 
     /// Declare and export `cabi_realloc`, the canonical-ABI hook the
