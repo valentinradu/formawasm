@@ -175,3 +175,11 @@ strip         = "symbols"
 
 [profile.dev]
 debug = true
+
+# Slim the per-test-binary debug info. tests/ has ~70 integration test
+# files and each one statically links wasmtime + cranelift + wasmparser;
+# at full debuginfo each binary is ~80–120 MB and the combined output
+# tree exhausts the GitHub Actions runner's free disk. line-tables-only
+# keeps backtraces accurate but drops type info we don't need for tests.
+[profile.test]
+debug = "line-tables-only"
