@@ -117,7 +117,7 @@ pub fn resolved_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMap
         }),
         ResolvedType::External { name, .. } => Err(TypeMapError::NotYetSupported {
             kind: format!(
-                "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+                "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
             ),
         }),
         ResolvedType::Dictionary { .. } => Err(TypeMapError::NotYetSupported {
@@ -207,7 +207,7 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
         }),
         ResolvedType::External { name, .. } => Err(TypeMapError::NotYetSupported {
             kind: format!(
-                "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+                "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
             ),
         }),
         ResolvedType::Error => Err(TypeMapError::NotYetSupported {

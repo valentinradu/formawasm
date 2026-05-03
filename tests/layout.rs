@@ -384,8 +384,7 @@ fn external_field_is_rejected_with_design_note_breadcrumb() -> TestResult {
     match layout::plan_struct(&s, &module) {
         Err(LayoutError::NotYetSupported { kind })
             if kind.contains("External(Helper)")
-                && kind.contains("upstream-blocked")
-                && kind.contains("cross-module-codegen.md") =>
+                && kind.contains("upstream invariant violation") =>
         {
             Ok(())
         }

@@ -398,7 +398,7 @@ fn variant_tag(ty: &ResolvedType) -> String {
         ResolvedType::Generic { .. } => "Generic".to_owned(),
         ResolvedType::TypeParam(name) => format!("TypeParam({name})"),
         ResolvedType::External { name, .. } => format!(
-            "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+            "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
         ),
         ResolvedType::Dictionary { .. } => "Dictionary<K, V>".to_owned(),
         ResolvedType::Closure { .. } => "Closure".to_owned(),

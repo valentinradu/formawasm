@@ -1023,8 +1023,7 @@ fn external_typed_export_is_rejected_with_design_note_breadcrumb() -> TestResult
     match wit::emit_wit(&module, &surface) {
         Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
             if kind.contains("External(Helper)")
-                && kind.contains("upstream-blocked")
-                && kind.contains("cross-module-codegen.md") =>
+                && kind.contains("upstream invariant violation") =>
         {
             Ok(())
         }

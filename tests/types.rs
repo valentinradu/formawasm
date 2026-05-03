@@ -126,8 +126,7 @@ fn external_type_is_rejected_with_design_note_breadcrumb() -> TestResult {
     match types::resolved_value_type(&external) {
         Err(TypeMapError::NotYetSupported { kind })
             if kind.contains("External(Helper)")
-                && kind.contains("upstream-blocked")
-                && kind.contains("cross-module-codegen.md") =>
+                && kind.contains("upstream invariant violation") =>
         {
             Ok(())
         }

@@ -218,7 +218,7 @@ fn type_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
         }),
         ResolvedType::External { name, .. } => Err(LayoutError::NotYetSupported {
             kind: format!(
-                "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+                "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
             ),
         }),
         ResolvedType::Error => Err(LayoutError::NotYetSupported {
@@ -810,7 +810,7 @@ fn optional_payload_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutEr
         }),
         ResolvedType::External { name, .. } => Err(LayoutError::NotYetSupported {
             kind: format!(
-                "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+                "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
             ),
         }),
         ResolvedType::Error => Err(LayoutError::NotYetSupported {
@@ -853,7 +853,7 @@ fn array_element_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError
         }),
         ResolvedType::External { name, .. } => Err(LayoutError::NotYetSupported {
             kind: format!(
-                "External({name}) — cross-module types are upstream-blocked; see formalang docs/developer/cross-module-codegen.md"
+                "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
             ),
         }),
         ResolvedType::Error => Err(LayoutError::NotYetSupported {
