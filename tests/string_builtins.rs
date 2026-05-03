@@ -3,8 +3,8 @@
 //! Upstream ships `extern impl String { fn len(self) -> I32, ... }`
 //! in `prelude.fv`; the backend wires each declared method to a
 //! runtime helper through `module_lowering::prelude_helper_index`.
-//! Wired so far: `len`, `is_empty`, `byte_at`. Remaining (`slice`,
-//! `starts_with`, `contains`) land in subsequent commits.
+//! Wired so far: `len`, `is_empty`, `byte_at`, `slice`. Remaining
+//! (`starts_with`, `contains`) land in subsequent commits.
 
 use formalang::pipeline::Pipeline;
 use formalang::{
@@ -172,6 +172,55 @@ fn string_byte_at_returns_byte_value() -> TestResult {
     let (got_o,) = o.call(&mut store, ())?;
     if got_o != i32::from(b'o') {
         return Err(format!("o() = {got_o}, want {}", b'o').into());
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+#[test]
+fn string_slice_returns_zero_copy_substring() -> TestResult {
+    // Source: `pub fn ell_len() -> I32 { "hello".slice(1I32, 4I32).len() }`
+    // returns 3 (length of "ell"). Round-tripping a sliced string
+    // back through `.len()` exercises the freshly-allocated header
+    // — confirming `len = end - start` was stored correctly. Reading
+    // a byte at offset 0 of the slice picks up the 'e' (= 'h' + 1
+    // offset into the source buffer).
+    let dir = scratch_dir("slice")?;
+    let main_path = dir.join("main.fv");
+    std::fs::write(
+        &main_path,
+        "pub fn ell_len() -> I32 { \"hello\".slice(1I32, 4I32).len() }\n\npub fn first() -> I32 { \"hello\".slice(1I32, 4I32).byte_at(0I32) }\n",
+    )?;
+    let source = std::fs::read_to_string(&main_path)?;
+    let resolver = FileSystemResolver::new(dir.clone());
+    let module = compile_to_ir_with_resolver(&source, resolver)
+        .map_err(|errors| format!("compile errors: {errors:?}"))?;
+    let mut pipeline = Pipeline::new()
+        .pass(MonomorphisePass::default())
+        .pass(ResolveReferencesPass::new())
+        .pass(ClosureConversionPass::new())
+        .pass(DeadCodeEliminationPass::new());
+    let bytes = pipeline.emit(module, &WasmBackend::new())?;
+    validate_component(&bytes)?;
+
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_binary(&engine, &bytes)?;
+    let linker = Linker::<()>::new(&engine);
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component)?;
+    let ell_len = instance.get_typed_func::<(), (i32,)>(&mut store, "ell-len")?;
+    let first = instance.get_typed_func::<(), (i32,)>(&mut store, "first")?;
+
+    let (got_len,) = ell_len.call(&mut store, ())?;
+    if got_len != 3 {
+        return Err(format!("ell_len() = {got_len}, want 3").into());
+    }
+    let (got_first,) = first.call(&mut store, ())?;
+    if got_first != i32::from(b'e') {
+        return Err(format!("first() = {got_first}, want {}", b'e').into());
     }
 
     let _ = std::fs::remove_dir_all(&dir);

@@ -52,6 +52,13 @@ pub const STR_IS_EMPTY_NAME: &str = "__str_is_empty";
 /// Backs `String::byte_at` and `s[i]` desugaring.
 pub const STR_BYTE_AT_NAME: &str = "__str_byte_at";
 
+/// Source-level name for the zero-copy substring helper. Allocates
+/// a fresh `{ ptr, len }` header pointing into the source string's
+/// existing backing buffer; traps when `start > end` or `end > len`.
+/// Strings are immutable end-to-end so sharing the buffer is sound.
+/// Backs `String::slice`.
+pub const STR_SLICE_NAME: &str = "__str_slice";
+
 /// Canonical-ABI export name the host calls when it needs to allocate
 /// (or grow) a buffer in our linear memory before passing a `string`
 /// or `list<T>` argument across the component boundary.
@@ -142,6 +149,9 @@ pub struct ModuleBuilder {
     /// Index of the byte-indexed read helper. Lazily declared by
     /// [`Self::declare_str_byte_at`].
     str_byte_at: Option<u32>,
+    /// Index of the zero-copy substring helper. Lazily declared by
+    /// [`Self::declare_str_slice`].
+    str_slice: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -209,6 +219,7 @@ impl ModuleBuilder {
             str_len: None,
             str_is_empty: None,
             str_byte_at: None,
+            str_slice: None,
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
@@ -810,6 +821,98 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_byte_at_index(&self) -> Option<u32> {
         self.str_byte_at
+    }
+
+    /// Declare and emit the `__str_slice` runtime helper, returning
+    /// its wasm function index. Subsequent calls return the same
+    /// index. The bump allocator is declared lazily for the header
+    /// allocation.
+    ///
+    /// Signature: `__str_slice(s: i32, start: i32, end: i32) -> i32`.
+    /// Returns a freshly-allocated `{ ptr, len }` header whose `ptr`
+    /// points into the source string's existing backing buffer at
+    /// offset `start`, with `len = end - start`. Traps via
+    /// `unreachable` when `start > end` (unsigned, which also catches
+    /// negative `start` reinterpreted as a huge u32) or when
+    /// `end > s.len`.
+    ///
+    /// Strings are immutable end-to-end so sharing the buffer is
+    /// sound. Backs `String::slice`.
+    pub fn declare_str_slice(&mut self) -> u32 {
+        if let Some(idx) = self.str_slice {
+            return idx;
+        }
+        let alloc_idx = self.declare_bump_allocator();
+        let len_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let ptr_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_PTR_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let header_size = i32::try_from(crate::layout::STRING_HEADER_SIZE).unwrap_or(8);
+
+        // Locals: 1 i32 — local 3 = header_ptr. Params: 0 = s,
+        // 1 = start, 2 = end.
+        let mut body = Function::new(core::iter::once((1, ValType::I32)));
+        let mut i = body.instructions();
+
+        // if start > end (unsigned) -> trap. Handles negative `start`
+        // implicitly: as u32 it overflows past any sane `end`.
+        i.local_get(1)
+            .local_get(2)
+            .i32_gt_u()
+            .if_(BlockType::Empty)
+            .unreachable()
+            .end();
+
+        // if end > s.len (unsigned) -> trap. Handles negative `end`
+        // implicitly the same way.
+        i.local_get(2)
+            .local_get(0)
+            .i32_load(len_mem_arg)
+            .i32_gt_u()
+            .if_(BlockType::Empty)
+            .unreachable()
+            .end();
+
+        // header_ptr = __alloc(STRING_HEADER_SIZE)
+        i.i32_const(header_size).call(alloc_idx).local_set(3);
+
+        // header.ptr = s.ptr + start
+        i.local_get(3)
+            .local_get(0)
+            .i32_load(ptr_mem_arg)
+            .local_get(1)
+            .i32_add()
+            .i32_store(ptr_mem_arg);
+
+        // header.len = end - start
+        i.local_get(3)
+            .local_get(2)
+            .local_get(1)
+            .i32_sub()
+            .i32_store(len_mem_arg);
+
+        i.local_get(3).end();
+
+        let idx = self.declare_function_with_body(
+            &[ValType::I32, ValType::I32, ValType::I32],
+            &[ValType::I32],
+            &body,
+        );
+        self.set_function_name(idx, STR_SLICE_NAME);
+        self.str_slice = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_slice` helper if declared.
+    #[must_use]
+    pub const fn str_slice_index(&self) -> Option<u32> {
+        self.str_slice
     }
 
     /// Declare and export `cabi_realloc`, the canonical-ABI hook the
