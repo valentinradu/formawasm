@@ -47,6 +47,11 @@ pub const STR_LEN_NAME: &str = "__str_len";
 /// the string's `len` is 0, else 0. Backs `String::is_empty`.
 pub const STR_IS_EMPTY_NAME: &str = "__str_is_empty";
 
+/// Source-level name for the byte-indexed read helper. Returns the
+/// unsigned byte value at index `i`, traps when `i` is out of range.
+/// Backs `String::byte_at` and `s[i]` desugaring.
+pub const STR_BYTE_AT_NAME: &str = "__str_byte_at";
+
 /// Canonical-ABI export name the host calls when it needs to allocate
 /// (or grow) a buffer in our linear memory before passing a `string`
 /// or `list<T>` argument across the component boundary.
@@ -134,6 +139,9 @@ pub struct ModuleBuilder {
     /// Index of the empty-string predicate. Lazily declared by
     /// [`Self::declare_str_is_empty`].
     str_is_empty: Option<u32>,
+    /// Index of the byte-indexed read helper. Lazily declared by
+    /// [`Self::declare_str_byte_at`].
+    str_byte_at: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -200,6 +208,7 @@ impl ModuleBuilder {
             str_concat: None,
             str_len: None,
             str_is_empty: None,
+            str_byte_at: None,
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
@@ -744,6 +753,63 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_is_empty_index(&self) -> Option<u32> {
         self.str_is_empty
+    }
+
+    /// Declare and emit the `__str_byte_at` runtime helper, returning
+    /// its wasm function index. Subsequent calls return the same index.
+    ///
+    /// Signature: `__str_byte_at(s: i32, i: i32) -> i32`. Traps via
+    /// `unreachable` when `i` is out of `[0, len)` (the unsigned
+    /// comparison covers negative `i` too — reinterpreted, it's a
+    /// huge u32 well past any sensible string length). Otherwise
+    /// returns the byte at `s.ptr + i` zero-extended into i32.
+    /// Backs `String::byte_at` and the `s[i]` desugaring.
+    pub fn declare_str_byte_at(&mut self) -> u32 {
+        if let Some(idx) = self.str_byte_at {
+            return idx;
+        }
+        let len_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let ptr_mem_arg = MemArg {
+            offset: u64::from(crate::layout::STRING_PTR_OFFSET),
+            align: 2,
+            memory_index: MEMORY_INDEX,
+        };
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            // if i >= len (unsigned) -> unreachable
+            .local_get(1)
+            .local_get(0)
+            .i32_load(len_mem_arg)
+            .i32_ge_u()
+            .if_(BlockType::Empty)
+            .unreachable()
+            .end()
+            // s.ptr + i; load byte
+            .local_get(0)
+            .i32_load(ptr_mem_arg)
+            .local_get(1)
+            .i32_add()
+            .i32_load8_u(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: MEMORY_INDEX,
+            })
+            .end();
+        let idx =
+            self.declare_function_with_body(&[ValType::I32, ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, STR_BYTE_AT_NAME);
+        self.str_byte_at = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_byte_at` helper if declared.
+    #[must_use]
+    pub const fn str_byte_at_index(&self) -> Option<u32> {
+        self.str_byte_at
     }
 
     /// Declare and export `cabi_realloc`, the canonical-ABI hook the

@@ -56,6 +56,7 @@ pub(crate) const fn impl_target_key(t: ImplTarget) -> ImplTargetKey {
 struct PreludeHelpers {
     str_len: u32,
     str_is_empty: u32,
+    str_byte_at: u32,
 }
 
 /// Look up the wasm function index of the runtime helper that
@@ -75,6 +76,7 @@ fn prelude_helper_index(
     match (primitive, method_name) {
         (PrimitiveType::String, "len") => Some(helpers.str_len),
         (PrimitiveType::String, "is_empty") => Some(helpers.str_is_empty),
+        (PrimitiveType::String, "byte_at") => Some(helpers.str_byte_at),
         _ => None,
     }
 }
@@ -241,6 +243,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     let helpers = PreludeHelpers {
         str_len: builder.declare_str_len(),
         str_is_empty: builder.declare_str_is_empty(),
+        str_byte_at: builder.declare_str_byte_at(),
     };
     // `cabi_realloc` is exported so the component runtime can
     // allocate buffers in our linear memory when lowering `string`

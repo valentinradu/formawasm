@@ -3,8 +3,8 @@
 //! Upstream ships `extern impl String { fn len(self) -> I32, ... }`
 //! in `prelude.fv`; the backend wires each declared method to a
 //! runtime helper through `module_lowering::prelude_helper_index`.
-//! Wired so far: `len`, `is_empty`. Remaining (`slice`,
-//! `starts_with`, `contains`, `byte_at`) land in subsequent commits.
+//! Wired so far: `len`, `is_empty`, `byte_at`. Remaining (`slice`,
+//! `starts_with`, `contains`) land in subsequent commits.
 
 use formalang::pipeline::Pipeline;
 use formalang::{
@@ -124,6 +124,54 @@ fn string_is_empty_distinguishes_zero_length_from_nonzero() -> TestResult {
     let (got_full,) = full.call(&mut store, ())?;
     if got_full {
         return Err(format!("full() = {got_full}, want false").into());
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+#[test]
+fn string_byte_at_returns_byte_value() -> TestResult {
+    // Source: `pub fn h() -> I32 { "hello".byte_at(0I32) }` returns
+    // 'h' = 0x68 = 104. The prelude's `byte_at` wires through
+    // `__str_byte_at`, which loads the `ptr` slot, adds the index,
+    // and reads one zero-extended byte. Out-of-range traps; we test
+    // an in-range index here.
+    let dir = scratch_dir("byte-at")?;
+    let main_path = dir.join("main.fv");
+    std::fs::write(
+        &main_path,
+        "pub fn h() -> I32 { \"hello\".byte_at(0I32) }\n\npub fn o() -> I32 { \"hello\".byte_at(4I32) }\n",
+    )?;
+    let source = std::fs::read_to_string(&main_path)?;
+    let resolver = FileSystemResolver::new(dir.clone());
+    let module = compile_to_ir_with_resolver(&source, resolver)
+        .map_err(|errors| format!("compile errors: {errors:?}"))?;
+    let mut pipeline = Pipeline::new()
+        .pass(MonomorphisePass::default())
+        .pass(ResolveReferencesPass::new())
+        .pass(ClosureConversionPass::new())
+        .pass(DeadCodeEliminationPass::new());
+    let bytes = pipeline.emit(module, &WasmBackend::new())?;
+    validate_component(&bytes)?;
+
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_binary(&engine, &bytes)?;
+    let linker = Linker::<()>::new(&engine);
+    let mut store = Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &component)?;
+    let h = instance.get_typed_func::<(), (i32,)>(&mut store, "h")?;
+    let o = instance.get_typed_func::<(), (i32,)>(&mut store, "o")?;
+
+    let (got_h,) = h.call(&mut store, ())?;
+    if got_h != i32::from(b'h') {
+        return Err(format!("h() = {got_h}, want {}", b'h').into());
+    }
+    let (got_o,) = o.call(&mut store, ())?;
+    if got_o != i32::from(b'o') {
+        return Err(format!("o() = {got_o}, want {}", b'o').into());
     }
 
     let _ = std::fs::remove_dir_all(&dir);
