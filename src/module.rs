@@ -38,6 +38,11 @@ pub const STR_EQ_NAME: &str = "__str_eq";
 /// (each an `{ ptr, len }` header pointer) into the new buffer.
 pub const STR_CONCAT_NAME: &str = "__str_concat";
 
+/// Source-level name for the byte-length helper. Returns the `len`
+/// field of an `{ ptr, len }` string header. Backs the prelude's
+/// `extern impl String { fn len(self) -> I32 }`.
+pub const STR_LEN_NAME: &str = "__str_len";
+
 /// Canonical-ABI export name the host calls when it needs to allocate
 /// (or grow) a buffer in our linear memory before passing a `string`
 /// or `list<T>` argument across the component boundary.
@@ -119,6 +124,9 @@ pub struct ModuleBuilder {
     /// Index of the string-concatenation helper. Lazily declared by
     /// [`Self::declare_str_concat`].
     str_concat: Option<u32>,
+    /// Index of the byte-length helper. Lazily declared by
+    /// [`Self::declare_str_len`].
+    str_len: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -183,6 +191,7 @@ impl ModuleBuilder {
             bump_allocator: None,
             str_eq: None,
             str_concat: None,
+            str_len: None,
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
@@ -664,6 +673,36 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_concat_index(&self) -> Option<u32> {
         self.str_concat
+    }
+
+    /// Declare and emit the `__str_len` runtime helper, returning its
+    /// wasm function index. Subsequent calls return the same index.
+    ///
+    /// Signature: `__str_len(s: i32) -> i32`. Reads the `len` slot
+    /// from the input's `{ ptr, len }` string header.
+    pub fn declare_str_len(&mut self) -> u32 {
+        if let Some(idx) = self.str_len {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::STRING_LEN_OFFSET),
+                align: 2, // log2(4)
+                memory_index: MEMORY_INDEX,
+            })
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, STR_LEN_NAME);
+        self.str_len = Some(idx);
+        idx
+    }
+
+    /// Wasm function index of the `__str_len` helper if declared.
+    #[must_use]
+    pub const fn str_len_index(&self) -> Option<u32> {
+        self.str_len
     }
 
     /// Declare and export `cabi_realloc`, the canonical-ABI hook the

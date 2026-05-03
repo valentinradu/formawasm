@@ -47,6 +47,26 @@ pub(crate) const fn impl_target_key(t: ImplTarget) -> ImplTargetKey {
     }
 }
 
+/// Look up the wasm function index of the runtime helper that
+/// implements `<primitive>::<method_name>` on the prelude's
+/// `extern impl <Primitive>` surface.
+///
+/// The set is currently small — `String::len` only — so the lookup
+/// is a hand-written dispatch on the (primitive, name) pair. As
+/// more prelude helpers land (`__str_byte_at`, `__str_slice`, etc.),
+/// each gets its own arm here.
+fn prelude_helper_index(
+    primitive: formalang::ast::PrimitiveType,
+    method_name: &str,
+    str_len_idx: u32,
+) -> Option<u32> {
+    use formalang::ast::PrimitiveType;
+    match (primitive, method_name) {
+        (PrimitiveType::String, "len") => Some(str_len_idx),
+        _ => None,
+    }
+}
+
 /// Stable id per [`PrimitiveType`] used in the vtable-key tag = 2
 /// slot. The id is purely an internal hash key; it has no wasm-
 /// level meaning.
@@ -200,6 +220,12 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     // Bodies that never touch strings pay a small dead-code cost.
     let str_eq_idx = builder.declare_str_eq();
     let str_concat_idx = builder.declare_str_concat();
+    // Pre-declare the byte-length helper so prelude-style
+    // `extern impl String { fn len(self) -> I32 }` impls resolve
+    // their MethodMap entries without lazy plumbing later. Other
+    // String helpers (slice / starts_with / contains / byte_at)
+    // ride this same path as they land.
+    let str_len_idx = builder.declare_str_len();
     // `cabi_realloc` is exported so the component runtime can
     // allocate buffers in our linear memory when lowering `string`
     // / `list<T>` arguments. Always declared so any public function
@@ -240,10 +266,34 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     let mut method_map = MethodMap::new();
     let mut method_counter: u32 = 0;
     for (i, imp) in module.impls.iter().enumerate() {
+        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
         if imp.is_extern {
+            // `extern impl <Primitive>` blocks (the prelude's
+            // String surface) get a per-method runtime-helper
+            // index, not a fresh method-region slot. Bodies are
+            // already in the module via `declare_str_*`; the
+            // backend just needs MethodMap entries pointing at
+            // them.
+            if let ImplTarget::Primitive(p) = imp.target {
+                for (j, m) in imp.functions.iter().enumerate() {
+                    let m_idx_raw =
+                        u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                    // Silently skip prelude methods we don't have a
+                    // runtime helper for yet. Calls into them
+                    // surface as `UnknownMethod` at lowering time
+                    // (which is a clearer user-facing error than
+                    // failing the whole module-compile because the
+                    // prelude declares more methods than we
+                    // implement). As helpers land, each prelude
+                    // method's `prelude_helper_index` arm activates
+                    // it.
+                    if let Some(helper_idx) = prelude_helper_index(p, &m.name, str_len_idx) {
+                        method_map.insert((ImplId(impl_id_raw), MethodIdx(m_idx_raw)), helper_idx);
+                    }
+                }
+            }
             continue;
         }
-        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
         for (j, _) in imp.functions.iter().enumerate() {
             let m_idx_raw = u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
             let wasm_idx = methods_offset
