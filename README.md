@@ -321,7 +321,7 @@ New pass at `src/ir/closure_conv.rs`. Runs *after* `MonomorphisePass`, *before* 
 #### Phase 5+
 
 - ✅ `wasm-opt` post-pass behind the `wasm-opt` cargo feature (shipped). Off by default; on enables a binaryen post-pass over the emitted core module before component wrapping.
-- ✅ String built-in methods. Upstream's prelude.fv ships `extern impl String { fn len, fn is_empty, fn slice, fn starts_with, fn contains, fn byte_at }`; backend wires each to a runtime helper through `prelude_helper_index`. Currently `String::len` is implemented; other helpers ride the same path as they land.
+- ✅ String built-in methods. Upstream's prelude.fv ships `extern impl String { fn len, fn is_empty, fn slice, fn starts_with, fn contains, fn byte_at }`; backend wires all six to runtime helpers through `prelude_helper_index`. `slice` is zero-copy, `byte_at` traps on out-of-range, `contains` runs a naive O(n·m) search.
 - ✅ Default parameter values. Upstream's IR-lowering substitutes default expressions at every call site that omits them; backend sees a regular full-arity args list and needs no defaults awareness.
 - ✅ Cross-module type references. Upstream's MonomorphisePass inlines imported items into the entry-point IrModule and rewrites every `ResolvedType::External` to a local id; backend never sees External in real programs.
 - ✅ IR source-span infrastructure (DWARF prerequisite). Upstream landed `IrSpan { span, file: FileId }` on every IR node + an `IrModule.file_table`. Backend currently ignores spans; emitting `.debug_line` / `.debug_info` sections is the next step (ungated cargo feature).

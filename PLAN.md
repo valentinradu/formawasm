@@ -284,10 +284,12 @@ initiatives per the README roadmap.
 - ✅ #2 — String built-in methods via prelude `extern impl
   String`. Upstream landed `extern impl <Primitive>` and shipped
   `prelude.fv` with `len / is_empty / slice / starts_with /
-  contains / byte_at`. Backend wires each to a runtime helper via
-  `prelude_helper_index`. Currently `String::len` is implemented
-  (`__str_len`); other helpers ride the same path as they land.
-  End-to-end coverage in `tests/string_builtins.rs`.
+  contains / byte_at`. All six are wired through a
+  `PreludeHelpers` table consumed by `prelude_helper_index`;
+  `slice` is zero-copy (shares the source buffer since strings are
+  immutable), `byte_at` traps via `unreachable` on out-of-range
+  index, `contains` runs a naive O(n·m) search. End-to-end
+  coverage in `tests/string_builtins.rs`.
 - ✅ #3 — Default parameter values. Upstream's IR-lowering
   substitutes default expressions at every call site that omits
   them, so the backend sees a regular full-arity args list with
