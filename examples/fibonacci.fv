@@ -1,0 +1,10 @@
+// Recursive fibonacci. Primitive in, primitive out — works under
+// `wasmtime run --invoke` without any host wrapper.
+
+pub fn fib(n: I32) -> I32 {
+    if n < 2 {
+        n
+    } else {
+        fib(n: n - 1) + fib(n: n - 2)
+    }
+}

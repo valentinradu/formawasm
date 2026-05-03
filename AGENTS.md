@@ -9,7 +9,7 @@ production paths.
 | File | Purpose |
 |---|---|
 | `README.md` | Project spec — boundary policy, type mapping, pipeline. |
-| `PLAN.md` | What to do *next*. Read after `README.md`. |
+| `CHANGELOG.md` | Phase-by-phase history; "Roadmap" section captures what's left. |
 | `Cargo.toml` | Single source of lint levels (`[lints.*]`). |
 | `clippy.toml` | Behavioral clippy thresholds and acronym list. |
 | `deny.toml` | License + advisory gates (run via `make deny`). |

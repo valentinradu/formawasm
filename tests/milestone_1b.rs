@@ -8,11 +8,10 @@
 //!
 //! Indirect closure invocation is intentionally *not* exercised here:
 //! the language does not yet have closure-application syntax (see
-//! formalang's `closure_conv/mod.rs` and `PLAN.md`'s known
-//! restrictions). The Phase 1b mc11 lowering still materialises a
-//! closure value as a `(funcref, env_ptr)` pair in linear memory; that
-//! piece is covered by `tests/lower_closure_ref.rs` independently of
-//! this milestone.
+//! formalang's `closure_conv/mod.rs`). The Phase 1b mc11 lowering
+//! still materialises a closure value as a `(funcref, env_ptr)` pair
+//! in linear memory; that piece is covered by
+//! `tests/lower_closure_ref.rs` independently of this milestone.
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,

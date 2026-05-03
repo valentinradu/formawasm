@@ -1,6 +1,6 @@
 # Using the Library
 
-`formawasm` exposes a single backend type — `WasmBackend` — that implements formalang's `Backend` trait. The same backend is what `formawasm-cli` drives internally; using it from your own crate gives you control over which IR passes run, how diagnostics are reported, and where the bytes go.
+`formawasm` exposes a single backend type — `WasmBackend` — that implements formalang's `Backend` trait. The same backend is what `formawasm CLI` drives internally; using it from your own crate gives you control over which IR passes run, how diagnostics are reported, and where the bytes go.
 
 ## Add the dependency
 

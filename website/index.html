@@ -65,20 +65,24 @@
 
         <!-- Quick example: CLI -->
         <section class="max-w-3xl mx-auto px-6 pb-16">
-            <h2 class="text-xl font-semibold text-cyan mb-4 text-center">From source to component in one command</h2>
+            <h2 class="text-xl font-semibold text-cyan mb-4 text-center">From source to component to run, no Rust needed</h2>
             <div class="code-card">
-                <pre class="text-sm leading-relaxed"><span class="text-comment"># Write a FormaLang source file…</span>
+                <pre class="text-sm leading-relaxed"><span class="text-comment"># Install the CLI…</span>
+cargo install --git https://github.com/valentinradu/formawasm formawasm
+
+<span class="text-comment"># …write a FormaLang source file…</span>
 echo <span class="text-green">'pub fn id(x: I32) -> I32 { x }'</span> &gt; id.fv
 
-<span class="text-comment"># …and compile it.</span>
-formawasm-cli id.fv
+<span class="text-comment"># …compile it…</span>
+formawasm id.fv
 <span class="text-comment"># wrote id.wasm (… bytes) from id.fv</span>
 
-<span class="text-comment"># Inspect the auto-generated WIT.</span>
-wasm-tools component wit id.wasm</pre>
+<span class="text-comment"># …and run it under wasmtime.</span>
+wasmtime run --invoke <span class="text-green">'id(42)'</span> id.wasm
+<span class="text-comment"># 42</span></pre>
             </div>
             <div class="code-card mt-4">
-                <pre class="text-sm leading-relaxed"><span class="text-comment">// id.wasm — WIT view</span>
+                <pre class="text-sm leading-relaxed"><span class="text-comment">// id.wasm — auto-generated WIT view</span>
 <span class="text-magenta">package</span> formawasm:generated;
 
 <span class="text-magenta">world</span> <span class="text-blue">component</span> {
@@ -180,7 +184,7 @@ formawasm = { <span class="text-magenta">git</span> = <span class="text-green">"
                 <div class="rounded-lg border border-bgHighlight bg-bgDark p-6">
                     <h3 class="text-base font-semibold text-magenta mb-2">Drop-in CLI</h3>
                     <p class="text-fgDark text-sm">
-                        <code class="text-orange">formawasm-cli</code> ships
+                        <code class="text-orange">formawasm</code> ships
                         as a tiny single-file source-to-component driver —
                         useful for smoke tests, quick experimentation, or as
                         a build-pipeline step where wiring the Rust API isn't

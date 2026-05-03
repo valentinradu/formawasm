@@ -18,11 +18,17 @@ The boundary between a component and its host is described in **WIT** — the sm
 
 ## Quickstart
 
-Compile a `.fv` source file with the bundled CLI:
+Install the CLI:
+
+```bash
+cargo install --git https://github.com/valentinradu/formawasm formawasm
+```
+
+Compile a `.fv` source file:
 
 ```bash
 echo 'pub fn id(x: I32) -> I32 { x }' > id.fv
-cargo run --release --bin formawasm-cli -- id.fv
+formawasm id.fv
 # wrote id.wasm (… bytes) from id.fv
 ```
 
@@ -40,7 +46,14 @@ world component {
 }
 ```
 
-Run the component under [`wasmtime`](https://docs.rs/wasmtime):
+Run it directly with the [wasmtime](https://wasmtime.dev) CLI — no host code required:
+
+```bash
+wasmtime run --invoke 'id(42)' id.wasm
+# 42
+```
+
+Or wire it into your Rust application:
 
 ```rust
 use wasmtime::{Config, Engine, Store};
@@ -99,7 +112,7 @@ Highlights:
 
 Phases 1 through 5 are closed. The backend produces a Component-Model artifact for every milestone — recursive functions (`fib`), structs + enums + methods (`Counter` / `Action`), arrays + ranges + for-loops (sieve of Eratosthenes), strings + optionals + dictionaries (`greet`), virtual dispatch (`Greet` trait across two impls), and host-provided externs (`call_host(21) → 42` via `host_double`).
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the phase-by-phase history and [`PLAN.md`](PLAN.md) for the per-microcommit forward planning view.
+See [`CHANGELOG.md`](CHANGELOG.md) for the phase-by-phase history; the "Roadmap" section at the top captures what's left.
 
 ---
 

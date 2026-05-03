@@ -1,8 +1,8 @@
-//! Integration test for the `formawasm-cli` binary.
+//! Integration test for the `formawasm` CLI binary.
 //!
 //! Writes a minimal `.fv` source file to a unique temp dir, spawns
 //! the CLI binary at the path Cargo records via
-//! `CARGO_BIN_EXE_formawasm-cli`, and confirms it produces valid
+//! `CARGO_BIN_EXE_formawasm`, and confirms it produces valid
 //! component-model bytes. Locks in that the binary actually runs
 //! against a real source file (rather than just compiling).
 
@@ -46,7 +46,7 @@ fn cli_compiles_a_minimal_source_file_to_a_valid_component() -> TestResult {
     let output = dir.join("id.wasm");
     std::fs::write(&input, FV_SOURCE)?;
 
-    let bin = env!("CARGO_BIN_EXE_formawasm-cli");
+    let bin = env!("CARGO_BIN_EXE_formawasm");
     let status = Command::new(bin)
         .arg(&input)
         .arg("-o")
@@ -73,7 +73,7 @@ fn cli_derives_output_path_from_input_when_no_o_flag_passes() -> TestResult {
     let derived_output = dir.join("derived.wasm");
     std::fs::write(&input, FV_SOURCE)?;
 
-    let bin = env!("CARGO_BIN_EXE_formawasm-cli");
+    let bin = env!("CARGO_BIN_EXE_formawasm");
     let status = Command::new(bin).arg(&input).status()?;
     if !status.success() {
         return Err(format!("cli exited non-zero: {status:?}").into());
@@ -93,7 +93,7 @@ fn cli_derives_output_path_from_input_when_no_o_flag_passes() -> TestResult {
 
 #[test]
 fn cli_exits_non_zero_on_missing_input() -> TestResult {
-    let bin = env!("CARGO_BIN_EXE_formawasm-cli");
+    let bin = env!("CARGO_BIN_EXE_formawasm");
     let status = Command::new(bin).status()?;
     if status.success() {
         return Err("expected non-zero exit when no input is supplied".into());

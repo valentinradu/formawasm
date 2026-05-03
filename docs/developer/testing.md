@@ -9,7 +9,7 @@ Tests live under `tests/`, one file per concern:
 ```text
 tests/
     backend_smoke.rs       # WasmBackend::generate end-to-end
-    cli.rs                 # formawasm-cli integration tests
+    cli.rs                 # formawasm CLI integration tests
     layout_*.rs            # one per layout family
     lower_*.rs             # one per IR variant family
     milestone_*.rs         # per-phase end-to-end milestones

@@ -10,7 +10,7 @@
 //! without writing a Rust harness. Usage:
 //!
 //! ```text
-//! formawasm-cli <input.fv> [-o <output.wasm>]
+//! formawasm <input.fv> [-o <output.wasm>]
 //! ```
 //!
 //! If `-o` is omitted the output filename is the input with `.fv`
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
                 &argv
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| "formawasm-cli".to_owned()),
+                    .unwrap_or_else(|| "formawasm".to_owned()),
             );
             return ExitCode::from(2);
         }

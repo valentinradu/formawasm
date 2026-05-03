@@ -95,4 +95,4 @@ The phases referenced above correspond to the project's milestone tests. Each mi
 | 3 | `tests/milestone_3.rs` | Trait `Greet` dispatches across two impls |
 | 4 | `tests/milestone_4.rs` | Host-provided `host_double` extern called from `call_host` |
 
-The full per-microcommit history is in `CHANGELOG.md` and `PLAN.md`.
+The full phase-by-phase history is in `CHANGELOG.md`.

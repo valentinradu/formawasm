@@ -8,8 +8,7 @@ Brief operational guide for working on formawasm. Strict clippy, typed errors, t
 |---|---|
 | `README.md` | Project pitch — short, user-facing. |
 | `book.toml` + `docs/` | This book. Built with `mdbook build`. |
-| `PLAN.md` | What to do *next*. Per-microcommit forward planning. |
-| `CHANGELOG.md` | Phase-by-phase history. |
+| `CHANGELOG.md` | Phase-by-phase history. The "Roadmap" section captures what's left. |
 | `Cargo.toml` | Single source of lint levels (`[lints.*]`). |
 | `clippy.toml` | Behavioral clippy thresholds and acronym list. |
 | `deny.toml` | License + advisory gates (run via `make deny`). |

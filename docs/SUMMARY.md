@@ -5,6 +5,7 @@
 # User Guide
 
 - [Quickstart](user/quickstart.md)
+- [Examples](user/examples.md)
 - [Using the Library](user/library.md)
 - [Hosting a Component](user/hosting.md)
 - [Boundary Policy](user/boundary.md)

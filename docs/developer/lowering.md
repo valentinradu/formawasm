@@ -10,7 +10,7 @@ The decision to keep all aggregates on the heap (rather than splitting small one
 
 ### Linear-memory layout
 
-Every formawasm-emitted module has one linear memory and a `__heap_ptr` global pointing at the next free byte. The bump allocator (`__alloc(size: i32) -> i32`) returns the current `__heap_ptr` and advances it; there's no free list and no reclamation. Components that need GC bring their own — see Phase 5+ in `PLAN.md`.
+Every formawasm-emitted module has one linear memory and a `__heap_ptr` global pointing at the next free byte. The bump allocator (`__alloc(size: i32) -> i32`) returns the current `__heap_ptr` and advances it; there's no free list and no reclamation. Components that need GC bring their own — see the "Roadmap" section in `CHANGELOG.md`.
 
 The static-data segment occupies the leading region of linear memory:
 

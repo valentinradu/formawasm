@@ -1,6 +1,6 @@
 # Quickstart
 
-The fastest path from a formalang source file to a runnable WebAssembly component is the bundled `formawasm-cli` binary.
+The fastest path from a formalang source file to a runnable WebAssembly component is the bundled `formawasm` binary.
 
 ## Compile a source file
 
@@ -13,15 +13,15 @@ pub fn id(x: I32) -> I32 { x }
 Build the CLI and run it:
 
 ```bash
-cargo build --release --bin formawasm-cli
-./target/release/formawasm-cli id.fv
+cargo build --release --bin formawasm
+./target/release/formawasm id.fv
 # wrote id.wasm (… bytes) from id.fv
 ```
 
 By default the output filename is the input with `.fv` swapped for `.wasm`. Use `-o <path>` to override:
 
 ```bash
-formawasm-cli id.fv -o build/id.component.wasm
+formawasm id.fv -o build/id.component.wasm
 ```
 
 If the formalang frontend rejects the source, the diagnostic is printed in the upstream's standard format and the CLI exits non-zero. Backend errors print their typed `Display` form and also exit non-zero.
@@ -52,6 +52,6 @@ formawasm doesn't ship a runtime. The standard host-side library is [`wasmtime`]
 
 ## What's next
 
-- Embed the backend directly in your build instead of shelling out to `formawasm-cli` → [Using the Library](library.md).
+- Embed the backend directly in your build instead of shelling out to `formawasm` → [Using the Library](library.md).
 - Understand exactly which formalang types and constructs the backend supports → [Feature Coverage](features.md).
 - See the rules that govern what can cross the WIT boundary → [Boundary Policy](boundary.md).

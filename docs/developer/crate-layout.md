@@ -30,7 +30,7 @@ src/
         reference.rs    # Reference, LetRef, SelfFieldRef
         unary_op.rs     # Neg, Not
     bin/
-        formawasm-cli.rs  # source.fv → output.wasm CLI driver
+        formawasm.rs      # source.fv → output.wasm CLI driver
 
 docs/                   # this book (mdBook source)
 tests/                  # one file per IR construct + per phase milestone

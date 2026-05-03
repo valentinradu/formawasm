@@ -3,7 +3,16 @@
 All user-visible changes to formawasm, grouped by phase. The
 project is pre-1.0 and breaks API freely; the format here is
 informational rather than semver-tracked. See `git log` for the
-microcommit-level history and `PLAN.md` for the planning view.
+microcommit-level history.
+
+## Roadmap
+
+The only Phase 5+ item still outstanding is the DWARF section
+emitter behind the `dwarf` cargo feature: the IR-side `IrSpan`
+plumbing and the feature-gated module skeleton are wired, but
+`.debug_info` / `.debug_abbrev` / `.debug_line` / `.debug_str`
+content emission is a tick-box. Garbage collection over the bump
+allocator and async support stay deferred as separate initiatives.
 
 ## [Unreleased]
 
@@ -31,7 +40,7 @@ microcommit-level history and `PLAN.md` for the planning view.
 - Wasm `name` custom section emission: function (and import) names
   ship in the artifact so debug tooling resolves `func[N]` back to
   the source identifier.
-- `formawasm-cli` binary at `src/bin/formawasm-cli.rs` — single-
+- `formawasm` binary at `src/bin/formawasm.rs` — single-
   file source-to-component driver. Reads a `.fv` file, runs the
   standard codegen pipeline, writes a `.wasm` component.
 - Diagnostics: `External` rejection now embeds a path to the
@@ -53,8 +62,7 @@ microcommit-level history and `PLAN.md` for the planning view.
   tests (`tests/cli.rs`).
 - Doc refresh: module-level rustdoc on `backend.rs`, `layout.rs`,
   `types.rs`, `wit.rs` brought in line with current state. README
-  / PLAN status blocks reflect Phases 1-4 closed and Phase 5
-  partial.
+  status blocks reflect Phases 1-4 closed and Phase 5 partial.
 
 ### Upstream-blocked items (design notes pushed)
 

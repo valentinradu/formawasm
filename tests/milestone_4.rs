@@ -12,7 +12,7 @@
 //! The cross-module `ResolvedType::External` lowering is not
 //! exercised here — the language has no `use`-syntax driver
 //! reaching the backend yet, so that path stays a known restriction
-//! (see PLAN.md) until a real consumer needs it.
+//! until a real consumer needs it.
 
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType};
 use formalang::ir::{

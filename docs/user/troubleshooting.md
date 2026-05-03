@@ -12,7 +12,7 @@ A bare `IrExpr::Closure` survived into the backend.
 
 **Cause**: the codegen pipeline didn't run `ClosureConversionPass` before invoking the backend. The pass lifts every closure to a top-level function plus a synthetic env struct, leaving only `IrExpr::ClosureRef` for the backend to consume.
 
-**Fix**: ensure your `Pipeline` includes `ClosureConversionPass` between `MonomorphisePass` and `DeadCodeEliminationPass`. The `formawasm-cli` binary wires the canonical sequence; if you're driving the backend directly, mirror it.
+**Fix**: ensure your `Pipeline` includes `ClosureConversionPass` between `MonomorphisePass` and `DeadCodeEliminationPass`. The `formawasm CLI` binary wires the canonical sequence; if you're driving the backend directly, mirror it.
 
 ### `PreflightError::PublicClosureSignature`
 
