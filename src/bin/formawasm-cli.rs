@@ -116,7 +116,8 @@ fn run(args: &Args) -> Result<(), String> {
     );
     let module = compile_to_ir_with_resolver(&source, resolver).map_err(|errors| {
         let label = args.input.display().to_string();
-        let _ = report_errors(&errors, &source, &label);
+        let report = report_errors(&errors, &source, &label);
+        eprintln!("{report}");
         format!("{} compile errors", errors.len())
     })?;
 
