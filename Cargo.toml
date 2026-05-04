@@ -1,21 +1,40 @@
 [package]
 name         = "formawasm"
-description  = "Backend that compiles a typed IR into a WebAssembly component."
-version      = "0.1.0"
+description  = "Backend that compiles a typed FormaLang IR module into a WebAssembly component."
+version      = "0.0.1-beta"
 edition      = "2024"
 rust-version = "1.93"
 authors      = ["Valentin Radu and formawasm contributors"]
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/valentinradu/formawasm"
+homepage     = "https://wasm.formalang.org"
+documentation = "https://docs.rs/formawasm"
 readme       = "README.md"
-keywords     = ["compiler", "webassembly", "wasm", "component-model"]
+keywords     = ["compiler", "webassembly", "wasm", "component-model", "wit"]
 categories   = ["compilers", "wasm"]
-publish      = false
+# Whitelist what ships to crates.io. The mdBook source, marketing
+# site, examples, agent / CI config, and design notes stay out of
+# the registry tarball so consumers download only the source they
+# need to build the library and CLI.
+include = [
+    "/src/**/*",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+    "/CHANGELOG.md",
+]
+
+# docs.rs builds with no features by default, which would hide the
+# optional `wasm-opt` and `dwarf` rustdoc surfaces. Build with all
+# features enabled and pass `--cfg docsrs` so feature-gated items
+# render with the right "available on …" badges.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-# Path dependency during dev — flips to a version constraint once the
-# upstream IR shape stabilises on crates.io.
-formalang = { path = "../formalang" }
+formalang = "0.0.3-beta"
 thiserror = "2"
 
 # Lightweight observability. `tracing` itself is a thin facade —

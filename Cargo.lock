@@ -636,7 +636,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "formalang"
-version = "0.0.2-beta"
+version = "0.0.3-beta"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37e2c25ae9aefa608739a4536290482b52f775ceeed82eb50e65a237ca8fbd36"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -649,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "formawasm"
-version = "0.1.0"
+version = "0.0.1-beta"
 dependencies = [
  "formalang",
  "gimli 0.32.3",
