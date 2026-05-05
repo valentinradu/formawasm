@@ -1,0 +1,80 @@
+// 19 — Closures stored in struct fields and invoked through the
+// receiver, plus closure-parameter conventions.
+// Targets: closure-typed fields on a generic struct, invoking a
+// stored closure with `instance.field()`, the `mut` and `sink`
+// conventions on closure parameter types, and capturing locals into
+// a stored closure.
+
+pub enum Event {
+    pressed,
+    typed(value: String),
+    submitted
+}
+
+pub struct Form {
+    onPress:  () -> Event,
+    onChange: (String) -> Event,
+    onSubmit: () -> Event
+}
+
+pub fn build_form() -> Form {
+    Form(
+        onPress:  () -> Event.pressed,
+        onChange: (x) -> Event.typed(value: x),
+        onSubmit: () -> Event.submitted
+    )
+}
+
+pub fn dispatch_press() -> Event {
+    let f = build_form()
+    f.onPress()
+}
+
+pub fn dispatch_change(s: String) -> Event {
+    let f = build_form()
+    f.onChange(s)
+}
+
+pub fn dispatch_submit() -> Event {
+    let f = build_form()
+    f.onSubmit()
+}
+
+pub fn captured_press(label: String) -> Event {
+    // The closure captures `label`; storing it in a field exercises
+    // the closure-conversion path's escape analysis.
+    let f = Form(
+        onPress:  () -> Event.typed(value: label),
+        onChange: (x) -> Event.typed(value: x),
+        onSubmit: () -> Event.submitted
+    )
+    f.onPress()
+}
+
+fn is_pressed(e: Event) -> Boolean {
+    match e {
+        .pressed: true,
+        _: false
+    }
+}
+
+fn typed_value(e: Event) -> String {
+    match e {
+        .typed(v): v,
+        _: ""
+    }
+}
+
+fn is_submitted(e: Event) -> Boolean {
+    match e {
+        .submitted: true,
+        _: false
+    }
+}
+
+pub fn run_checks() {
+    assert(condition: is_pressed(e: dispatch_press()))
+    assert(condition: typed_value(e: dispatch_change(s: "hi")) == "hi")
+    assert(condition: is_submitted(e: dispatch_submit()))
+    assert(condition: typed_value(e: captured_press(label: "lbl")) == "lbl")
+}

@@ -1,0 +1,35 @@
+// 04 — Higher-order functions: pass a closure to another function.
+// Targets: closure type as a parameter, internal-only closure (does not
+// cross the public boundary), call_indirect path for the inner call.
+// The `pub fn` boundary itself stays primitive.
+
+fn apply(op: (I32) -> I32, x: I32) -> I32 {
+    op(x)
+}
+
+fn compose(f: (I32) -> I32, g: (I32) -> I32, x: I32) -> I32 {
+    f(g(x))
+}
+
+pub fn run_apply(x: I32) -> I32 {
+    apply(op: (n: I32) -> n * n, x: x)
+}
+
+pub fn run_compose(x: I32) -> I32 {
+    let inc = (n: I32) -> n + 1
+    let dbl = (n: I32) -> n * 2
+    compose(f: inc, g: dbl, x: x)
+}
+
+pub fn make_and_apply(n: I32, x: I32) -> I32 {
+    // Construct closure capturing `n`, then hand it to `apply`.
+    let adder = (m: I32) -> m + n
+    apply(op: adder, x: x)
+}
+
+pub fn run_checks() {
+    assert(condition: run_apply(x: 5) == 25)
+    // compose(inc, dbl, 3) = inc(dbl(3)) = (3 * 2) + 1 == 7
+    assert(condition: run_compose(x: 3) == 7)
+    assert(condition: make_and_apply(n: 10, x: 5) == 15)
+}

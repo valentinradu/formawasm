@@ -1,0 +1,82 @@
+// 20 — Match patterns: wildcard arm, multi-binding payload variants,
+// nested matches, and chained dispatch through an enum payload.
+// Targets: `_` arm covering remaining variants, payload variants with
+// 0/1/2+ bindings, match nested inside another match arm, and using
+// the result of a match in arithmetic.
+
+pub enum Shape {
+    point,
+    circle(radius: I32),
+    rectangle(width: I32, height: I32),
+    polygon(sides: I32, side_length: I32)
+}
+
+pub fn area(s: Shape) -> I32 {
+    match s {
+        .point: 0,
+        .circle(r): r * r * 3,
+        .rectangle(w, h): w * h,
+        .polygon(n, l): n * l * l
+    }
+}
+
+pub enum Status {
+    pending,
+    active,
+    retired,
+    archived
+}
+
+pub fn priority(s: Status) -> I32 {
+    match s {
+        .pending: 1,
+        .active: 2,
+        _: 0
+    }
+}
+
+pub fn nested(s: Shape, st: Status) -> I32 {
+    let base = area(s: s)
+    match st {
+        .active: base * 2,
+        .pending: base + 1,
+        _: base
+    }
+}
+
+pub enum Tree {
+    leaf(value: I32),
+    branch(left: I32, right: I32)
+}
+
+pub fn tree_sum(t: Tree) -> I32 {
+    match t {
+        .leaf(v): v,
+        .branch(l, r): l + r
+    }
+}
+
+pub fn run_checks() {
+    assert(condition: area(s: Shape.point) == 0)
+    // 4 * 4 * 3 == 48
+    assert(condition: area(s: Shape.circle(radius: 4)) == 48)
+    // 5 * 6 == 30
+    assert(condition: area(s: Shape.rectangle(width: 5, height: 6)) == 30)
+    // 6 * 2 * 2 == 24
+    assert(condition: area(s: Shape.polygon(sides: 6, side_length: 2)) == 24)
+
+    assert(condition: priority(s: Status.pending) == 1)
+    assert(condition: priority(s: Status.active) == 2)
+    // wildcard arm
+    assert(condition: priority(s: Status.archived) == 0)
+
+    // nested: rectangle area 20, status active -> doubled.
+    assert(
+        condition: nested(s: Shape.rectangle(width: 4, height: 5), st: Status.active)
+            == 40
+    )
+    assert(condition: nested(s: Shape.point, st: Status.pending) == 1)
+
+    assert(condition: tree_sum(t: Tree.leaf(value: 7)) == 7)
+    assert(condition: tree_sum(t: Tree.branch(left: 3, right: 4)) == 7)
+}

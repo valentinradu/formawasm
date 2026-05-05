@@ -51,14 +51,10 @@ pub fn lower_literal(
         ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => {
             return Err(LowerError::LiteralTypeMismatch {
@@ -211,7 +207,8 @@ fn lower_nil(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    if !matches!(ty, ResolvedType::Optional(_)) {
+    let module = ctx.module()?;
+    if crate::compound::optional_inner(ty, module).is_none() {
         return Err(LowerError::LiteralTypeMismatch {
             kind: "Nil".to_owned(),
             ty: ty.clone(),

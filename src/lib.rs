@@ -6,6 +6,7 @@
 //! dependency to use the backend.
 
 mod backend;
+pub(crate) mod compound;
 pub mod component;
 #[cfg(feature = "dwarf")]
 pub mod dwarf;

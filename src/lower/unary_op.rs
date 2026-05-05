@@ -30,14 +30,10 @@ pub fn lower_unary_op(
         ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => {
             return Err(LowerError::NotYetImplemented {

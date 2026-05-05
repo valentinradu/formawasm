@@ -97,18 +97,13 @@ pub fn resolved_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMap
         ResolvedType::Enum(_) => Err(TypeMapError::NotYetSupported {
             kind: "Enum".to_owned(),
         }),
-        ResolvedType::Array(_) => Err(TypeMapError::NotYetSupported {
-            kind: "Array<T>".to_owned(),
-        }),
-        ResolvedType::Range(_) => Err(TypeMapError::NotYetSupported {
-            kind: "Range<T>".to_owned(),
-        }),
-        ResolvedType::Optional(_) => Err(TypeMapError::NotYetSupported {
-            kind: "Optional<T>".to_owned(),
-        }),
         ResolvedType::Tuple(_) => Err(TypeMapError::NotYetSupported {
             kind: "Tuple".to_owned(),
         }),
+        // Generic { .. } at the WIT boundary is rejected here; the
+        // WIT emitter (`wit::resolved_wit_type`) handles
+        // Optional/Array/Range/Dictionary by inspecting the prelude
+        // base IDs, so this strict path doesn't need to disambiguate.
         ResolvedType::Generic { .. } => Err(TypeMapError::NotYetSupported {
             kind: "Generic".to_owned(),
         }),
@@ -119,9 +114,6 @@ pub fn resolved_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMap
             kind: format!(
                 "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
             ),
-        }),
-        ResolvedType::Dictionary { .. } => Err(TypeMapError::NotYetSupported {
-            kind: "Dictionary<K, V>".to_owned(),
         }),
         ResolvedType::Closure { .. } => Err(TypeMapError::NotYetSupported {
             kind: "Closure".to_owned(),
@@ -188,19 +180,19 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
     // `NotYetImplemented` until each lands.
     match ty {
         ResolvedType::Primitive(p) => primitive_value_type(*p),
+        // Every aggregate lowers as an `i32` heap pointer. After the
+        // 0.0.4-beta API change, the four prelude compounds
+        // (Optional / Array / Range / Dictionary) live under the
+        // `Generic` arm — they're still aggregates, so the same
+        // pointer mapping applies. The WIT-side emitter
+        // disambiguates via prelude IDs when it needs to.
         ResolvedType::Struct(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
-        | ResolvedType::Dictionary { .. }
+        | ResolvedType::Generic { .. }
         | ResolvedType::Closure { .. } => Ok(Some(ValType::I32)),
         ResolvedType::Trait(_) => Err(TypeMapError::NotYetSupported {
             kind: "Trait".to_owned(),
-        }),
-        ResolvedType::Generic { .. } => Err(TypeMapError::NotYetSupported {
-            kind: "Generic".to_owned(),
         }),
         ResolvedType::TypeParam(name) => Err(TypeMapError::NotYetSupported {
             kind: format!("TypeParam({name})"),

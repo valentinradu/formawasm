@@ -81,15 +81,16 @@ pub(super) fn store_aggregate_field(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
+    let module = ctx.module()?;
+    if matches!(crate::compound::Compound::of(field_ty, module), crate::compound::Compound::Optional(_)) {
+        super::optional::lower_coerced(value_expr, field_ty, sink, ctx)?;
+        sink.i32_store(field_mem_arg(field_layout));
+        return Ok(());
+    }
     match field_ty {
         ResolvedType::Primitive(p) => {
             super::optional::lower_coerced(value_expr, field_ty, sink, ctx)?;
             store_primitive(*p, field_layout, sink);
-            Ok(())
-        }
-        ResolvedType::Optional(_) => {
-            super::optional::lower_coerced(value_expr, field_ty, sink, ctx)?;
-            sink.i32_store(field_mem_arg(field_layout));
             Ok(())
         }
         // Other aggregate / non-storable field types stay rejected
@@ -98,9 +99,6 @@ pub(super) fn store_aggregate_field(
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)
         | ResolvedType::Generic { .. }
@@ -469,14 +467,12 @@ pub fn lower_array(
         });
     };
 
-    let ResolvedType::Array(elem_box) = ty else {
-        return Err(LowerError::NotYetImplemented {
-            what: format!("Array literal carrying non-Array type {ty:?}"),
-        });
-    };
-    let elem_ty = elem_box.as_ref();
-
     let module = ctx.module()?;
+    let elem_ty = crate::compound::array_elem(ty, module).ok_or_else(|| {
+        LowerError::NotYetImplemented {
+            what: format!("Array literal carrying non-Array type {ty:?}"),
+        }
+    })?;
     let layout = plan_array(elem_ty, module)?;
 
     let len_u32 = u32::try_from(elements.len()).map_err(|_| LowerError::NotYetImplemented {
@@ -590,6 +586,11 @@ fn store_array_element(
         size: layout.element_size,
         align: layout.element_align,
     };
+    // After 0.0.4-beta, `Array<T>` and `Optional<T>` both flow
+    // through `Generic { .. }`. `plan_array` already rejects element
+    // types that can't lower as i32 pointers, so the dispatch here
+    // is correct for any aggregate (struct / enum / tuple /
+    // generic) — they all collapse to a single `i32_store`.
     match elem_ty {
         ResolvedType::Primitive(p) => {
             store_primitive(*p, field_layout, sink);
@@ -598,18 +599,12 @@ fn store_array_element(
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Optional(_) => {
+        | ResolvedType::Generic { .. } => {
             sink.i32_store(field_mem_arg(field_layout));
             Ok(())
         }
-        // `plan_array` rejects every other element type, so this arm
-        // is defensive only.
-        ResolvedType::Range(_)
-        | ResolvedType::Dictionary { .. }
-        | ResolvedType::Closure { .. }
+        ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)
-        | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
         | ResolvedType::Error => Err(LowerError::NotYetImplemented {
@@ -634,12 +629,12 @@ pub fn lower_dict_literal(
             what: "lower_dict_literal called with non-DictLiteral expression".to_owned(),
         });
     };
-    let ResolvedType::Dictionary { key_ty, value_ty } = ty else {
-        return Err(LowerError::NotYetImplemented {
-            what: format!("DictLiteral carrying non-Dictionary type {ty:?}"),
-        });
-    };
     let module = ctx.module()?;
+    let (key_ty, value_ty) = crate::compound::dictionary_kv(ty, module).ok_or_else(|| {
+        LowerError::NotYetImplemented {
+            what: format!("DictLiteral carrying non-Dictionary type {ty:?}"),
+        }
+    })?;
     let pair_struct = dict_pair_struct(key_ty, value_ty);
     let pair_layout = plan_struct(&pair_struct, module)?;
     let key_field_layout =
@@ -744,17 +739,18 @@ pub fn lower_dict_access(
     };
 
     let coll_ty = dict.ty();
+    let module = ctx.module()?;
+    if let Some(elem_ty) = crate::compound::array_elem(coll_ty, module) {
+        return lower_array_index(dict, key, elem_ty, sink, ctx);
+    }
+    if let Some((key_ty, value_ty)) = crate::compound::dictionary_kv(coll_ty, module) {
+        return lower_dict_lookup(dict, key, key_ty, value_ty, sink, ctx);
+    }
     match coll_ty {
-        ResolvedType::Array(elem_box) => lower_array_index(dict, key, elem_box.as_ref(), sink, ctx),
-        ResolvedType::Dictionary { key_ty, value_ty } => {
-            lower_dict_lookup(dict, key, key_ty.as_ref(), value_ty.as_ref(), sink, ctx)
-        }
         ResolvedType::Primitive(_)
         | ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
@@ -1017,21 +1013,18 @@ fn load_array_element(
             load_primitive(*p, field_layout, sink);
             Ok(())
         }
+        // After 0.0.4-beta, the four prelude compounds collapse into
+        // `Generic { .. }`. Every aggregate element loads as an i32
+        // pointer.
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_) => {
+        | ResolvedType::Generic { .. } => {
             sink.i32_load(field_mem_arg(field_layout));
             Ok(())
         }
-        // `plan_array` rejects every other element type, so this arm
-        // is defensive only.
-        ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
-        | ResolvedType::Dictionary { .. }
-        | ResolvedType::Closure { .. }
+        ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)
-        | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
         | ResolvedType::Error => Err(LowerError::NotYetImplemented {
@@ -1211,13 +1204,9 @@ pub(super) fn layout_for_aggregate(
         ResolvedType::Primitive(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => Err(LowerError::FieldAccessOnNonAggregate { ty: ty.clone() }),
     }
@@ -1289,13 +1278,9 @@ fn type_tag(ty: &ResolvedType) -> String {
         ResolvedType::Primitive(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => "<non-aggregate>".to_owned(),
     }
@@ -1334,14 +1319,10 @@ pub(super) fn primitive_of(ty: &ResolvedType) -> Result<PrimitiveType, LowerErro
         ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => Err(LowerError::FieldAccessOnNonAggregate { ty: ty.clone() }),
     }

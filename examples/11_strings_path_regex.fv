@@ -1,0 +1,65 @@
+// 11 — String, Path, Regex primitives.
+// Targets: String concatenation (+), equality (==), prelude methods
+// (.len, .is_empty, .slice, .starts_with, .contains, byte_at via
+// `s[i]`), and the Path / Regex literal syntaxes.
+
+pub fn greet_len(role: I32) -> I32 {
+    let role_name: String = if role == 0 {
+        "admin"
+    } else {
+        if role == 1 {
+            "guest"
+        } else {
+            "anonymous"
+        }
+    }
+    let greeting: String = "hello, " + role_name
+    greeting.len()
+}
+
+pub fn is_admin(role: String) -> Boolean {
+    role == "admin"
+}
+
+pub fn label_is_empty(s: String) -> Boolean {
+    s.is_empty()
+}
+
+pub fn first_char(s: String) -> I32 {
+    s[0]
+}
+
+pub fn slice_two(s: String) -> String {
+    s.slice(start: 0, end: 2)
+}
+
+pub fn starts_with_h(s: String) -> Boolean {
+    s.starts_with(prefix: "h")
+}
+
+pub fn contains_at(s: String) -> Boolean {
+    s.contains(needle: "@")
+}
+
+pub fn logo_path() -> Path {
+    /assets/logo.svg
+}
+
+pub fn email_pattern() -> Regex {
+    r/[a-z]+@example.com/i
+}
+
+pub fn run_checks() {
+    // "hello, admin" == 12 chars.
+    assert(condition: greet_len(role: 0) == 12)
+    assert(condition: is_admin(role: "admin"))
+    assert(condition: !is_admin(role: "guest"))
+    assert(condition: label_is_empty(s: ""))
+    assert(condition: !label_is_empty(s: "x"))
+    // 'h' == 0x68
+    assert(condition: first_char(s: "hello") == 104)
+    assert(condition: slice_two(s: "hello") == "he")
+    assert(condition: starts_with_h(s: "hi"))
+    assert(condition: contains_at(s: "a@b"))
+    assert(condition: !contains_at(s: "ab"))
+}

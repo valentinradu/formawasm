@@ -1,0 +1,45 @@
+// 02 — Generics: multi-parameter Pair<A, B> + generic enum Result<T, E>.
+// Targets: per-tuple monomorphisation, generic enum variants with payloads,
+// enum dot-construction, exhaustive match on a generic-instantiated enum.
+
+pub struct Pair<A, B> {
+    first: A,
+    second: B
+}
+
+pub enum Result<T, E> {
+    ok(value: T),
+    error(err: E)
+}
+
+// Explicit type args.
+pub fn pair_sum() -> I32 {
+    let p = Pair<I32, I32>(first: 10, second: 32)
+    p.first + p.second
+}
+
+// Inference: A = String, B = I32 read off the call args. Distinct
+// monomorph from the I32/I32 case above.
+pub fn pair_mixed_first_len() -> I32 {
+    let p = Pair(first: "hello", second: 99)
+    p.first.len()
+}
+
+pub fn classify(n: I32) -> I32 {
+    let r: Result<I32, I32> = if n < 0 {
+        Result.error(err: -1)
+    } else {
+        Result.ok(value: n * 2)
+    }
+    match r {
+        .ok(v): v,
+        .error(e): e
+    }
+}
+
+pub fn run_checks() {
+    assert(condition: pair_sum() == 42)
+    assert(condition: pair_mixed_first_len() == 5)
+    assert(condition: classify(n: -3) == -1)
+    assert(condition: classify(n: 5) == 10)
+}

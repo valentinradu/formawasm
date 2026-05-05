@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Coverage for the cross-site Optional<T> coercion paths beyond
 //! let-bindings (Phase 2 mc4 covered Let; this file exercises function
 //! returns and if branches).

@@ -1,0 +1,73 @@
+// 17 — Generic functions: explicit type-args, inference, compound
+// returns, and a trait-bounded generic.
+// Targets: `fn identity<T>(x: T) -> T`, `fn first<T>(xs: [T]) -> T?`,
+// `fn pair_of<T>(...) -> Pair<T, T>`, type-arg inference at the call
+// site, and `<T: Trait>` constraint enforcement.
+
+pub struct Pair<A, B> {
+    first: A,
+    second: B
+}
+
+pub trait Tagged {
+    name: String
+}
+
+pub struct Doc {
+    name: String,
+    body: String
+}
+
+impl Tagged for Doc {}
+
+pub fn identity<T>(x: T) -> T {
+    x
+}
+
+pub fn first<T>(xs: [T]) -> T? {
+    xs[0]
+}
+
+pub fn pair_of<T>(x: T, y: T) -> Pair<T, T> {
+    Pair<T, T>(first: x, second: y)
+}
+
+pub fn name_of<T: Tagged>(item: T) -> String {
+    item.name
+}
+
+// Explicit type arg at the call site.
+pub fn run_id_explicit() -> I32 {
+    identity<I32>(x: 42)
+}
+
+// Inferred from the argument type.
+pub fn run_id_inferred() -> I32 {
+    identity(x: 7)
+}
+
+// Generic-fn inference at the call site isn't supported yet for these
+// shapes (return-position generics, multi-param pair, trait-bounded
+// receiver), so the type arg is supplied explicitly.
+pub fn run_first() -> I32? {
+    first<I32>(xs: [10, 20, 30])
+}
+
+pub fn run_pair_int() -> I32 {
+    let p = pair_of<I32>(x: 3, y: 4)
+    p.first + p.second
+}
+
+pub fn run_name_of() -> String {
+    let d = Doc(name: "spec", body: "...")
+    name_of<Doc>(item: d)
+}
+
+pub fn run_checks() {
+    assert(condition: run_id_explicit() == 42)
+    assert(condition: run_id_inferred() == 7)
+    assert(condition: run_first().is_some())
+    // 3 + 4 == 7
+    assert(condition: run_pair_int() == 7)
+    assert(condition: run_name_of() == "spec")
+}

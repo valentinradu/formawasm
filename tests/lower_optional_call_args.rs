@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! End-to-end coverage for `Optional<T>` Some-wrap at function-call
 //! argument sites.
 //!

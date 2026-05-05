@@ -2,7 +2,7 @@
 //! [`IrExpr::Match`], and [`IrExpr::For`].
 
 use formalang::ast::PrimitiveType;
-use formalang::ir::{IrExpr, IrMatchArm, ResolvedType};
+use formalang::ir::{IrExpr, IrMatchArm, IrModule, ResolvedType};
 use wasm_encoder::{BlockType, InstructionSink, MemArg, ValType};
 
 use super::aggregate::{
@@ -32,54 +32,44 @@ use crate::types::body_value_type;
 pub(super) fn for_scratch_counts(
     coll_ty: &ResolvedType,
     counts: &mut super::block::ScratchCounts,
+    module: Option<&IrModule>,
 ) -> Result<(), LowerError> {
-    match coll_ty {
-        ResolvedType::Range(bound_box) => {
-            let bound_ty = bound_box.as_ref();
-            // range pointer + out_buf + out_header + len_i32
-            for _ in 0..4 {
-                super::block::bump_count(&mut counts.i32)?;
-            }
-            // start / end / i — three slots in the bound's wasm valtype
-            let bound_field = match range_bound_valtype(bound_ty)? {
-                ValType::I32 => &mut counts.i32,
-                ValType::I64 => &mut counts.i64,
-                ValType::F32 => &mut counts.f32,
-                ValType::F64 => &mut counts.f64,
-                ValType::V128 | ValType::Ref(_) => {
-                    return Err(LowerError::NotYetImplemented {
-                        what: format!("for-loop over Range<{bound_ty:?}>"),
-                    });
-                }
-            };
-            for _ in 0..3 {
-                super::block::bump_count(bound_field)?;
-            }
-            Ok(())
+    let Some(module) = module else {
+        return Ok(());
+    };
+    if let Some(bound_ty) = crate::compound::range_bound(coll_ty, module) {
+        // range pointer + out_buf + out_header + len_i32
+        for _ in 0..4 {
+            super::block::bump_count(&mut counts.i32)?;
         }
-        ResolvedType::Array(_) => {
-            // arr + in_buf + len + out_buf + out_header + i
-            for _ in 0..6 {
-                super::block::bump_count(&mut counts.i32)?;
+        // start / end / i — three slots in the bound's wasm valtype
+        let bound_field = match range_bound_valtype(bound_ty)? {
+            ValType::I32 => &mut counts.i32,
+            ValType::I64 => &mut counts.i64,
+            ValType::F32 => &mut counts.f32,
+            ValType::F64 => &mut counts.f64,
+            ValType::V128 | ValType::Ref(_) => {
+                return Err(LowerError::NotYetImplemented {
+                    what: format!("for-loop over Range<{bound_ty:?}>"),
+                });
             }
-            Ok(())
+        };
+        for _ in 0..3 {
+            super::block::bump_count(bound_field)?;
         }
-        // Malformed For shapes get rejected by `check_for_types`
-        // during emission; reserve nothing extra here so the walk
-        // doesn't poison adjacent function-body counts.
-        ResolvedType::Primitive(_)
-        | ResolvedType::Struct(_)
-        | ResolvedType::Trait(_)
-        | ResolvedType::Enum(_)
-        | ResolvedType::Optional(_)
-        | ResolvedType::Tuple(_)
-        | ResolvedType::Generic { .. }
-        | ResolvedType::TypeParam(_)
-        | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
-        | ResolvedType::Closure { .. }
-        | ResolvedType::Error => Ok(()),
+        return Ok(());
     }
+    if crate::compound::array_elem(coll_ty, module).is_some() {
+        // arr + in_buf + len + out_buf + out_header + i
+        for _ in 0..6 {
+            super::block::bump_count(&mut counts.i32)?;
+        }
+        return Ok(());
+    }
+    // Malformed For shapes get rejected by `check_for_types`
+    // during emission; reserve nothing extra here so the walk
+    // doesn't poison adjacent function-body counts.
+    Ok(())
 }
 
 /// Wasm value type used for one bound of a `Range<T>` and for the
@@ -103,14 +93,10 @@ fn range_bound_valtype(bound_ty: &ResolvedType) -> Result<ValType, LowerError> {
         | ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => Err(LowerError::NotYetImplemented {
             what: format!("for-loop over Range<{bound_ty:?}>"),
@@ -204,14 +190,10 @@ pub fn lower_match(
         ResolvedType::Primitive(_)
         | ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => {
             return Err(LowerError::FieldAccessOnNonAggregate {
@@ -448,7 +430,8 @@ pub fn lower_for(
         });
     };
 
-    let (source, body_ty) = check_for_types(collection, var_ty, ty)?;
+    let module = ctx.module()?;
+    let (source, body_ty) = check_for_types(collection, var_ty, ty, module)?;
     let var_local = ctx
         .bindings
         .get(*var_binding_id)
@@ -475,45 +458,33 @@ fn check_for_types<'a>(
     collection: &'a IrExpr,
     var_ty: &ResolvedType,
     ty: &'a ResolvedType,
+    module: &IrModule,
 ) -> Result<(ForSource<'a>, &'a ResolvedType), LowerError> {
-    let ResolvedType::Array(body_box) = ty else {
-        return Err(LowerError::NotYetImplemented {
+    let body_ty = crate::compound::array_elem(ty, module).ok_or_else(|| {
+        LowerError::NotYetImplemented {
             what: format!("for-loop carrying non-Array result type {ty:?}"),
-        });
-    };
-    let body_ty = body_box.as_ref();
-    let coll_ty = collection.ty();
-    match coll_ty {
-        ResolvedType::Range(bound_box) => {
-            let bound_ty = bound_box.as_ref();
-            // Reject early on bound types we don't lower; matching also
-            // forces var_ty to agree.
-            range_bound_valtype(bound_ty)?;
-            if var_ty != bound_ty {
-                return Err(LowerError::NotYetImplemented {
-                    what: format!(
-                        "for-loop variable {var_ty:?} disagrees with range bound {bound_ty:?}"
-                    ),
-                });
-            }
-            Ok((ForSource::Range(bound_ty), body_ty))
         }
-        ResolvedType::Array(elem_box) => Ok((ForSource::Array(elem_box.as_ref()), body_ty)),
-        ResolvedType::Primitive(_)
-        | ResolvedType::Struct(_)
-        | ResolvedType::Enum(_)
-        | ResolvedType::Tuple(_)
-        | ResolvedType::Optional(_)
-        | ResolvedType::Dictionary { .. }
-        | ResolvedType::Closure { .. }
-        | ResolvedType::Trait(_)
-        | ResolvedType::Generic { .. }
-        | ResolvedType::TypeParam(_)
-        | ResolvedType::External { .. }
-        | ResolvedType::Error => Err(LowerError::NotYetImplemented {
-            what: format!("for-loop over collection type {coll_ty:?}"),
-        }),
+    })?;
+    let coll_ty = collection.ty();
+    if let Some(bound_ty) = crate::compound::range_bound(coll_ty, module) {
+        // Reject early on bound types we don't lower; matching also
+        // forces var_ty to agree.
+        range_bound_valtype(bound_ty)?;
+        if var_ty != bound_ty {
+            return Err(LowerError::NotYetImplemented {
+                what: format!(
+                    "for-loop variable {var_ty:?} disagrees with range bound {bound_ty:?}"
+                ),
+            });
+        }
+        return Ok((ForSource::Range(bound_ty), body_ty));
     }
+    if let Some(elem_ty) = crate::compound::array_elem(coll_ty, module) {
+        return Ok((ForSource::Array(elem_ty), body_ty));
+    }
+    Err(LowerError::NotYetImplemented {
+        what: format!("for-loop over collection type {coll_ty:?}"),
+    })
 }
 
 /// Range-sourced For-loop: allocate scratch locals (3 i32 + 4 typed
@@ -1022,6 +993,10 @@ fn load_for_element(
     field_layout: FieldLayout,
     sink: &mut InstructionSink<'_>,
 ) -> Result<(), LowerError> {
+    // After 0.0.4-beta the four prelude compounds collapse into
+    // `Generic { .. }`. Every aggregate element loads as a heap
+    // pointer; only Closures and the various unsupported variants
+    // get rejected.
     match elem_ty {
         ResolvedType::Primitive(p) => {
             load_primitive(*p, field_layout, sink);
@@ -1030,16 +1005,12 @@ fn load_for_element(
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_) => {
+        | ResolvedType::Generic { .. } => {
             sink.i32_load(field_mem_arg(field_layout));
             Ok(())
         }
-        ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
-        | ResolvedType::Dictionary { .. }
-        | ResolvedType::Closure { .. }
+        ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)
-        | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
         | ResolvedType::Error => Err(LowerError::NotYetImplemented {
@@ -1113,6 +1084,10 @@ fn store_for_body_value(
     field_layout: FieldLayout,
     sink: &mut InstructionSink<'_>,
 ) -> Result<(), LowerError> {
+    // After 0.0.4-beta the four prelude compounds collapse into
+    // `Generic { .. }`. Every aggregate body value stores as a heap
+    // pointer; only Closures and the various unsupported variants
+    // get rejected.
     match body_ty {
         ResolvedType::Primitive(p) => {
             store_primitive(*p, field_layout, sink);
@@ -1121,16 +1096,12 @@ fn store_for_body_value(
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_) => {
+        | ResolvedType::Generic { .. } => {
             sink.i32_store(field_mem_arg(field_layout));
             Ok(())
         }
-        ResolvedType::Optional(_)
-        | ResolvedType::Dictionary { .. }
-        | ResolvedType::Closure { .. }
+        ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)
-        | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
         | ResolvedType::Error => Err(LowerError::NotYetImplemented {

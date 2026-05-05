@@ -1,0 +1,70 @@
+// 18 — Trait composition + multi-trait constraints + virtual dispatch
+// across the composed surface.
+// Targets: trait declared as a sum of two parents (`pub trait Both:
+// A + B`), multi-trait constraint on a generic parameter (`<T: A +
+// B>`), virtual dispatch on the composed trait reaching into
+// inherited methods, and the static-bound generic version of the
+// same call.
+
+pub trait Named {
+    name: String
+}
+
+pub trait Renderable {
+    fn render(self) -> String
+}
+
+pub trait NamedRenderable: Named + Renderable {}
+
+pub struct Widget {
+    name: String,
+    body: String
+}
+
+impl Named for Widget {}
+
+impl Renderable for Widget {
+    fn render(self) -> String {
+        self.body
+    }
+}
+
+impl NamedRenderable for Widget {}
+
+pub struct Banner {
+    name: String,
+    body: String
+}
+
+impl Named for Banner {}
+
+impl Renderable for Banner {
+    fn render(self) -> String {
+        self.name + ": " + self.body
+    }
+}
+
+impl NamedRenderable for Banner {}
+
+pub fn render_dynamic(item: NamedRenderable) -> String {
+    item.render()
+}
+
+pub fn render_bounded<T: Named + Renderable>(item: T) -> String {
+    item.render()
+}
+
+pub fn render_widget() -> String {
+    let w = Widget(name: "btn", body: "click me")
+    render_dynamic(item: w)
+}
+
+pub fn render_banner() -> String {
+    let b = Banner(name: "alert", body: "saved")
+    render_bounded<Banner>(item: b)
+}
+
+pub fn run_checks() {
+    assert(condition: render_widget() == "click me")
+    assert(condition: render_banner() == "alert: saved")
+}

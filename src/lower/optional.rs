@@ -29,12 +29,11 @@ use crate::module::MEMORY_INDEX;
 pub(super) fn some_wrap_payload<'a>(
     target_ty: &'a ResolvedType,
     value_ty: &ResolvedType,
+    module: &formalang::ir::IrModule,
 ) -> Option<&'a ResolvedType> {
-    let ResolvedType::Optional(inner) = target_ty else {
-        return None;
-    };
-    if value_ty == inner.as_ref() {
-        Some(inner.as_ref())
+    let inner = crate::compound::optional_inner(target_ty, module)?;
+    if value_ty == inner {
+        Some(inner)
     } else {
         None
     }
@@ -153,7 +152,8 @@ pub(super) fn lower_coerced(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    if let Some(payload_ty) = some_wrap_payload(target_ty, value_expr.ty()) {
+    let module = ctx.module()?;
+    if let Some(payload_ty) = some_wrap_payload(target_ty, value_expr.ty(), module) {
         lower_some_wrap(value_expr, payload_ty, sink, ctx)
     } else {
         lower_expr(value_expr, sink, ctx)
@@ -169,8 +169,16 @@ pub(super) fn coercion_scratch_counts(
     target_ty: &ResolvedType,
     value_ty: &ResolvedType,
     out: &mut ScratchCounts,
+    module: Option<&formalang::ir::IrModule>,
 ) -> Result<(), LowerError> {
-    let Some(payload_ty) = some_wrap_payload(target_ty, value_ty) else {
+    // Without module access we can't classify Optional<T> from
+    // Generic — over-reserving is harmless to correctness, but
+    // skipping when None mirrors the previous behaviour where
+    // unrelated types didn't reserve scratch slots either.
+    let Some(module) = module else {
+        return Ok(());
+    };
+    let Some(payload_ty) = some_wrap_payload(target_ty, value_ty, module) else {
         return Ok(());
     };
     bump_count(&mut out.i32)?;

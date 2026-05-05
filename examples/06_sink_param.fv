@@ -1,0 +1,41 @@
+// 06 — Parameter conventions: `sink` (move / ownership transfer).
+// Targets: sink on String (boundary-allowed primitive that owns memory),
+// sink on a struct, the use-after-sink rule (caller relinquishes binding).
+
+fn consume_string(sink s: String) -> I32 {
+    s.len()
+}
+
+pub struct Buffer {
+    data: String,
+    capacity: I32
+}
+
+fn drain(sink b: Buffer) -> I32 {
+    b.capacity
+}
+
+pub fn run_consume_string() -> I32 {
+    let label: String = "hello, sink"
+    consume_string(s: label)
+    // Note: `label` is now consumed; we deliberately don't read it again.
+}
+
+pub fn run_drain_buffer() -> I32 {
+    let buf = Buffer(data: "x", capacity: 1024)
+    drain(b: buf)
+}
+
+// Two consecutive sinks, each with its own binding — must compile.
+pub fn run_two_sinks() -> I32 {
+    let a: String = "alpha"
+    let b: String = "bravo-bravo"
+    consume_string(s: a) + consume_string(s: b)
+}
+
+pub fn run_checks() {
+    assert(condition: run_consume_string() == 11)
+    assert(condition: run_drain_buffer() == 1024)
+    // 5 ("alpha") + 11 ("bravo-bravo") == 16
+    assert(condition: run_two_sinks() == 16)
+}

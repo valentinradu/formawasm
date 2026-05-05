@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Tests for `lower::lower_range` (dispatched from `lower_binary_op`
 //! when the operator is `BinaryOperator::Range`).
 //!

@@ -1,0 +1,45 @@
+// 16 — Extern declarations: host-provided functions and methods.
+// Targets: `extern fn` for a free host function, `extern impl` for
+// host-provided methods on a host struct, and a wrapper that calls
+// both internally so a primitive return crosses the public boundary.
+
+pub struct Canvas {}
+pub struct Connection {}
+
+extern fn host_double(x: I32) -> I32
+extern fn host_log(message: String)
+
+extern impl Canvas {
+    fn width(self) -> I32
+    fn height(self) -> I32
+}
+
+extern impl Connection {
+    fn open(self) -> Boolean
+    fn close(self)
+}
+
+pub fn call_host(x: I32) -> I32 {
+    host_double(x: x)
+}
+
+pub fn area(c: Canvas) -> I32 {
+    c.width() * c.height()
+}
+
+pub fn try_open(c: Connection) -> Boolean {
+    c.open()
+}
+
+// Extern returns are host-provided and not statically known, so the
+// assertions here just exercise the call path: the host decides whether
+// each `assert` argument is true at runtime.
+pub fn run_checks() {
+    host_log(message: "boot")
+    assert(condition: call_host(x: 21) > 0)
+    let canvas = Canvas()
+    assert(condition: area(c: canvas) >= 0)
+    let conn = Connection()
+    assert(condition: try_open(c: conn))
+    conn.close()
+}

@@ -474,7 +474,7 @@ fn count_scratch_locals(
     // closing site, so any Some-wrap that happens there reserves
     // scratch slots up-front just like the per-expression sites.
     if let Some(target) = return_ty {
-        super::optional::coercion_scratch_counts(target, expr.ty(), &mut counts)?;
+        super::optional::coercion_scratch_counts(target, expr.ty(), &mut counts, module)?;
     }
     walk_count(expr, module, &mut counts)?;
     Ok(counts)
@@ -497,7 +497,7 @@ fn walk_count_block_statement(
     match stmt {
         IrBlockStatement::Let { ty, value, .. } => {
             if let Some(target) = ty.as_ref() {
-                super::optional::coercion_scratch_counts(target, value.ty(), out)?;
+                super::optional::coercion_scratch_counts(target, value.ty(), out, module)?;
             }
             walk_count(value, module, out)
         }
@@ -532,7 +532,7 @@ fn walk_count(
             {
                 for (name, _idx, e) in fields {
                     if let Some(decl) = s.fields.iter().find(|f| f.name == *name) {
-                        super::optional::coercion_scratch_counts(&decl.ty, e.ty(), out)?;
+                        super::optional::coercion_scratch_counts(&decl.ty, e.ty(), out, module)?;
                     }
                     walk_count(e, module, out)?;
                 }
@@ -556,7 +556,7 @@ fn walk_count(
             {
                 for (name, _idx, value) in fields {
                     if let Some(decl) = v.fields.iter().find(|f| f.name == *name) {
-                        super::optional::coercion_scratch_counts(&decl.ty, value.ty(), out)?;
+                        super::optional::coercion_scratch_counts(&decl.ty, value.ty(), out, module)?;
                     }
                     walk_count(value, module, out)?;
                 }
@@ -580,7 +580,7 @@ fn walk_count(
                 if let Some(targets) = target_fields
                     && let Some((_, t)) = targets.iter().find(|(n, _)| n == name)
                 {
-                    super::optional::coercion_scratch_counts(t, e.ty(), out)?;
+                    super::optional::coercion_scratch_counts(t, e.ty(), out, module)?;
                 }
                 walk_count(e, module, out)?;
             }
@@ -618,10 +618,10 @@ fn walk_count(
             // (`Optional` widening only — every other type combination
             // contributes nothing). Count those wraps so the pre-walk's
             // totals match the lowering walker.
-            super::optional::coercion_scratch_counts(ty, then_branch.ty(), out)?;
+            super::optional::coercion_scratch_counts(ty, then_branch.ty(), out, module)?;
             walk_count(then_branch, module, out)?;
             if let Some(else_branch) = else_branch {
-                super::optional::coercion_scratch_counts(ty, else_branch.ty(), out)?;
+                super::optional::coercion_scratch_counts(ty, else_branch.ty(), out, module)?;
                 walk_count(else_branch, module, out)?;
             }
         }
@@ -643,7 +643,7 @@ fn walk_count(
                             .and_then(|p| p.ty.as_ref())
                     });
                     if let Some(t) = target {
-                        super::optional::coercion_scratch_counts(t, arg.ty(), out)?;
+                        super::optional::coercion_scratch_counts(t, arg.ty(), out, module)?;
                     }
                     walk_count(arg, module, out)?;
                 }
@@ -696,7 +696,7 @@ fn walk_count(
                     })
                 });
                 if let Some(t) = target {
-                    super::optional::coercion_scratch_counts(t, arg.ty(), out)?;
+                    super::optional::coercion_scratch_counts(t, arg.ty(), out, module)?;
                 }
                 walk_count(arg, module, out)?;
             }
@@ -709,7 +709,12 @@ fn walk_count(
             // case unconditionally since the pre-walk doesn't yet
             // peer into the dict's IR shape — the wasted slots are
             // a few i32s per missing array index.
-            if matches!(dict.ty(), ResolvedType::Dictionary { .. }) {
+            if module.is_some_and(|m| {
+                matches!(
+                    crate::compound::Compound::of(dict.ty(), m),
+                    crate::compound::Compound::Dictionary { .. }
+                )
+            }) {
                 bump_count(&mut out.i32)?;
                 bump_count(&mut out.i32)?;
                 bump_count(&mut out.i32)?;
@@ -731,7 +736,7 @@ fn walk_count(
             bump_count(&mut out.i32)?;
             walk_count(scrutinee, module, out)?;
             for arm in arms {
-                super::optional::coercion_scratch_counts(ty, arm.body.ty(), out)?;
+                super::optional::coercion_scratch_counts(ty, arm.body.ty(), out, module)?;
                 walk_count(&arm.body, module, out)?;
             }
         }
@@ -747,14 +752,11 @@ fn walk_count(
             // header pointer.
             bump_count(&mut out.i32)?;
             bump_count(&mut out.i32)?;
-            let elem_ty: Option<&ResolvedType> = if let ResolvedType::Array(b) = ty {
-                Some(b.as_ref())
-            } else {
-                None
-            };
+            let elem_ty: Option<&ResolvedType> =
+                module.and_then(|m| crate::compound::array_elem(ty, m));
             for e in elements {
                 if let Some(t) = elem_ty {
-                    super::optional::coercion_scratch_counts(t, e.ty(), out)?;
+                    super::optional::coercion_scratch_counts(t, e.ty(), out, module)?;
                 }
                 walk_count(e, module, out)?;
             }
@@ -766,7 +768,7 @@ fn walk_count(
             // the reservation here cannot drift from the consumption
             // there. The Range path reserves typed `start` / `end`
             // slots whose width depends on the bound type.
-            super::control::for_scratch_counts(collection.ty(), out)?;
+            super::control::for_scratch_counts(collection.ty(), out, module)?;
             walk_count(collection, module, out)?;
             walk_count(body, module, out)?;
         }

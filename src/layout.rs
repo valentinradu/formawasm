@@ -115,7 +115,8 @@ pub fn plan_struct(s: &IrStruct, _module: &IrModule) -> Result<StructLayout, Lay
 
     for f in &s.fields {
         // The `optional: bool` AST flag is redundant with
-        // `ty: ResolvedType::Optional(_)`. Phase 2 mc7 lifts the
+        // `ty: Optional<...>` (now under `ResolvedType::Generic`).
+        // Phase 2 mc7 lifts the
         // outright rejection that came in as a defensive marker
         // before the optional layout existed; aggregate-as-pointer
         // storage handles either form uniformly.
@@ -185,33 +186,19 @@ fn primitive_size_align(p: PrimitiveType) -> Result<(u32, u32), LayoutError> {
 fn type_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
     match ty {
         ResolvedType::Primitive(p) => primitive_size_align(*p),
-        ResolvedType::Optional(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
-        ResolvedType::Struct(_) => Err(LayoutError::NotYetSupported {
-            kind: "Struct".to_owned(),
-        }),
-        ResolvedType::Enum(_) => Err(LayoutError::NotYetSupported {
-            kind: "Enum".to_owned(),
-        }),
-        ResolvedType::Tuple(_) => Err(LayoutError::NotYetSupported {
-            kind: "Tuple".to_owned(),
-        }),
-        ResolvedType::Array(_) => Err(LayoutError::NotYetSupported {
-            kind: "Array<T>".to_owned(),
-        }),
-        ResolvedType::Range(_) => Err(LayoutError::NotYetSupported {
-            kind: "Range<T>".to_owned(),
-        }),
-        ResolvedType::Dictionary { .. } => Err(LayoutError::NotYetSupported {
-            kind: "Dictionary<K, V>".to_owned(),
-        }),
+        // Every aggregate field — struct, enum, tuple, plus the four
+        // prelude compounds (Optional / Array / Range / Dictionary,
+        // now living under `Generic`) — collapses to a 4-byte heap
+        // pointer. The bump allocator owns the storage.
+        ResolvedType::Struct(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. } => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
         ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
             kind: "Trait".to_owned(),
-        }),
-        ResolvedType::Generic { .. } => Err(LayoutError::NotYetSupported {
-            kind: "Generic".to_owned(),
         }),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),
@@ -508,10 +495,6 @@ pub fn plan_range(bound: &ResolvedType, _module: &IrModule) -> Result<RangeLayou
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)
         | ResolvedType::Generic { .. }
@@ -783,27 +766,18 @@ pub fn plan_optional(
 fn optional_payload_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
     match ty {
         ResolvedType::Primitive(p) => primitive_size_align(*p),
+        // Every aggregate payload — struct, enum, tuple, plus the
+        // four prelude compounds living under `Generic` — collapses
+        // to a 4-byte heap pointer.
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
-        ResolvedType::Range(_) => Err(LayoutError::NotYetSupported {
-            kind: "Range<T>".to_owned(),
-        }),
-        ResolvedType::Optional(_) => Err(LayoutError::NotYetSupported {
-            kind: "Optional<Optional<T>>".to_owned(),
-        }),
-        ResolvedType::Dictionary { .. } => Err(LayoutError::NotYetSupported {
-            kind: "Dictionary<K, V>".to_owned(),
-        }),
+        | ResolvedType::Generic { .. } => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
         ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
             kind: "Trait".to_owned(),
-        }),
-        ResolvedType::Generic { .. } => Err(LayoutError::NotYetSupported {
-            kind: "Generic".to_owned(),
         }),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),
@@ -828,25 +802,18 @@ fn optional_payload_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutEr
 fn array_element_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
     match ty {
         ResolvedType::Primitive(p) => primitive_size_align(*p),
+        // Every aggregate element — struct, enum, tuple, plus the
+        // four prelude compounds living under `Generic` — collapses
+        // to a 4-byte heap pointer.
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Optional(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
-        ResolvedType::Range(_) => Err(LayoutError::NotYetSupported {
-            kind: "Range<T>".to_owned(),
-        }),
-        ResolvedType::Dictionary { .. } => Err(LayoutError::NotYetSupported {
-            kind: "Dictionary<K, V>".to_owned(),
-        }),
+        | ResolvedType::Generic { .. } => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
         ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
             kind: "Trait".to_owned(),
-        }),
-        ResolvedType::Generic { .. } => Err(LayoutError::NotYetSupported {
-            kind: "Generic".to_owned(),
         }),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),

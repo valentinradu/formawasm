@@ -1,0 +1,44 @@
+// 05 — Parameter conventions: `mut` (in-place mutation through pointer).
+// Targets: mut on plain primitive params, mut self on methods, and the
+// caller-side `let mut` requirement. Field-level mutability was removed:
+// mutability lives entirely on the binding (`let mut`).
+
+pub struct Counter {
+    value: I32
+}
+
+impl Counter {
+    fn bump(mut self) -> I32 {
+        self.value + 1
+    }
+
+    fn reset(mut self) -> Counter {
+        Counter(value: 0)
+    }
+}
+
+fn double_in_place(mut n: I32) -> I32 {
+    n + n
+}
+
+pub fn caller_mut_primitive() -> I32 {
+    let mut x: I32 = 21
+    double_in_place(n: x)
+}
+
+pub fn caller_mut_self() -> I32 {
+    let mut c = Counter(value: 41)
+    c.bump()
+}
+
+pub fn caller_mut_chain() -> I32 {
+    let mut c = Counter(value: 7)
+    let r = c.reset()
+    r.value
+}
+
+pub fn run_checks() {
+    assert(condition: caller_mut_primitive() == 42)
+    assert(condition: caller_mut_self() == 42)
+    assert(condition: caller_mut_chain() == 0)
+}

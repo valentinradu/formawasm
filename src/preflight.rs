@@ -222,10 +222,6 @@ fn check_type(ty: &ResolvedType, location: &str) -> Result<(), PreflightError> {
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_) => Ok(()),
 
-        ResolvedType::Array(inner) | ResolvedType::Range(inner) | ResolvedType::Optional(inner) => {
-            check_type(inner, location)
-        }
-
         ResolvedType::Tuple(fields) => {
             for (_, inner) in fields {
                 check_type(inner, location)?;
@@ -233,6 +229,10 @@ fn check_type(ty: &ResolvedType, location: &str) -> Result<(), PreflightError> {
             Ok(())
         }
 
+        // The four prelude compounds (Optional / Array / Range /
+        // Dictionary) all flow through here under formalang
+        // 0.0.4-beta — their type args are walked the same way as
+        // any user-defined generic.
         ResolvedType::Generic { args, .. } => {
             for arg in args {
                 check_type(arg, location)?;
@@ -245,11 +245,6 @@ fn check_type(ty: &ResolvedType, location: &str) -> Result<(), PreflightError> {
                 check_type(arg, location)?;
             }
             Ok(())
-        }
-
-        ResolvedType::Dictionary { key_ty, value_ty } => {
-            check_type(key_ty, location)?;
-            check_type(value_ty, location)
         }
 
         ResolvedType::Closure {

@@ -1,0 +1,56 @@
+// 08 — Traits and virtual dispatch.
+// Targets: trait declaration with field + method requirements, multiple
+// impls, conformance via `impl Trait for Struct`, virtual dispatch through
+// a trait-typed binding (per-trait vtable, call_indirect at the backend).
+
+pub trait Shape {
+    name: String
+    fn area(self) -> I32
+}
+
+pub struct Square {
+    name: String,
+    side: I32
+}
+
+pub struct Rectangle {
+    name: String,
+    width: I32,
+    height: I32
+}
+
+impl Shape for Square {
+    fn area(self) -> I32 {
+        self.side * self.side
+    }
+}
+
+impl Shape for Rectangle {
+    fn area(self) -> I32 {
+        self.width * self.height
+    }
+}
+
+// Static dispatch (impl method called on a concrete struct).
+pub fn square_area(side: I32) -> I32 {
+    let s = Square(name: "sq", side: side)
+    s.area()
+}
+
+// Virtual dispatch through a trait-typed local.
+pub fn shape_area(kind: I32, a: I32, b: I32) -> I32 {
+    let s: Shape = if kind == 0 {
+        Square(name: "sq", side: a)
+    } else {
+        Rectangle(name: "rect", width: a, height: b)
+    }
+    s.area()
+}
+
+pub fn run_checks() {
+    assert(condition: square_area(side: 5) == 25)
+    // Square branch via virtual dispatch.
+    assert(condition: shape_area(kind: 0, a: 6, b: 0) == 36)
+    // Rectangle branch via virtual dispatch.
+    assert(condition: shape_area(kind: 1, a: 4, b: 5) == 20)
+}

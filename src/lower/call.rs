@@ -244,14 +244,10 @@ fn lower_virtual_method_call(
         ResolvedType::Enum(id) => ImplTarget::Enum(*id),
         other @ (ResolvedType::Primitive(_)
         | ResolvedType::Trait(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error) => {
             return Err(LowerError::UnsupportedVirtualReceiver { ty: other.clone() });

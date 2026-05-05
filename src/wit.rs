@@ -33,6 +33,7 @@ use formalang::ir::{IrEnum, IrFunction, IrModule, IrStruct, ResolvedType};
 use thiserror::Error;
 use wit_parser::Resolve;
 
+use crate::compound::Compound;
 use crate::ident::kebab_case;
 use crate::survey::PublicSurface;
 use crate::types::TypeMapError;
@@ -131,7 +132,7 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
                     index: sid.0,
                     len: module.structs.len(),
                 })?;
-            write_record(&mut out, s)?;
+            write_record(&mut out, s, module)?;
             type_names.push(kebab_case(&s.name));
         }
         for &eid in &surface.exported_enums {
@@ -142,7 +143,7 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
                     index: eid.0,
                     len: module.enums.len(),
                 })?;
-            write_variant(&mut out, e)?;
+            write_variant(&mut out, e, module)?;
             type_names.push(kebab_case(&e.name));
         }
         writeln!(out, "}}").map_err(invalid_format)?;
@@ -168,7 +169,7 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
                 index: fid.0,
                 len: module.functions.len(),
             })?;
-        write_import(&mut out, f)?;
+        write_import(&mut out, f, module)?;
     }
 
     for &fid in &surface.exports {
@@ -179,7 +180,7 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
                 index: fid.0,
                 len: module.functions.len(),
             })?;
-        write_export(&mut out, f)?;
+        write_export(&mut out, f, module)?;
     }
 
     writeln!(out, "}}").map_err(invalid_format)?;
@@ -188,10 +189,14 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
     Ok(out)
 }
 
-fn write_record(out: &mut String, s: &IrStruct) -> Result<(), WitEmitError> {
+fn write_record(
+    out: &mut String,
+    s: &IrStruct,
+    module: &IrModule,
+) -> Result<(), WitEmitError> {
     writeln!(out, "  record {} {{", kebab_case(&s.name)).map_err(invalid_format)?;
     for f in &s.fields {
-        let wit_ty = resolved_wit_type(&f.ty)?.ok_or_else(|| WitEmitError::NeverParam {
+        let wit_ty = resolved_wit_type(&f.ty, module)?.ok_or_else(|| WitEmitError::NeverParam {
             function: format!("record {}", s.name),
             param: f.name.clone(),
         })?;
@@ -201,7 +206,11 @@ fn write_record(out: &mut String, s: &IrStruct) -> Result<(), WitEmitError> {
     Ok(())
 }
 
-fn write_variant(out: &mut String, e: &IrEnum) -> Result<(), WitEmitError> {
+fn write_variant(
+    out: &mut String,
+    e: &IrEnum,
+    module: &IrModule,
+) -> Result<(), WitEmitError> {
     writeln!(out, "  variant {} {{", kebab_case(&e.name)).map_err(invalid_format)?;
     for v in &e.variants {
         let arm_name = kebab_case(&v.name);
@@ -214,7 +223,7 @@ fn write_variant(out: &mut String, e: &IrEnum) -> Result<(), WitEmitError> {
                 function: format!("variant {}", e.name),
                 param: "(0-th field)".to_owned(),
             })?;
-            let wit_ty = variant_field_wit_type(&e.name, f)?;
+            let wit_ty = variant_field_wit_type(&e.name, f, module)?;
             writeln!(out, "    {arm_name}({wit_ty}),").map_err(invalid_format)?;
             continue;
         }
@@ -230,7 +239,7 @@ fn write_variant(out: &mut String, e: &IrEnum) -> Result<(), WitEmitError> {
             if i > 0 {
                 tuple.push_str(", ");
             }
-            let wit_ty = variant_field_wit_type(&e.name, f)?;
+            let wit_ty = variant_field_wit_type(&e.name, f, module)?;
             tuple.push_str(&wit_ty);
         }
         tuple.push('>');
@@ -246,25 +255,39 @@ fn write_variant(out: &mut String, e: &IrEnum) -> Result<(), WitEmitError> {
 fn variant_field_wit_type(
     enum_name: &str,
     f: &formalang::ir::IrField,
+    module: &IrModule,
 ) -> Result<String, WitEmitError> {
-    resolved_wit_type(&f.ty)?.ok_or_else(|| WitEmitError::NeverParam {
+    resolved_wit_type(&f.ty, module)?.ok_or_else(|| WitEmitError::NeverParam {
         function: format!("variant {enum_name}"),
         param: f.name.clone(),
     })
 }
 
-fn write_export(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
-    write_world_func(out, f, "export")
+fn write_export(
+    out: &mut String,
+    f: &IrFunction,
+    module: &IrModule,
+) -> Result<(), WitEmitError> {
+    write_world_func(out, f, "export", module)
 }
 
-fn write_import(out: &mut String, f: &IrFunction) -> Result<(), WitEmitError> {
-    write_world_func(out, f, "import")
+fn write_import(
+    out: &mut String,
+    f: &IrFunction,
+    module: &IrModule,
+) -> Result<(), WitEmitError> {
+    write_world_func(out, f, "import", module)
 }
 
 /// Emit a single `import` or `export` line for `f` inside the world
 /// block. The signature shape is identical for both directions —
 /// only the leading keyword differs.
-fn write_world_func(out: &mut String, f: &IrFunction, kind: &str) -> Result<(), WitEmitError> {
+fn write_world_func(
+    out: &mut String,
+    f: &IrFunction,
+    kind: &str,
+    module: &IrModule,
+) -> Result<(), WitEmitError> {
     write!(out, "  {kind} {}: func(", kebab_case(&f.name)).map_err(invalid_format)?;
     for (i, param) in f.params.iter().enumerate() {
         if i > 0 {
@@ -277,7 +300,7 @@ fn write_world_func(out: &mut String, f: &IrFunction, kind: &str) -> Result<(), 
                 function: f.name.clone(),
                 param: param.name.clone(),
             })?;
-        let wit_ty = resolved_wit_type(ty)?.ok_or_else(|| WitEmitError::NeverParam {
+        let wit_ty = resolved_wit_type(ty, module)?.ok_or_else(|| WitEmitError::NeverParam {
             function: f.name.clone(),
             param: param.name.clone(),
         })?;
@@ -285,7 +308,7 @@ fn write_world_func(out: &mut String, f: &IrFunction, kind: &str) -> Result<(), 
     }
     write!(out, ")").map_err(invalid_format)?;
     if let Some(ret) = f.return_type.as_ref()
-        && let Some(wit_ty) = resolved_wit_type(ret)?
+        && let Some(wit_ty) = resolved_wit_type(ret, module)?
     {
         write!(out, " -> {wit_ty}").map_err(invalid_format)?;
     }
@@ -304,54 +327,64 @@ fn write_world_func(out: &mut String, f: &IrFunction, kind: &str) -> Result<(), 
 /// `Optional<Never>` case (the static type of the `nil` literal) is
 /// rejected here because WIT has no `option<>`-with-no-payload form;
 /// values of that type stay strictly internal.
-fn resolved_wit_type(ty: &ResolvedType) -> Result<Option<String>, WitEmitError> {
-    match ty {
-        ResolvedType::Primitive(p) => primitive_wit_type(*p),
-        ResolvedType::Array(elem) => {
-            let inner = resolved_wit_type(elem)?.ok_or_else(|| {
+fn resolved_wit_type(
+    ty: &ResolvedType,
+    module: &IrModule,
+) -> Result<Option<String>, WitEmitError> {
+    // Recognise the four prelude compounds — they each desugar
+    // through `ResolvedType::Generic { base, args }` and need a
+    // structural mapping to a WIT shape (list / option / tuple-of-
+    // pairs). Range stays out of the WIT surface; ranges live
+    // strictly inside the component.
+    match Compound::of(ty, module) {
+        Compound::Array(elem) => {
+            let inner = resolved_wit_type(elem, module)?.ok_or_else(|| {
                 WitEmitError::TypeMap(TypeMapError::NotYetSupported {
                     kind: "Array<Never>".to_owned(),
                 })
             })?;
-            Ok(Some(format!("list<{inner}>")))
+            return Ok(Some(format!("list<{inner}>")));
         }
-        ResolvedType::Optional(inner) => {
-            let inner_name = resolved_wit_type(inner)?.ok_or_else(|| {
+        Compound::Optional(inner) => {
+            let inner_name = resolved_wit_type(inner, module)?.ok_or_else(|| {
                 WitEmitError::TypeMap(TypeMapError::NotYetSupported {
                     kind: "Optional<Never>".to_owned(),
                 })
             })?;
-            Ok(Some(format!("option<{inner_name}>")))
+            return Ok(Some(format!("option<{inner_name}>")));
         }
-        ResolvedType::Dictionary { key_ty, value_ty } => {
+        Compound::Dictionary { key, value } => {
             // `Dictionary<K, V>` lifts to `list<tuple<K, V>>` at the
             // boundary — the canonical-ABI shape for a sequence of
             // pairs. Internally we keep the v1 `{ ptr, len, cap }`
             // buffer-of-pair-pointers layout; the list lift reads the
             // header, the per-pair lift reads each `(k, v)` tuple.
-            let key_name = resolved_wit_type(key_ty)?.ok_or_else(|| {
+            let key_name = resolved_wit_type(key, module)?.ok_or_else(|| {
                 WitEmitError::TypeMap(TypeMapError::NotYetSupported {
                     kind: "Dictionary<Never, _>".to_owned(),
                 })
             })?;
-            let value_name = resolved_wit_type(value_ty)?.ok_or_else(|| {
+            let value_name = resolved_wit_type(value, module)?.ok_or_else(|| {
                 WitEmitError::TypeMap(TypeMapError::NotYetSupported {
                     kind: "Dictionary<_, Never>".to_owned(),
                 })
             })?;
-            Ok(Some(format!("list<tuple<{key_name}, {value_name}>>")))
+            return Ok(Some(format!("list<tuple<{key_name}, {value_name}>>")));
         }
+        Compound::Range(_) | Compound::None => {}
+    }
+    match ty {
+        ResolvedType::Primitive(p) => primitive_wit_type(*p),
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Trait(_)
-        | ResolvedType::Range(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-            kind: variant_tag(ty),
+            kind: variant_tag(ty, module),
         })),
     }
 }
@@ -385,22 +418,25 @@ fn primitive_wit_type(p: PrimitiveType) -> Result<Option<String>, WitEmitError> 
 /// `NotYetSupported` diagnostic. Mirrors the tags chosen in
 /// [`crate::types::resolved_value_type`] so messages stay consistent
 /// across the two surfaces.
-fn variant_tag(ty: &ResolvedType) -> String {
+fn variant_tag(ty: &ResolvedType, module: &IrModule) -> String {
+    match Compound::of(ty, module) {
+        Compound::Array(_) => return "Array<T>".to_owned(),
+        Compound::Range(_) => return "Range<T>".to_owned(),
+        Compound::Optional(_) => return "Optional<T>".to_owned(),
+        Compound::Dictionary { .. } => return "Dictionary<K, V>".to_owned(),
+        Compound::None => {}
+    }
     match ty {
         ResolvedType::Primitive(p) => format!("{p:?}"),
         ResolvedType::Struct(_) => "Struct".to_owned(),
         ResolvedType::Trait(_) => "Trait".to_owned(),
         ResolvedType::Enum(_) => "Enum".to_owned(),
-        ResolvedType::Array(_) => "Array<T>".to_owned(),
-        ResolvedType::Range(_) => "Range<T>".to_owned(),
-        ResolvedType::Optional(_) => "Optional<T>".to_owned(),
         ResolvedType::Tuple(_) => "Tuple".to_owned(),
         ResolvedType::Generic { .. } => "Generic".to_owned(),
         ResolvedType::TypeParam(name) => format!("TypeParam({name})"),
         ResolvedType::External { name, .. } => format!(
             "External({name}) — should have been inlined by upstream MonomorphisePass; reaching the backend means an upstream invariant violation"
         ),
-        ResolvedType::Dictionary { .. } => "Dictionary<K, V>".to_owned(),
         ResolvedType::Closure { .. } => "Closure".to_owned(),
         ResolvedType::Error => "Error".to_owned(),
     }

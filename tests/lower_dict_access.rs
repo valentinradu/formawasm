@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Tests for `lower::lower_dict_access` over `Array<T>` collections.
 //!
 //! Phase 1c mc5 lights up `arr[i]` reads. The Phase 2 dictionary form

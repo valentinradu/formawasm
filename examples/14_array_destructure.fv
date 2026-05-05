@@ -1,0 +1,38 @@
+// 14 — Array destructuring in let bindings.
+// Targets: positional element bindings, the `_` wildcard skip, the
+// `...rest` capture, and the anonymous `...` skip-rest. Each form is
+// exercised against an explicit `[I32]` annotation so the receiver
+// type is unambiguous.
+
+pub fn first_three() -> I32 {
+    let xs: [I32] = [1, 2, 3, 4, 5]
+    let [a, b, c, ...] = xs
+    a + b + c
+}
+
+pub fn skip_first() -> I32 {
+    let xs: [I32] = [10, 20, 30]
+    let [_, second, _] = xs
+    second
+}
+
+pub fn head_only() -> I32 {
+    let xs: [I32] = [42]
+    let [head, ...] = xs
+    head
+}
+
+pub fn pair_first_two() -> I32 {
+    let xs: [I32] = [9, 8, 7, 6]
+    let [a, b, ...] = xs
+    a * 10 + b
+}
+
+pub fn run_checks() {
+    // 1 + 2 + 3 == 6
+    assert(condition: first_three() == 6)
+    assert(condition: skip_first() == 20)
+    assert(condition: head_only() == 42)
+    // 9 * 10 + 8 == 98
+    assert(condition: pair_first_two() == 98)
+}

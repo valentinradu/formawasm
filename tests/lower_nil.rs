@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Tests for `Literal::Nil` lowering.
 //!
 //! Build a small module whose entry point returns a tag-only

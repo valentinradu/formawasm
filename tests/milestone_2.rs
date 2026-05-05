@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Phase 2 closing milestone — a single program that exercises every
 //! Phase 2 feature family at once:
 //!

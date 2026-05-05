@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Phase 1c milestone — Sieve of Eratosthenes through the full
 //! `Backend::generate` pipeline.
 //!

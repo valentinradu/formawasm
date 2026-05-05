@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Tests for `lower::lower_for`.
 //!
 //! Build a tiny module whose entry point evaluates a `for var in

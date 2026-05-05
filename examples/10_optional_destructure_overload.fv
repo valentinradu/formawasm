@@ -1,0 +1,54 @@
+// 10 — Optionals, struct destructuring, `if let`, and function
+// overloading. Targets: Optional<T> via the `?` suffix, nil literal,
+// Rust-style `if let pat = optional { ... } else { ... }` for unwrap
+// binding, struct destructuring with renaming, and overload resolution
+// by argument-label set.
+
+pub struct User {
+    name: String,
+    nickname: String?,
+    score: I32
+}
+
+pub fn nickname_len(name: String, nick: String?) -> I32 {
+    let u = User(name: name, nickname: nick, score: 0)
+    if let n = u.nickname {
+        n.len()
+    } else {
+        u.name.len()
+    }
+}
+
+pub fn destructure_user_score(name: String, score: I32) -> I32 {
+    let u = User(name: name, nickname: nil, score: score)
+    let {score as s, name as n} = u
+    s + n.len()
+}
+
+// Overload resolution by named-argument label set.
+fn format(value: I32) -> I32 {
+    value
+}
+
+fn format(value: I32, precision: I32) -> I32 {
+    value * precision
+}
+
+pub fn run_overload_one(x: I32) -> I32 {
+    format(value: x)
+}
+
+pub fn run_overload_two(x: I32, p: I32) -> I32 {
+    format(value: x, precision: p)
+}
+
+pub fn run_checks() {
+    // Nickname present -> "ali".len() == 3.
+    assert(condition: nickname_len(name: "alice", nick: "ali") == 3)
+    // Nickname missing -> falls back to "alice".len() == 5.
+    assert(condition: nickname_len(name: "alice", nick: nil) == 5)
+    // 100 + "bob".len() == 103.
+    assert(condition: destructure_user_score(name: "bob", score: 100) == 103)
+    assert(condition: run_overload_one(x: 7) == 7)
+    assert(condition: run_overload_two(x: 7, p: 3) == 21)
+}

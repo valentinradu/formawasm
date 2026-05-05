@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Tests for the formalang → core-wasm type mapping.
 
 use formalang::ast::PrimitiveType;

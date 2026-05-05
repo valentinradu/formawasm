@@ -1,0 +1,48 @@
+// 09 — Arrays, ranges, for-loops, dictionaries.
+// Targets: array literals + indexed iteration via for-in, range-driven
+// for-loops, dictionary literal + access. Indexing (`xs[i]` and
+// `d[k]`) returns an optional `T?`, so this example uses iteration to
+// aggregate without forcing each access through a manual unwrap.
+
+pub fn sum_array() -> I32 {
+    let xs: [I32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    let mut total: I32 = 0
+    for x in xs {
+        total = total + x
+    }
+    total
+}
+
+pub fn sum_range(n: I32) -> I32 {
+    let mut total: I32 = 0
+    for i in 0..n {
+        total = total + i
+    }
+    total
+}
+
+pub fn nested_for_sum() -> I32 {
+    let m: [[I32]] = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    let mut total: I32 = 0
+    for row in m {
+        for cell in row {
+            total = total + cell
+        }
+    }
+    total
+}
+
+pub fn dict_lookup() -> I32? {
+    let cfg: [String: I32] = ["timeout": 30, "retries": 3, "max": 100]
+    cfg["timeout"]
+}
+
+pub fn run_checks() {
+    // 1+2+...+10 == 55
+    assert(condition: sum_array() == 55)
+    // 0+1+2+3+4 == 10
+    assert(condition: sum_range(n: 5) == 10)
+    // 1+...+9 == 45
+    assert(condition: nested_for_sum() == 45)
+    assert(condition: dict_lookup().is_some())
+}

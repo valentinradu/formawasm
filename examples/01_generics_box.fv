@@ -1,0 +1,44 @@
+// 01 — Generics: Box<T> at three primitive instantiations.
+// Targets: MonomorphisePass cloning, generic struct constructors,
+// type inference at instantiation, and field reads on each clone.
+
+pub struct Box<T> {
+    value: T
+}
+
+impl Box {
+    fn unwrap(self) -> T {
+        self.value
+    }
+}
+
+// Explicit type args.
+pub fn box_i32_value() -> I32 {
+    let b = Box<I32>(value: 42)
+    b.unwrap()
+}
+
+// Inference: `T` reads off the float literal.
+pub fn box_f64_value() -> F64 {
+    let b = Box(value: 3.14)
+    b.unwrap()
+}
+
+// Inference: `T` reads off the boolean literal.
+pub fn box_bool_value() -> Boolean {
+    let b = Box(value: true)
+    b.unwrap()
+}
+
+// Inference: `T` reads off an integer literal.
+pub fn box_inferred() -> I32 {
+    let b = Box(value: 7)
+    b.value + 1
+}
+
+pub fn run_checks() {
+    assert(condition: box_i32_value() == 42)
+    assert(condition: box_f64_value() > 3.0)
+    assert(condition: box_bool_value())
+    assert(condition: box_inferred() == 8)
+}

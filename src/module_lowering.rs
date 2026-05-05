@@ -1130,8 +1130,8 @@ fn emit_function(
         // the canonical-ABI shape the host sees, while the inner
         // function keeps using the internal header-pointer
         // convention so intra-module callers don't need to change.
-        let export_idx = if needs_canonical_abi_wrapper(f) {
-            emit_canonical_abi_wrapper(f, wasm_idx, builder)?
+        let export_idx = if needs_canonical_abi_wrapper(f, module) {
+            emit_canonical_abi_wrapper(f, wasm_idx, builder, module)?
         } else {
             wasm_idx
         };
@@ -1148,24 +1148,27 @@ fn emit_function(
 /// Returns of those types match the internal i32-pointer return
 /// directly because the canonical ABI's "return area pointer"
 /// convention coincides with our header layout.
-fn needs_canonical_abi_wrapper(f: &IrFunction) -> bool {
+fn needs_canonical_abi_wrapper(f: &IrFunction, module: &IrModule) -> bool {
     f.params
         .iter()
-        .any(|p| p.ty.as_ref().is_some_and(param_needs_split))
+        .any(|p| p.ty.as_ref().is_some_and(|ty| param_needs_split(ty, module)))
 }
 
 /// Whether a parameter type lowers to multiple core-wasm i32 values
 /// at the canonical-ABI boundary. `string` / `Path` / `Regex` / list
 /// pass as `(ptr, len)`; everything else stays as a single value.
-const fn param_needs_split(ty: &ResolvedType) -> bool {
-    matches!(
+fn param_needs_split(ty: &ResolvedType, module: &IrModule) -> bool {
+    if matches!(
         ty,
         ResolvedType::Primitive(
             formalang::ast::PrimitiveType::String
                 | formalang::ast::PrimitiveType::Path
                 | formalang::ast::PrimitiveType::Regex
-        ) | ResolvedType::Array(_)
-    )
+        )
+    ) {
+        return true;
+    }
+    matches!(crate::compound::Compound::of(ty, module), crate::compound::Compound::Array(_))
 }
 
 /// Build a thin trampoline matching the canonical-ABI signature of
@@ -1183,6 +1186,7 @@ fn emit_canonical_abi_wrapper(
     f: &IrFunction,
     inner_idx: u32,
     builder: &mut ModuleBuilder,
+    module: &IrModule,
 ) -> Result<u32, ModuleLowerError> {
     use crate::layout::{STRING_HEADER_SIZE, STRING_LEN_OFFSET, STRING_PTR_OFFSET};
     use crate::module::MEMORY_INDEX;
@@ -1202,7 +1206,7 @@ fn emit_canonical_abi_wrapper(
                     function: f.name.clone(),
                     name: p.name.clone(),
                 })?;
-        if param_needs_split(ty) {
+        if param_needs_split(ty, module) {
             let ptr_idx = u32::try_from(param_valtypes.len())
                 .map_err(|_| ModuleLowerError::TooManyFunctions)?;
             param_valtypes.push(ValType::I32);
@@ -1276,7 +1280,7 @@ fn emit_canonical_abi_wrapper(
             // `param_needs_split` is total over `Option<&ResolvedType>`
             // when treating `None` as not-split (matches the missing-
             // type path the loop above flagged as MissingParamType).
-            let split = p.ty.as_ref().is_some_and(param_needs_split);
+            let split = p.ty.as_ref().is_some_and(|ty| param_needs_split(ty, module));
             if split {
                 let scratch_idx = split_iter.next().unwrap_or(scratch_base);
                 i.local_get(scratch_idx);
@@ -1314,14 +1318,10 @@ fn detect_self_struct(f: &IrFunction) -> Option<StructId> {
         ResolvedType::Primitive(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => None,
     }

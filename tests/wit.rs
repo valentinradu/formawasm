@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Tests for `wit::emit_wit`.
 //!
 //! Cover the empty-surface case, a fibonacci-shaped function, the

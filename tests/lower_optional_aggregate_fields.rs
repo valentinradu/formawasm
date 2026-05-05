@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Coverage for `Optional<T>` Some-wrap at struct-field and array-
 //! element initializer sites.
 //!

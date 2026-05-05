@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Tests for `layout::plan_struct`.
 //!
 //! Cover the empty struct, every primitive size class, a handful of

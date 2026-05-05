@@ -1,0 +1,53 @@
+// 15 — Inline modules with structs and enums, qualified
+// construction, and qualified type annotations.
+// Targets: `pub mod` containing struct + enum definitions, accessing
+// definitions via `module::Type` from outside, qualified type
+// annotations on let bindings and function returns.
+
+pub mod geometry {
+    pub struct Point {
+        x: I32,
+        y: I32
+    }
+
+    pub enum Direction {
+        north,
+        south,
+        east,
+        west
+    }
+}
+
+pub mod colors {
+    pub struct Rgb {
+        r: I32,
+        g: I32,
+        b: I32
+    }
+}
+
+pub fn make_origin() -> geometry::Point {
+    geometry::Point(x: 0, y: 0)
+}
+
+pub fn diag_sum() -> I32 {
+    let p: geometry::Point = geometry::Point(x: 3, y: 4)
+    p.x + p.y
+}
+
+pub fn pure_red() -> colors::Rgb {
+    colors::Rgb(r: 255, g: 0, b: 0)
+}
+
+pub fn red_intensity() -> I32 {
+    let c = pure_red()
+    c.r - c.g - c.b
+}
+
+pub fn run_checks() {
+    let origin = make_origin()
+    assert(condition: origin.x == 0)
+    assert(condition: origin.y == 0)
+    assert(condition: diag_sum() == 7)
+    assert(condition: red_intensity() == 255)
+}

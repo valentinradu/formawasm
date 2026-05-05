@@ -1,0 +1,54 @@
+// 13 — Tuples (named fields).
+// Targets: tuple type as a struct field, tuple in a function signature
+// at parameter and return, named-field construction, dotted field
+// access, and positional destructuring of a named tuple.
+
+pub struct Point {
+    location: (x: I32, y: I32)
+}
+
+pub fn make_point(x: I32, y: I32) -> Point {
+    Point(location: (x: x, y: y))
+}
+
+pub fn x_of(p: Point) -> I32 {
+    p.location.x
+}
+
+pub fn y_of(p: Point) -> I32 {
+    p.location.y
+}
+
+pub fn manhattan(p: Point) -> I32 {
+    let dx = if p.location.x < 0 { -p.location.x } else { p.location.x }
+    let dy = if p.location.y < 0 { -p.location.y } else { p.location.y }
+    dx + dy
+}
+
+pub fn destructure_point() -> I32 {
+    let p = (x: 3, y: 4)
+    let (a, b) = p
+    a + b
+}
+
+pub fn returning_tuple() -> (sum: I32, product: I32) {
+    let a = 6
+    let b = 7
+    (sum: a + b, product: a * b)
+}
+
+pub fn use_returning_tuple() -> I32 {
+    let r = returning_tuple()
+    r.sum + r.product
+}
+
+pub fn run_checks() {
+    let p = make_point(x: -3, y: 4)
+    assert(condition: x_of(p: p) == -3)
+    assert(condition: y_of(p: p) == 4)
+    assert(condition: manhattan(p: p) == 7)
+    // 3 + 4 == 7
+    assert(condition: destructure_point() == 7)
+    // (6+7) + (6*7) == 13 + 42 == 55
+    assert(condition: use_returning_tuple() == 55)
+}

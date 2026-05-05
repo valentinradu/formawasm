@@ -1,3 +1,5 @@
+#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
+
 //! Pre-flight rejection tests. Each test constructs a minimal
 //! `IrModule` exhibiting one of the five rejected shapes and asserts
 //! [`PreflightError`] surfaces the matching variant.

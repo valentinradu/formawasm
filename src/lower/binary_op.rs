@@ -33,12 +33,13 @@ pub fn lower_binary_op(
     // Range expressions allocate a `{ start, end }` aggregate in
     // linear memory and don't fit the operand-prim arithmetic path.
     if matches!(op, BinaryOperator::Range) {
-        let ResolvedType::Range(inner) = ty else {
-            return Err(LowerError::NotYetImplemented {
+        let module = ctx.module()?;
+        let inner = crate::compound::range_bound(ty, module).ok_or_else(|| {
+            LowerError::NotYetImplemented {
                 what: format!("Range BinaryOp carrying non-Range type {ty:?}"),
-            });
-        };
-        return lower_range(inner.as_ref(), left, right, sink, ctx);
+            }
+        })?;
+        return lower_range(inner, left, right, sink, ctx);
     }
 
     let operand_prim = match left.ty() {
@@ -46,14 +47,10 @@ pub fn lower_binary_op(
         ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
-        | ResolvedType::Array(_)
-        | ResolvedType::Range(_)
-        | ResolvedType::Optional(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
-        | ResolvedType::Dictionary { .. }
         | ResolvedType::Closure { .. }
         | ResolvedType::Error => {
             return Err(LowerError::NotYetImplemented {

@@ -1,0 +1,34 @@
+// 03 — Closures with capture: closure conversion + env struct.
+// Targets: ClosureConversionPass, captured locals lifted into a synthetic
+// env struct, funcref-based call, capture of multiple distinct values.
+
+pub fn apply_increment(x: I32) -> I32 {
+    let inc = (n: I32) -> n + 1
+    inc(x)
+}
+
+pub fn capture_one(base: I32, x: I32) -> I32 {
+    let add_base = (n: I32) -> n + base
+    add_base(x)
+}
+
+pub fn capture_many(a: I32, b: I32, c: I32) -> I32 {
+    // Three captured values, one closure parameter.
+    let f = (n: I32) -> (n + a) * b - c
+    f(10)
+}
+
+pub fn capture_arrow_form(scale: I32) -> I32 {
+    // The binding's closure type tells the literal what `n` should be
+    // when the body has no annotation.
+    let f: (I32) -> I32 = (n) -> n * scale
+    f(7)
+}
+
+pub fn run_checks() {
+    assert(condition: apply_increment(x: 5) == 6)
+    assert(condition: capture_one(base: 10, x: 5) == 15)
+    // (10 + 2) * 3 - 1 == 35
+    assert(condition: capture_many(a: 2, b: 3, c: 1) == 35)
+    assert(condition: capture_arrow_form(scale: 3) == 21)
+}
