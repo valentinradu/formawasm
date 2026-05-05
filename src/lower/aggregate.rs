@@ -93,16 +93,23 @@ pub(super) fn store_aggregate_field(
             store_primitive(*p, field_layout, sink);
             Ok(())
         }
-        // Other aggregate / non-storable field types stay rejected
-        // pending the matching nested-aggregate-field mc — the layout
-        // planner already gates these out, so this arm is defensive.
+        // Aggregate field types (nested struct, enum, tuple, the
+        // four prelude compounds, closure, trait fat pointer) all
+        // live in linear memory and are referenced by an `i32`
+        // pointer at the field offset. The pointer comes back on
+        // the wasm value stack from `lower_expr`; we just need an
+        // `i32_store` at the right offset.
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Closure { .. }
         | ResolvedType::Trait(_)
-        | ResolvedType::Generic { .. }
-        | ResolvedType::TypeParam(_)
+        | ResolvedType::Generic { .. } => {
+            super::optional::lower_coerced(value_expr, field_ty, sink, ctx)?;
+            sink.i32_store(field_mem_arg(field_layout));
+            Ok(())
+        }
+        ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }
         | ResolvedType::Error => Err(LowerError::FieldAccessOnNonAggregate {
             ty: field_ty.clone(),
@@ -302,6 +309,7 @@ pub fn lower_enum_inst(
         variant,
         variant_idx,
         fields,
+        ty,
         ..
     } = expr
     else {
@@ -312,10 +320,19 @@ pub fn lower_enum_inst(
 
     let id = enum_id.ok_or(LowerError::ExternalEnumInst)?;
     let module = ctx.module()?;
-    let e = module
+    let e_decl = module
         .enums
         .get(id.0 as usize)
         .ok_or(LowerError::UnknownEnum(id))?;
+    // Substitute generic args: when this EnumInst's type is
+    // `Generic { Enum(id), [...] }` (the post-0.0.4-beta shape for
+    // Optional<T> / user-generic enums), each variant field's
+    // declared `TypeParam(name)` becomes the matching concrete
+    // arg. For non-generic enums the helper returns the
+    // declaration unchanged.
+    let type_args = crate::compound::generic_args_for_enum(ty, id);
+    let e_owned = crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
+    let e = &e_owned;
     let layout = plan_enum(e, module)?;
 
     let (variant_layout, variant_def) =
@@ -1174,9 +1191,21 @@ pub fn lower_field_access(
         lookup_field_by_name_with_meta(&fields_meta, &layout.fields, field, &type_tag(object.ty()))?
     };
 
-    let primitive = primitive_of(&field_def.ty)?;
+    // Aggregate field types (Optional<T>, Struct, Tuple, …) live as
+    // a heap-pointer cell at the field's offset; primitive fields
+    // load through `load_primitive` at the matching width. Choose
+    // by classifying `field_def.ty`: anything that lowers to an
+    // `i32` body-value is a pointer cell.
     lower_expr(object, sink, ctx)?;
-    load_primitive(primitive, *field_layout, sink);
+    if let Ok(prim) = primitive_of(&field_def.ty) {
+        load_primitive(prim, *field_layout, sink);
+    } else {
+        // Pointer-typed field (Optional, Array, Range, Dictionary,
+        // Struct, Enum, Tuple, Closure, Trait). The store path
+        // wrote an `i32` here via `i32_store(field_mem_arg(...))`,
+        // so the load mirrors that.
+        sink.i32_load(field_mem_arg(*field_layout));
+    }
     Ok(())
 }
 
@@ -1187,15 +1216,20 @@ pub(super) fn layout_for_aggregate(
     ty: &ResolvedType,
     module: &IrModule,
 ) -> Result<(StructLayout, Vec<IrField>), LowerError> {
+    // Resolve the struct id transparently through
+    // `Generic { base: Struct(_) }` so user generics
+    // monomorphised to a concrete struct keep working when the IR
+    // surfaces them in the post-0.0.4-beta `Generic` shape rather
+    // than the bare `Struct(id)` form.
+    if let Some(id) = crate::compound::struct_id_of(ty) {
+        let s = module
+            .structs
+            .get(id.0 as usize)
+            .ok_or(LowerError::UnknownStruct(id))?;
+        let layout = plan_struct(s, module)?;
+        return Ok((layout, s.fields.clone()));
+    }
     match ty {
-        ResolvedType::Struct(id) => {
-            let s = module
-                .structs
-                .get(id.0 as usize)
-                .ok_or(LowerError::UnknownStruct(*id))?;
-            let layout = plan_struct(s, module)?;
-            Ok((layout, s.fields.clone()))
-        }
         ResolvedType::Tuple(_) => {
             let synthetic = synthetic_struct_for_tuple(ty)?;
             let layout = plan_struct(&synthetic, module)?;
@@ -1204,6 +1238,7 @@ pub(super) fn layout_for_aggregate(
         ResolvedType::Primitive(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
+        | ResolvedType::Struct(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }

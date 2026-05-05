@@ -5,15 +5,14 @@
 //! `wit_parser::Resolve` to confirm the emitted text is real WIT.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
+use common::{seed_prelude, optional_ty, array_ty, dict_ty};
 
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
     BindingId, FunctionId, IrEnum, IrEnumVariant, IrField, IrFunction, IrFunctionParam, IrModule,
-    IrSpan, IrStruct, ResolvedType, StructId,
+    IrSpan, IrStruct, ResolvedType,
 };
 use formawasm::survey::{self, PublicSurface};
-use formawasm::types::TypeMapError;
 use formawasm::wit::{self, PACKAGE, WORLD_NAME, WitEmitError};
 use wit_parser::Resolve;
 

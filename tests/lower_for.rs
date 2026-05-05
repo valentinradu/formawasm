@@ -8,7 +8,7 @@
 //! memory.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
+use common::{seed_prelude, array_ty, range_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,

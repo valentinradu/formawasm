@@ -6,10 +6,10 @@
 //! rejection.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
+use common::optional_ty;
 
 use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
-use formalang::ir::{IrField, IrModule, IrSpan, IrStruct, ResolvedType, StructId};
+use formalang::ir::{IrField, IrModule, IrSpan, IrStruct, ResolvedType};
 use formawasm::layout::{self, FieldLayout, LayoutError, StructLayout};
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;

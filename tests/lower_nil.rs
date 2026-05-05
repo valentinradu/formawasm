@@ -7,7 +7,7 @@
 //! through the exported memory.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
+use common::{seed_prelude, optional_ty};
 
 use formalang::ast::{Literal, PrimitiveType};
 use formalang::ir::{

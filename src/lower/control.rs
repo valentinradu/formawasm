@@ -185,26 +185,24 @@ pub fn lower_match(
     };
 
     let module = ctx.module()?;
-    let enum_id = match scrutinee.ty() {
-        ResolvedType::Enum(id) => *id,
-        ResolvedType::Primitive(_)
-        | ResolvedType::Struct(_)
-        | ResolvedType::Trait(_)
-        | ResolvedType::Tuple(_)
-        | ResolvedType::Generic { .. }
-        | ResolvedType::TypeParam(_)
-        | ResolvedType::External { .. }
-        | ResolvedType::Closure { .. }
-        | ResolvedType::Error => {
-            return Err(LowerError::FieldAccessOnNonAggregate {
-                ty: scrutinee.ty().clone(),
-            });
-        }
+    let Some(enum_id) = crate::compound::enum_id_of(scrutinee.ty()) else {
+        return Err(LowerError::FieldAccessOnNonAggregate {
+            ty: scrutinee.ty().clone(),
+        });
     };
-    let e = module
+    let e_decl = module
         .enums
         .get(enum_id.0 as usize)
         .ok_or(LowerError::UnknownEnum(enum_id))?;
+    // For a generic enum (e.g. `Optional<T>` where the scrutinee
+    // type is `Generic { Enum(opt), [String] }`), substitute the
+    // declared `TypeParam("T")` placeholders in every variant
+    // field with the concrete type args before planning the
+    // layout. The bare-enum case (`ResolvedType::Enum(_)`) returns
+    // the declaration unchanged.
+    let type_args = crate::compound::generic_args_for_enum(scrutinee.ty(), enum_id);
+    let e_owned = crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
+    let e = &e_owned;
     let layout = plan_enum(e, module)?;
     let num_variants = layout.variants.len();
     let num_arms = arms.len();

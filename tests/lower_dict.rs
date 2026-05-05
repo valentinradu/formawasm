@@ -7,7 +7,7 @@
 //! comparing keys (string keys via `__str_eq`).
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
+use common::{seed_prelude, dict_ty};
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
 use formalang::ir::{IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};

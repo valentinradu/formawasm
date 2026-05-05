@@ -8,11 +8,10 @@
 //! container payloads not yet supported.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::PrimitiveType;
 use formalang::ir::{IrModule, ResolvedType, StructId};
-use formawasm::layout::{self, LayoutError, OPTIONAL_TAG_ALIGN, OPTIONAL_TAG_SIZE, OptionalLayout};
+use formawasm::layout::{self, OPTIONAL_TAG_ALIGN, OPTIONAL_TAG_SIZE, OptionalLayout};
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
 type TestResult = Result<(), TestError>;

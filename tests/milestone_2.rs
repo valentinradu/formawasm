@@ -14,7 +14,7 @@
 //! value, and wraps a sentinel marker into an `I32?` along the way.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
+use common::{seed_prelude, optional_ty, dict_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,

@@ -107,6 +107,17 @@ pub fn check(module: &IrModule) -> Result<(), PreflightError> {
 // ───────────────────────────────────────────────────────────────────
 
 fn check_struct(s: &IrStruct) -> Result<(), PreflightError> {
+    // Generic struct *definitions* (e.g. the prelude's `Array<T>`,
+    // `Range<T>`, `Dictionary<K,V>`) keep their `TypeParam(_)`
+    // placeholders in field types — those resolve at every
+    // monomorphic instantiation site, not in the generic
+    // declaration itself. Walking the field types would surface
+    // the placeholders as `UnresolvedTypeParam` errors. Skip the
+    // body walk; the closure-field check above doesn't trip on
+    // `TypeParam` so it still runs for non-generic definitions.
+    if !s.generic_params.is_empty() {
+        return Ok(());
+    }
     let is_public = matches!(s.visibility, Visibility::Public);
     for field in &s.fields {
         if is_public && matches!(field.ty, ResolvedType::Closure { .. }) {
@@ -159,6 +170,13 @@ fn check_trait(t: &IrTrait) -> Result<(), PreflightError> {
 }
 
 fn check_enum(e: &formalang::ir::IrEnum) -> Result<(), PreflightError> {
+    // Skip the body of generic enum *declarations* (the prelude's
+    // `Optional<T>` is the canonical case). Their variant fields
+    // carry `TypeParam(_)` placeholders by design; each
+    // monomorphic instantiation supplies a real type elsewhere.
+    if !e.generic_params.is_empty() {
+        return Ok(());
+    }
     for variant in &e.variants {
         for field in &variant.fields {
             check_type(

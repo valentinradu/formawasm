@@ -1113,7 +1113,7 @@ fn emit_function(
             name: f.name.clone(),
         })?;
 
-    let (param_valtypes, param_bindings) = lower_params(f)?;
+    let (param_valtypes, param_bindings) = lower_params_with_self(f, impl_self_struct_id)?;
     let result_valtypes = body_result_types(f.return_type.as_ref())?;
 
     let self_struct_id = impl_self_struct_id.or_else(|| detect_self_struct(f));
@@ -1377,13 +1377,32 @@ fn lower_function_signature(
 }
 
 fn lower_params(f: &IrFunction) -> Result<(Vec<ValType>, Vec<ParamBinding>), ModuleLowerError> {
+    lower_params_with_self(f, None)
+}
+
+/// Like [`lower_params`] but injects `Struct(self_struct_id)` as the
+/// type of a leading `self` param whose `ty` is `None`. The
+/// formalang IR records inherent-impl `self` parameters with the
+/// type left implicit — the impl target carries it. The caller
+/// (`emit_function`) supplies the impl's self-struct id so the
+/// param-type loop here doesn't need to thread it through every
+/// generic-resolution path.
+fn lower_params_with_self(
+    f: &IrFunction,
+    self_struct_id: Option<StructId>,
+) -> Result<(Vec<ValType>, Vec<ParamBinding>), ModuleLowerError> {
     let mut valtypes = Vec::with_capacity(f.params.len());
     let mut bindings = Vec::with_capacity(f.params.len());
 
-    for param in &f.params {
+    for (idx, param) in f.params.iter().enumerate() {
+        let injected_self = (idx == 0 && param.name == "self" && param.ty.is_none())
+            .then_some(())
+            .and(self_struct_id)
+            .map(ResolvedType::Struct);
         let ty = param
             .ty
             .as_ref()
+            .or(injected_self.as_ref())
             .ok_or_else(|| ModuleLowerError::MissingParamType {
                 function: f.name.clone(),
                 name: param.name.clone(),
