@@ -300,10 +300,7 @@ fn optional_field_lays_out_as_pointer() -> TestResult {
     // memory). The redundant `optional: true` AST flag is preserved
     // alongside the resolved `Optional(T)` type but no longer drives
     // a layout rejection.
-    let mut f = field(
-        "maybe",
-        optional_ty(primitive(PrimitiveType::I32)),
-    );
+    let mut f = field("maybe", optional_ty(primitive(PrimitiveType::I32)));
     f.optional = true;
     let s = make_struct("Opt", vec![f]);
     let module = IrModule::new();
@@ -319,7 +316,6 @@ fn optional_field_lays_out_as_pointer() -> TestResult {
         }],
     )
 }
-
 
 #[test]
 fn never_field_is_not_yet_supported() -> TestResult {

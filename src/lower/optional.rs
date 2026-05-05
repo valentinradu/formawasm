@@ -32,11 +32,7 @@ pub(super) fn some_wrap_payload<'a>(
     module: &formalang::ir::IrModule,
 ) -> Option<&'a ResolvedType> {
     let inner = crate::compound::optional_inner(target_ty, module)?;
-    if value_ty == inner {
-        Some(inner)
-    } else {
-        None
-    }
+    if value_ty == inner { Some(inner) } else { None }
 }
 
 /// Lower a Some-wrap of `value_expr`'s value into a fresh
@@ -304,10 +300,8 @@ fn materialize_trait_fat_pointer(
     use crate::layout::POINTER_SIZE;
     use crate::module::MEMORY_INDEX;
     use wasm_encoder::MemArg;
-    let vtable_offset = ctx.vtable_offset(
-        trait_id,
-        crate::module_lowering::impl_target_key(target),
-    )?;
+    let vtable_offset =
+        ctx.vtable_offset(trait_id, crate::module_lowering::impl_target_key(target))?;
     // Stash the data pointer in a scratch local so we can store
     // it after evaluating the allocator call.
     let data_scratch = ctx.next_scratch_local(ValType::I32)?;
@@ -317,7 +311,9 @@ fn materialize_trait_fat_pointer(
     let cell_size = i32::try_from(POINTER_SIZE.saturating_mul(2)).unwrap_or(8);
     let bump_idx = ctx.bump_allocator()?;
     let cell_scratch = ctx.next_scratch_local(ValType::I32)?;
-    sink.i32_const(cell_size).call(bump_idx).local_set(cell_scratch);
+    sink.i32_const(cell_size)
+        .call(bump_idx)
+        .local_set(cell_scratch);
 
     let mem_arg = |off: u64| MemArg {
         offset: off,

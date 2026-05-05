@@ -8,7 +8,7 @@
 //! tag/payload bytes from linear memory.
 
 mod common;
-use common::{seed_prelude, optional_ty};
+use common::{optional_ty, seed_prelude};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,

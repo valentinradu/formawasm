@@ -7,7 +7,7 @@
 //! comparing keys (string keys via `__str_eq`).
 
 mod common;
-use common::{seed_prelude, dict_ty};
+use common::{dict_ty, seed_prelude};
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
 use formalang::ir::{IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};
@@ -27,7 +27,6 @@ fn validate(bytes: &[u8]) -> Result<(), TestError> {
 const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
-
 
 fn string_literal(text: &str) -> IrExpr {
     IrExpr::Literal {

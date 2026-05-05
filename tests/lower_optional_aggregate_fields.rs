@@ -8,7 +8,7 @@
 //! cell's tag + payload through linear memory.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty};
+use common::{array_ty, optional_ty, seed_prelude};
 
 use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
@@ -202,11 +202,9 @@ fn array_optional_element_some_wraps_each_initializer() -> TestResult {
     };
     let mut module = IrModule::new();
     seed_prelude(&mut module);
-    module.functions.push(function(
-        "make",
-        array_ty(elem_ty),
-        body,
-    ));
+    module
+        .functions
+        .push(function("make", array_ty(elem_ty), body));
 
     let bytes = module_lowering::lower_module(&module)?;
     validate(&bytes)?;

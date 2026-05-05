@@ -46,7 +46,10 @@ pub fn lower_literal(
     // the type identity, not the runtime value). Like `Nil`, intercept
     // before the primitive-only `prim` extraction so the type-mismatch
     // arm doesn't reject the heap-typed primitive.
-    if matches!(value, Literal::String(_) | Literal::Path(_) | Literal::Regex { .. }) {
+    if matches!(
+        value,
+        Literal::String(_) | Literal::Path(_) | Literal::Regex { .. }
+    ) {
         return lower_string_literal(value, ty, sink, ctx);
     }
 

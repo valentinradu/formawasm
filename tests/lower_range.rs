@@ -8,7 +8,7 @@
 //! the exported memory.
 
 mod common;
-use common::{seed_prelude, range_ty};
+use common::{range_ty, seed_prelude};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
@@ -30,7 +30,6 @@ fn validate(bytes: &[u8]) -> Result<(), TestError> {
 const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
-
 
 fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     let suffix = if ty == PrimitiveType::I64 {

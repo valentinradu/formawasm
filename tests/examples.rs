@@ -82,7 +82,9 @@ fn run_checks(name: &str) -> TestResult {
             if condition {
                 Ok(())
             } else {
-                Err(wasmtime::Error::msg("formalang assert(false) — example produced an unexpected value"))
+                Err(wasmtime::Error::msg(
+                    "formalang assert(false) — example produced an unexpected value",
+                ))
             }
         })?;
     // Wire example 16's extern fn / extern impl method imports.

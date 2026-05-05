@@ -340,13 +340,14 @@ fn emit_arm_bindings(
         .iter()
         .position(|v| v.name.eq_ignore_ascii_case(&arm.variant))
         .unwrap_or(arm.variant_idx.0 as usize);
-    let variant_layout = layout
-        .variants
-        .get(variant_idx)
-        .ok_or_else(|| LowerError::UnknownVariant {
-            enum_name: "<scrutinee enum>".to_owned(),
-            variant: arm.variant.clone(),
-        })?;
+    let variant_layout =
+        layout
+            .variants
+            .get(variant_idx)
+            .ok_or_else(|| LowerError::UnknownVariant {
+                enum_name: "<scrutinee enum>".to_owned(),
+                variant: arm.variant.clone(),
+            })?;
 
     for (i, (name, binding_id, ty)) in arm.bindings.iter().enumerate() {
         let primitive = primitive_of(ty)?;
@@ -492,11 +493,10 @@ fn check_for_types<'a>(
     ty: &'a ResolvedType,
     module: &IrModule,
 ) -> Result<(ForSource<'a>, &'a ResolvedType), LowerError> {
-    let body_ty = crate::compound::array_elem(ty, module).ok_or_else(|| {
-        LowerError::NotYetImplemented {
+    let body_ty =
+        crate::compound::array_elem(ty, module).ok_or_else(|| LowerError::NotYetImplemented {
             what: format!("for-loop carrying non-Array result type {ty:?}"),
-        }
-    })?;
+        })?;
     let coll_ty = collection.ty();
     if let Some(bound_ty) = crate::compound::range_bound(coll_ty, module) {
         // Reject early on bound types we don't lower; matching also

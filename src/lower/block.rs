@@ -137,7 +137,9 @@ fn lower_assign(
             sink.local_set(local_idx);
             Ok(())
         }
-        IrExpr::Reference { target: ref_target, .. } => {
+        IrExpr::Reference {
+            target: ref_target, ..
+        } => {
             // `x = expr` where `x` resolves to a parameter or a
             // `let mut` local binding. Both kinds carry the same
             // `BindingId`; look it up in `ctx.bindings` and emit

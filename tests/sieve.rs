@@ -11,7 +11,7 @@
 //! `list<bool>` against the expected primes.
 
 mod common;
-use common::{seed_prelude, array_ty, range_ty};
+use common::{array_ty, range_ty, seed_prelude};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,
@@ -32,8 +32,6 @@ type TestResult = Result<(), TestError>;
 const fn primitive_ty(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
-
-
 
 fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
@@ -303,9 +301,15 @@ fn sieve_runs_under_wasmtime_component_runtime() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let sieve = instance.get_typed_func::<(i32,), (Vec<bool>,)>(&mut store, "sieve")?;

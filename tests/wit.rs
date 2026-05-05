@@ -5,7 +5,7 @@
 //! `wit_parser::Resolve` to confirm the emitted text is real WIT.
 
 mod common;
-use common::{seed_prelude, optional_ty, array_ty, dict_ty};
+use common::{array_ty, dict_ty, optional_ty, seed_prelude};
 
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
@@ -162,7 +162,6 @@ fn unit_return_type_omits_result_clause() -> TestResult {
     Ok(())
 }
 
-
 #[test]
 fn never_typed_parameter_is_rejected() -> TestResult {
     let mut module = IrModule::new();
@@ -183,7 +182,6 @@ fn never_typed_parameter_is_rejected() -> TestResult {
         other => Err(format!("expected NeverParam, got {other:?}").into()),
     }
 }
-
 
 #[test]
 fn export_index_out_of_range_is_rejected() -> TestResult {
@@ -786,9 +784,6 @@ fn list_of_optional_emits_nested_option_in_list() -> TestResult {
     Ok(())
 }
 
-
-
-
 #[test]
 fn record_with_list_field_round_trips() -> TestResult {
     let mut module = IrModule::new();
@@ -918,4 +913,3 @@ fn import_signature_round_trips_through_wit_parser() -> TestResult {
     }
     Ok(())
 }
-

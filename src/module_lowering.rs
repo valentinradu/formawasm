@@ -299,9 +299,11 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         // a module that calls them. Calls into prelude methods
         // resolve through `prelude_helper_index` further down.
         let is_prelude_target = match imp.target {
-            ImplTarget::Struct(sid) => Some(sid) == module.prelude_array_id()
-                || Some(sid) == module.prelude_dictionary_id()
-                || Some(sid) == module.prelude_range_id(),
+            ImplTarget::Struct(sid) => {
+                Some(sid) == module.prelude_array_id()
+                    || Some(sid) == module.prelude_dictionary_id()
+                    || Some(sid) == module.prelude_range_id()
+            }
             ImplTarget::Enum(eid) => Some(eid) == module.prelude_optional_id(),
             ImplTarget::Primitive(_) => true,
         };
@@ -327,10 +329,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
                 None => (None, false),
             },
             ImplTarget::Enum(eid) => (
-                module
-                    .enums
-                    .get(eid.0 as usize)
-                    .map(|e| e.name.clone()),
+                module.enums.get(eid.0 as usize).map(|e| e.name.clone()),
                 false,
             ),
             ImplTarget::Primitive(_) => (None, false), // handled separately
@@ -356,8 +355,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
                 params.remove(0);
             }
             let results = body_result_types(m.return_type.as_ref())?;
-            let import_name =
-                format!("{}-{}", kebab_case(&target_name), kebab_case(&m.name));
+            let import_name = format!("{}-{}", kebab_case(&target_name), kebab_case(&m.name));
             let wasm_idx = builder.declare_function_import(
                 IMPORT_MODULE_NAME,
                 &import_name,
@@ -447,7 +445,8 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             // Push every internal param except slot 0 (the
             // dropped receiver).
             for slot in 1..internal_params.len() {
-                let slot_idx = u32::try_from(slot).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                let slot_idx =
+                    u32::try_from(slot).map_err(|_| ModuleLowerError::TooManyFunctions)?;
                 i.local_get(slot_idx);
             }
             i.call(raw_import_idx);
@@ -589,8 +588,12 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             let prelude_compound: Option<&str> = match imp.target {
                 ImplTarget::Struct(sid) if Some(sid) == module.prelude_array_id() => Some("array"),
                 ImplTarget::Struct(sid) if Some(sid) == module.prelude_range_id() => Some("range"),
-                ImplTarget::Struct(sid) if Some(sid) == module.prelude_dictionary_id() => Some("dict"),
-                ImplTarget::Enum(eid) if Some(eid) == module.prelude_optional_id() => Some("optional"),
+                ImplTarget::Struct(sid) if Some(sid) == module.prelude_dictionary_id() => {
+                    Some("dict")
+                }
+                ImplTarget::Enum(eid) if Some(eid) == module.prelude_optional_id() => {
+                    Some("optional")
+                }
                 _ => None,
             };
             if let Some(target) = prelude_compound {
@@ -651,8 +654,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     // emitting a colliding wasm export.
     let mut export_winners: std::collections::HashSet<u32> = std::collections::HashSet::new();
     {
-        let mut taken: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (i, f) in module.functions.iter().enumerate() {
             if f.is_extern() || f.name.starts_with("__") {
                 continue;
@@ -1118,9 +1120,7 @@ fn build_vtable_plumbing(
         // is what makes virtual dispatch through a composed trait
         // (e.g. `let x: NamedRenderable = …; x.render()`) reach the
         // inherited `Renderable::render` body.
-        for (owning_trait_id, trait_method) in
-            effective_trait_methods(trait_id, module)?.iter()
-        {
+        for (owning_trait_id, trait_method) in effective_trait_methods(trait_id, module)?.iter() {
             let funcref_slot = if *owning_trait_id == trait_id {
                 let (method_idx_in_impl, _) = imp
                     .functions
@@ -1152,9 +1152,7 @@ fn build_vtable_plumbing(
                             return None;
                         }
                         let tref = candidate.trait_ref.as_ref()?;
-                        if tref.trait_id != *owning_trait_id
-                            || candidate.target != imp.target
-                        {
+                        if tref.trait_id != *owning_trait_id || candidate.target != imp.target {
                             return None;
                         }
                         let (m_idx, _) = candidate
@@ -1225,8 +1223,7 @@ fn effective_trait_methods(
     let mut out: Vec<(TraitId, formalang::ir::IrFunctionSig)> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut stack: Vec<TraitId> = vec![trait_id];
-    let mut visited_traits: std::collections::HashSet<u32> =
-        std::collections::HashSet::new();
+    let mut visited_traits: std::collections::HashSet<u32> = std::collections::HashSet::new();
     while let Some(tid) = stack.first().copied() {
         stack.remove(0);
         if !visited_traits.insert(tid.0) {
@@ -1673,9 +1670,10 @@ fn emit_canonical_abi_import_trampoline(
 }
 
 fn needs_canonical_abi_wrapper(f: &IrFunction, module: &IrModule) -> bool {
-    f.params
-        .iter()
-        .any(|p| p.ty.as_ref().is_some_and(|ty| param_needs_split(ty, module)))
+    f.params.iter().any(|p| {
+        p.ty.as_ref()
+            .is_some_and(|ty| param_needs_split(ty, module))
+    })
 }
 
 /// Whether a parameter type lowers to multiple core-wasm i32 values
@@ -1693,7 +1691,10 @@ fn param_needs_split(ty: &ResolvedType, module: &IrModule) -> bool {
     ) {
         return true;
     }
-    if matches!(crate::compound::Compound::of(ty, module), crate::compound::Compound::Array(_)) {
+    if matches!(
+        crate::compound::Compound::of(ty, module),
+        crate::compound::Compound::Array(_)
+    ) {
         return true;
     }
     // Record / variant flatten: the canonical-ABI passes the
@@ -1726,7 +1727,10 @@ fn param_needs_split(ty: &ResolvedType, module: &IrModule) -> bool {
 ///
 /// Empty structs and `Never` collapse to zero slots — `Never` is
 /// also rejected upstream as a parameter type.
-fn flatten_canonical_abi(ty: &ResolvedType, module: &IrModule) -> Result<Vec<ValType>, ModuleLowerError> {
+fn flatten_canonical_abi(
+    ty: &ResolvedType,
+    module: &IrModule,
+) -> Result<Vec<ValType>, ModuleLowerError> {
     use formalang::ast::PrimitiveType;
     match ty {
         ResolvedType::Primitive(p) => match p {
@@ -1744,7 +1748,10 @@ fn flatten_canonical_abi(ty: &ResolvedType, module: &IrModule) -> Result<Vec<Val
             }
         },
         _ => {
-            if matches!(crate::compound::Compound::of(ty, module), crate::compound::Compound::Array(_)) {
+            if matches!(
+                crate::compound::Compound::of(ty, module),
+                crate::compound::Compound::Array(_)
+            ) {
                 return Ok(vec![ValType::I32, ValType::I32]);
             }
             if let Some(sid) = crate::compound::struct_id_of(ty) {
@@ -1776,7 +1783,8 @@ fn flatten_canonical_abi(ty: &ResolvedType, module: &IrModule) -> Result<Vec<Val
                 // referencing `TypeParam("T")` lift correctly when
                 // the enum is `Optional<String>` etc.
                 let type_args = crate::compound::generic_args_for_enum(ty, eid);
-                let e_owned = crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
+                let e_owned =
+                    crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
                 let e = &e_owned;
                 let mut max_payload: Vec<ValType> = Vec::new();
                 for variant in &e.variants {
@@ -1836,13 +1844,16 @@ fn emit_canonical_abi_wrapper(
                     function: f.name.clone(),
                     name: p.name.clone(),
                 })?;
-        let flat_start = u32::try_from(param_valtypes.len())
-            .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        let flat_start =
+            u32::try_from(param_valtypes.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?;
         let flat = flatten_canonical_abi(ty, module)?;
         let flat_count =
             u32::try_from(flat.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?;
         param_valtypes.extend(flat);
-        param_slots.push(ParamSlots { flat_start, flat_count });
+        param_slots.push(ParamSlots {
+            flat_start,
+            flat_count,
+        });
     }
     let result_valtypes = body_result_types(f.return_type.as_ref())?;
 
@@ -1870,8 +1881,10 @@ fn emit_canonical_abi_wrapper(
             ops: MaterialisationOps,
         },
     }
-    use crate::layout::{ARRAY_HEADER_LEN_OFFSET, ARRAY_HEADER_PTR_OFFSET, ARRAY_HEADER_SIZE,
-        STRING_HEADER_SIZE, STRING_LEN_OFFSET, STRING_PTR_OFFSET};
+    use crate::layout::{
+        ARRAY_HEADER_LEN_OFFSET, ARRAY_HEADER_PTR_OFFSET, ARRAY_HEADER_SIZE, STRING_HEADER_SIZE,
+        STRING_LEN_OFFSET, STRING_PTR_OFFSET,
+    };
 
     enum MaterialisationOps {
         StringFromSlots {
@@ -1910,8 +1923,14 @@ fn emit_canonical_abi_wrapper(
         value: FieldValue,
     }
     enum FieldValue {
-        DirectSlot { slot: u32, valtype: ValType },
-        MaterialisedScratch { scratch: u32, ops: Box<MaterialisationOps> },
+        DirectSlot {
+            slot: u32,
+            valtype: ValType,
+        },
+        MaterialisedScratch {
+            scratch: u32,
+            ops: Box<MaterialisationOps>,
+        },
     }
 
     // Recursively build a `MaterialisationOps` for a given type
@@ -1929,7 +1948,9 @@ fn emit_canonical_abi_wrapper(
         // Strings / lists materialise to a header.
         let needs_string_header = matches!(
             ty,
-            ResolvedType::Primitive(PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex)
+            ResolvedType::Primitive(
+                PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex
+            )
         );
         let needs_list_header = matches!(
             crate::compound::Compound::of(ty, module),
@@ -1962,8 +1983,8 @@ fn emit_canonical_abi_wrapper(
         // an inline aggregate with each field laid out in
         // declaration order, then push the resulting pointer.
         if let ResolvedType::Tuple(fields) = ty {
-            let synthetic = crate::lower::aggregate::synthetic_struct_for_tuple(ty)
-                .map_err(|e| match e {
+            let synthetic =
+                crate::lower::aggregate::synthetic_struct_for_tuple(ty).map_err(|e| match e {
                     crate::lower::LowerError::FieldAccessOnNonAggregate { .. } => {
                         ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
                             kind: format!("synthetic tuple for {ty:?}"),
@@ -2005,7 +2026,13 @@ fn emit_canonical_abi_wrapper(
             for (fdef, flayout) in s.fields.iter().zip(layout.fields.iter()) {
                 fields.push(StructFieldOp {
                     offset: flayout.offset,
-                    value: build_field_value(&fdef.ty, cursor, scratch_count, scratch_base, module)?,
+                    value: build_field_value(
+                        &fdef.ty,
+                        cursor,
+                        scratch_count,
+                        scratch_base,
+                        module,
+                    )?,
                 });
             }
             let scratch = scratch_base
@@ -2029,7 +2056,8 @@ fn emit_canonical_abi_wrapper(
                 })
             })?;
             let type_args = crate::compound::generic_args_for_enum(ty, eid);
-            let e_owned = crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
+            let e_owned =
+                crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
             let e = &e_owned;
             let layout = crate::layout::plan_enum(e, module)?;
             let tag_slot = *cursor;
@@ -2044,7 +2072,10 @@ fn emit_canonical_abi_wrapper(
                 for fdef in &v.fields {
                     let f = flatten_canonical_abi(&fdef.ty, module)?;
                     sub_count = sub_count
-                        .checked_add(u32::try_from(f.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?)
+                        .checked_add(
+                            u32::try_from(f.len())
+                                .map_err(|_| ModuleLowerError::TooManyFunctions)?,
+                        )
                         .ok_or(ModuleLowerError::TooManyFunctions)?;
                 }
                 if sub_count > max_payload_count {
@@ -2148,16 +2179,24 @@ fn emit_canonical_abi_wrapper(
                     _ => ARRAY_HEADER_SIZE,
                 };
                 let header_size_signed = i32::try_from(header_size).unwrap_or(8);
-                i.i32_const(header_size_signed).call(alloc_idx).local_set(scratch);
-                i.local_get(scratch).local_get(*ptr_slot).i32_store(mem_arg(STRING_PTR_OFFSET));
-                i.local_get(scratch).local_get(*len_slot).i32_store(mem_arg(STRING_LEN_OFFSET));
+                i.i32_const(header_size_signed)
+                    .call(alloc_idx)
+                    .local_set(scratch);
+                i.local_get(scratch)
+                    .local_get(*ptr_slot)
+                    .i32_store(mem_arg(STRING_PTR_OFFSET));
+                i.local_get(scratch)
+                    .local_get(*len_slot)
+                    .i32_store(mem_arg(STRING_LEN_OFFSET));
                 if matches!(ops, MaterialisationOps::ListFromSlots { .. }) {
                     // Array header is { ptr, len, cap }; we fill
                     // ptr/len from the canonical (ptr, len) and
                     // mirror len into cap so consumers reading
                     // the cap see a coherent value.
                     let cap_offset = ARRAY_HEADER_LEN_OFFSET + 4;
-                    i.local_get(scratch).local_get(*len_slot).i32_store(mem_arg(cap_offset));
+                    i.local_get(scratch)
+                        .local_get(*len_slot)
+                        .i32_store(mem_arg(cap_offset));
                     let _ = ARRAY_HEADER_PTR_OFFSET; // referenced for clarity
                 }
             }
@@ -2173,22 +2212,40 @@ fn emit_canonical_abi_wrapper(
                                 ValType::I64 => i.i64_store(mem_arg(f.offset)),
                                 ValType::F32 => i.f32_store(mem_arg(f.offset)),
                                 ValType::F64 => i.f64_store(mem_arg(f.offset)),
-                                _ => return Err(ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
-                                    kind: format!("canonical-ABI store of unsupported valtype {valtype:?}"),
-                                })),
+                                _ => {
+                                    return Err(ModuleLowerError::TypeMap(
+                                        TypeMapError::NotYetSupported {
+                                            kind: format!(
+                                                "canonical-ABI store of unsupported valtype {valtype:?}"
+                                            ),
+                                        },
+                                    ));
+                                }
                             };
                         }
-                        FieldValue::MaterialisedScratch { scratch: sub_scratch, ops: sub_ops } => {
+                        FieldValue::MaterialisedScratch {
+                            scratch: sub_scratch,
+                            ops: sub_ops,
+                        } => {
                             emit_materialise(sub_ops, *sub_scratch, i, alloc_idx, mem_arg)?;
-                            i.local_get(scratch).local_get(*sub_scratch).i32_store(mem_arg(f.offset));
+                            i.local_get(scratch)
+                                .local_get(*sub_scratch)
+                                .i32_store(mem_arg(f.offset));
                         }
                     }
                 }
             }
-            MaterialisationOps::Variant { size, tag_slot, payload_offset, payload_slots } => {
+            MaterialisationOps::Variant {
+                size,
+                tag_slot,
+                payload_offset,
+                payload_slots,
+            } => {
                 let size_signed = i32::try_from(*size).unwrap_or(0);
                 i.i32_const(size_signed).call(alloc_idx).local_set(scratch);
-                i.local_get(scratch).local_get(*tag_slot).i32_store(mem_arg(0));
+                i.local_get(scratch)
+                    .local_get(*tag_slot)
+                    .i32_store(mem_arg(0));
                 // Store each payload slot at successive 4-byte
                 // offsets past payload_offset. Today every
                 // payload field is i32-shaped (the layout planner
@@ -2198,7 +2255,9 @@ fn emit_canonical_abi_wrapper(
                     let off = payload_offset
                         .checked_add(u32::try_from(idx).unwrap_or(0).saturating_mul(4))
                         .unwrap_or(*payload_offset);
-                    i.local_get(scratch).local_get(*slot).i32_store(mem_arg(off));
+                    i.local_get(scratch)
+                        .local_get(*slot)
+                        .i32_store(mem_arg(off));
                 }
             }
         }
@@ -2310,14 +2369,12 @@ fn lower_params_with_self_ty(
         } else {
             None
         };
-        let ty = param
-            .ty
-            .as_ref()
-            .or(injected_self)
-            .ok_or_else(|| ModuleLowerError::MissingParamType {
+        let ty = param.ty.as_ref().or(injected_self).ok_or_else(|| {
+            ModuleLowerError::MissingParamType {
                 function: f.name.clone(),
                 name: param.name.clone(),
-            })?;
+            }
+        })?;
         let vt = param_value_type(param, ty, &f.name)?;
         valtypes.push(vt);
         bindings.push((param.binding_id, vt));

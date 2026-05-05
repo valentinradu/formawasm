@@ -92,7 +92,10 @@ pub(super) fn store_aggregate_field(
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let module = ctx.module()?;
-    if matches!(crate::compound::Compound::of(field_ty, module), crate::compound::Compound::Optional(_)) {
+    if matches!(
+        crate::compound::Compound::of(field_ty, module),
+        crate::compound::Compound::Optional(_)
+    ) {
         super::optional::lower_coerced(value_expr, field_ty, sink, ctx)?;
         sink.i32_store(field_mem_arg(field_layout));
         return Ok(());
@@ -119,11 +122,11 @@ pub(super) fn store_aggregate_field(
             sink.i32_store(field_mem_arg(field_layout));
             Ok(())
         }
-        ResolvedType::TypeParam(_)
-        | ResolvedType::External { .. }
-        | ResolvedType::Error => Err(LowerError::FieldAccessOnNonAggregate {
-            ty: field_ty.clone(),
-        }),
+        ResolvedType::TypeParam(_) | ResolvedType::External { .. } | ResolvedType::Error => {
+            Err(LowerError::FieldAccessOnNonAggregate {
+                ty: field_ty.clone(),
+            })
+        }
     }
 }
 
@@ -495,11 +498,10 @@ pub fn lower_array(
     };
 
     let module = ctx.module()?;
-    let elem_ty = crate::compound::array_elem(ty, module).ok_or_else(|| {
-        LowerError::NotYetImplemented {
+    let elem_ty =
+        crate::compound::array_elem(ty, module).ok_or_else(|| LowerError::NotYetImplemented {
             what: format!("Array literal carrying non-Array type {ty:?}"),
-        }
-    })?;
+        })?;
     let layout = plan_array(elem_ty, module)?;
 
     let len_u32 = u32::try_from(elements.len()).map_err(|_| LowerError::NotYetImplemented {

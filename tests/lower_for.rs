@@ -8,7 +8,7 @@
 //! memory.
 
 mod common;
-use common::{seed_prelude, array_ty, range_ty};
+use common::{array_ty, range_ty, seed_prelude};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
@@ -32,8 +32,6 @@ fn validate(bytes: &[u8]) -> Result<(), TestError> {
 const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
-
-
 
 fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {

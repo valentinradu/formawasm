@@ -8,7 +8,7 @@
 //! every supported element type.
 
 mod common;
-use common::{seed_prelude, array_ty};
+use common::{array_ty, seed_prelude};
 
 use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
@@ -32,7 +32,6 @@ fn validate(bytes: &[u8]) -> Result<(), TestError> {
 const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
-
 
 fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     let suffix = if ty == PrimitiveType::I64 {

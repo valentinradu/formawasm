@@ -3,7 +3,7 @@
 //! [`PreflightError`] surfaces the matching variant.
 
 mod common;
-use common::{seed_prelude, array_ty};
+use common::{array_ty, seed_prelude};
 
 use formalang::ast::{Literal, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{

@@ -222,7 +222,8 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
     // collisions — the surviving overload is the first declared.
     // Internal call sites still resolve via FunctionId, so the
     // skipped overloads remain reachable from the rest of the module.
-    let mut emitted_export_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut emitted_export_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for &fid in &surface.exports {
         let f = module
             .functions
@@ -256,11 +257,7 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
     Ok(out)
 }
 
-fn write_record(
-    out: &mut String,
-    s: &IrStruct,
-    module: &IrModule,
-) -> Result<(), WitEmitError> {
+fn write_record(out: &mut String, s: &IrStruct, module: &IrModule) -> Result<(), WitEmitError> {
     writeln!(out, "  record {} {{", kebab_case(&s.name)).map_err(invalid_format)?;
     for f in &s.fields {
         let wit_ty = resolved_wit_type(&f.ty, module)?.ok_or_else(|| WitEmitError::NeverParam {
@@ -273,11 +270,7 @@ fn write_record(
     Ok(())
 }
 
-fn write_variant(
-    out: &mut String,
-    e: &IrEnum,
-    module: &IrModule,
-) -> Result<(), WitEmitError> {
+fn write_variant(out: &mut String, e: &IrEnum, module: &IrModule) -> Result<(), WitEmitError> {
     writeln!(out, "  variant {} {{", kebab_case(&e.name)).map_err(invalid_format)?;
     for v in &e.variants {
         let arm_name = kebab_case(&v.name);
@@ -330,19 +323,11 @@ fn variant_field_wit_type(
     })
 }
 
-fn write_export(
-    out: &mut String,
-    f: &IrFunction,
-    module: &IrModule,
-) -> Result<(), WitEmitError> {
+fn write_export(out: &mut String, f: &IrFunction, module: &IrModule) -> Result<(), WitEmitError> {
     write_world_func(out, f, "export", module)
 }
 
-fn write_import(
-    out: &mut String,
-    f: &IrFunction,
-    module: &IrModule,
-) -> Result<(), WitEmitError> {
+fn write_import(out: &mut String, f: &IrFunction, module: &IrModule) -> Result<(), WitEmitError> {
     write_world_func(out, f, "import", module)
 }
 
@@ -396,10 +381,12 @@ fn write_extern_method_import(
         if wrote_param {
             out.push_str(", ");
         }
-        let ty = p.ty.as_ref().ok_or_else(|| WitEmitError::MissingParamType {
-            function: import_name.clone(),
-            param: p.name.clone(),
-        })?;
+        let ty =
+            p.ty.as_ref()
+                .ok_or_else(|| WitEmitError::MissingParamType {
+                    function: import_name.clone(),
+                    param: p.name.clone(),
+                })?;
         let wit_ty = resolved_wit_type(ty, module)?.ok_or_else(|| WitEmitError::NeverParam {
             function: import_name.clone(),
             param: p.name.clone(),
@@ -465,10 +452,7 @@ fn write_world_func(
 /// `Optional<Never>` case (the static type of the `nil` literal) is
 /// rejected here because WIT has no `option<>`-with-no-payload form;
 /// values of that type stay strictly internal.
-fn resolved_wit_type(
-    ty: &ResolvedType,
-    module: &IrModule,
-) -> Result<Option<String>, WitEmitError> {
+fn resolved_wit_type(ty: &ResolvedType, module: &IrModule) -> Result<Option<String>, WitEmitError> {
     // Recognise the four prelude compounds — they each desugar
     // through `ResolvedType::Generic { base, args }` and need a
     // structural mapping to a WIT shape (list / option / tuple-of-

@@ -14,7 +14,7 @@
 //! value, and wraps a sentinel marker into an `I32?` along the way.
 
 mod common;
-use common::{seed_prelude, optional_ty, dict_ty};
+use common::{dict_ty, optional_ty, seed_prelude};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,
@@ -42,7 +42,6 @@ fn validate_component(bytes: &[u8]) -> Result<(), TestError> {
 const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
-
 
 fn optional(inner: ResolvedType) -> ResolvedType {
     optional_ty(inner)
@@ -209,9 +208,15 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let greet_fn = instance.get_typed_func::<(String,), (String,)>(&mut store, "greet")?;

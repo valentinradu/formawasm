@@ -74,9 +74,15 @@ fn string_len_returns_byte_count() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let five = instance.get_typed_func::<(), (i32,)>(&mut store, "five")?;
@@ -123,9 +129,15 @@ fn string_is_empty_distinguishes_zero_length_from_nonzero() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let empty = instance.get_typed_func::<(), (bool,)>(&mut store, "empty")?;
@@ -178,9 +190,15 @@ fn string_byte_at_returns_byte_value() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let h = instance.get_typed_func::<(), (i32,)>(&mut store, "h")?;
@@ -234,9 +252,15 @@ fn string_slice_returns_zero_copy_substring() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let ell_len = instance.get_typed_func::<(), (i32,)>(&mut store, "ell-len")?;
@@ -288,9 +312,15 @@ fn string_starts_with_distinguishes_prefix_from_non_prefix() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let matches = instance.get_typed_func::<(), (bool,)>(&mut store, "matches")?;
@@ -352,9 +382,15 @@ fn string_contains_finds_substring_at_any_offset() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
 

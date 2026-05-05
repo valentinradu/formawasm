@@ -55,15 +55,15 @@ impl<'a> Compound<'a> {
             return Self::None;
         };
         match base {
-            GenericBase::Enum(eid) if Some(*eid) == module.prelude_optional_id() => args
-                .first()
-                .map_or(Self::None, Self::Optional),
-            GenericBase::Struct(sid) if Some(*sid) == module.prelude_array_id() => args
-                .first()
-                .map_or(Self::None, Self::Array),
-            GenericBase::Struct(sid) if Some(*sid) == module.prelude_range_id() => args
-                .first()
-                .map_or(Self::None, Self::Range),
+            GenericBase::Enum(eid) if Some(*eid) == module.prelude_optional_id() => {
+                args.first().map_or(Self::None, Self::Optional)
+            }
+            GenericBase::Struct(sid) if Some(*sid) == module.prelude_array_id() => {
+                args.first().map_or(Self::None, Self::Array)
+            }
+            GenericBase::Struct(sid) if Some(*sid) == module.prelude_range_id() => {
+                args.first().map_or(Self::None, Self::Range)
+            }
             GenericBase::Struct(sid) if Some(*sid) == module.prelude_dictionary_id() => {
                 if let [k, v] = args.as_slice() {
                     Self::Dictionary { key: k, value: v }
@@ -88,10 +88,7 @@ pub(crate) fn optional_inner<'a>(
 }
 
 /// Convenience: extract `Array<T>`'s element type, or `None`.
-pub(crate) fn array_elem<'a>(
-    ty: &'a ResolvedType,
-    module: &IrModule,
-) -> Option<&'a ResolvedType> {
+pub(crate) fn array_elem<'a>(ty: &'a ResolvedType, module: &IrModule) -> Option<&'a ResolvedType> {
     match Compound::of(ty, module) {
         Compound::Array(t) => Some(t),
         _ => None,
@@ -99,10 +96,7 @@ pub(crate) fn array_elem<'a>(
 }
 
 /// Convenience: extract `Range<T>`'s bound type, or `None`.
-pub(crate) fn range_bound<'a>(
-    ty: &'a ResolvedType,
-    module: &IrModule,
-) -> Option<&'a ResolvedType> {
+pub(crate) fn range_bound<'a>(ty: &'a ResolvedType, module: &IrModule) -> Option<&'a ResolvedType> {
     match Compound::of(ty, module) {
         Compound::Range(t) => Some(t),
         _ => None,
@@ -158,11 +152,19 @@ pub(crate) fn substitute_type_params(
         ResolvedType::Tuple(fields) => ResolvedType::Tuple(
             fields
                 .iter()
-                .map(|(n, t)| (n.clone(), substitute_type_params(t, generic_params, type_args)))
+                .map(|(n, t)| {
+                    (
+                        n.clone(),
+                        substitute_type_params(t, generic_params, type_args),
+                    )
+                })
                 .collect(),
         ),
         ResolvedType::External { .. } => ty.clone(),
-        ResolvedType::Closure { param_tys, return_ty } => ResolvedType::Closure {
+        ResolvedType::Closure {
+            param_tys,
+            return_ty,
+        } => ResolvedType::Closure {
             param_tys: param_tys
                 .iter()
                 .map(|(c, t)| (*c, substitute_type_params(t, generic_params, type_args)))

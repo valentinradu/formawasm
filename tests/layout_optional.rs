@@ -168,5 +168,3 @@ fn optional_of_string_uses_pointer_payload() -> TestResult {
         },
     )
 }
-
-

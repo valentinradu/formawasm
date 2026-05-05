@@ -77,9 +77,15 @@ fn default_param_is_filled_at_omitted_call_site() -> TestResult {
     // every program parsed via `compile_to_ir_*` imports it. Wire to a host
     // function that traps on `false` so failed assertions surface as wasmtime
     // traps to the test caller.
-    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
-        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
-    })?;
+    linker
+        .root()
+        .func_wrap("assert", |_store, (cond,): (bool,)| {
+            if cond {
+                Ok(())
+            } else {
+                Err(wasmtime::Error::msg("assert(false)"))
+            }
+        })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let fifteen = instance.get_typed_func::<(), (i32,)>(&mut store, "fifteen")?;
