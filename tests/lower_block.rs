@@ -206,10 +206,17 @@ fn expr_statement_is_dropped_before_result() -> TestResult {
 }
 
 #[test]
-fn assign_statement_is_not_yet_implemented() -> TestResult {
+fn assign_to_unsupported_lvalue_is_rejected() -> TestResult {
+    // Assigning to a non-place expression (here: a literal) is
+    // syntactically nonsense; the lowering rejects it as
+    // `NotYetImplemented` so a future stage can either teach the
+    // backend the new lvalue shape or surface a typed error.
+    // Parameter / let-binding targets are *supported* now (wired
+    // for the trait-coercion path); this guard pins the negative
+    // side of that boundary.
     let block = IrExpr::Block {
         statements: vec![IrBlockStatement::Assign {
-            target: param_ref(0, PrimitiveType::I32),
+            target: integer_literal(0, PrimitiveType::I32),
             value: integer_literal(0, PrimitiveType::I32),
             span: IrSpan::default(),
         }],
@@ -218,7 +225,7 @@ fn assign_statement_is_not_yet_implemented() -> TestResult {
         span: IrSpan::default(),
     };
 
-    match lower::lower_function_body(&block, &[(BindingId(0), ValType::I32)], &FunctionMap::new()) {
+    match lower::lower_function_body(&block, &[], &FunctionMap::new()) {
         Err(LowerError::NotYetImplemented { what }) if what.contains("Assign") => Ok(()),
         other => Err(format!("expected NotYetImplemented(Assign), got {other:?}").into()),
     }

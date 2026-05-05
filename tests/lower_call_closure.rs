@@ -12,7 +12,7 @@ use formalang::ir::{ClosureConversionPass, DeadCodeEliminationPass, Monomorphise
 use formalang::pipeline::Pipeline;
 use formawasm::module_lowering;
 use wasmparser::{Validator, WasmFeatures};
-use wasmtime::{Engine, Instance, Module, Store};
+use wasmtime::{Caller, Engine, Linker, Module, Store};
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
 type TestResult = Result<(), TestError>;
@@ -38,18 +38,23 @@ fn run_module(source: &str, fn_name: &str) -> Result<i32, TestError> {
     let engine = Engine::default();
     let m = Module::from_binary(&engine, &bytes)?;
     let mut store = Store::new(&engine, ());
-    let instance = Instance::new(&mut store, &m, &[])?;
+    // The prelude declares `assert` as extern; it lands as a wasm
+    // import even if the test body never calls it. Wire it as a
+    // no-op so instantiation succeeds.
+    let mut linker = Linker::<()>::new(&engine);
+    linker.func_wrap("cm32p2", "assert", |_: Caller<'_, ()>, _: i32| {})?;
+    let instance = linker.instantiate(&mut store, &m)?;
     let f = instance.get_typed_func::<(), i32>(&mut store, fn_name)?;
     f.call(&mut store, ()).map_err(Into::into)
 }
 
 #[test]
 fn no_capture_closure_invocation_returns_arg_plus_one() -> TestResult {
-    // pub fn run() -> I32 { let f: I32 -> I32 = |x: I32| x + 1; f(41) }
+    // pub fn run() -> I32 { let f: (I32) -> I32 = (x: I32) -> x + 1; f(41) }
     let source = r"
         pub fn run() -> I32 {
-            let f: I32 -> I32 = |x: I32| x + 1
-            f(41)
+            let f: (I32) -> I32 = (x: I32) -> x + 1
+            f(x: 41)
         }
     ";
     let got = run_module(source, "run")?;
@@ -61,15 +66,14 @@ fn no_capture_closure_invocation_returns_arg_plus_one() -> TestResult {
 
 #[test]
 fn captured_value_flows_through_call_indirect() -> TestResult {
-    // pub fn make_adder(n: I32) -> I32 -> I32 { |x: I32| x + n }
-    // pub fn run() -> I32 { let add5: I32 -> I32 = make_adder(5); add5(37) }
+    // make_adder captures `n`; run() applies the resulting closure.
     let source = r"
         pub fn make_adder(sink n: I32) -> (I32) -> I32 {
-            |x: I32| x + n
+            (x: I32) -> x + n
         }
         pub fn run() -> I32 {
-            let add5: I32 -> I32 = make_adder(5)
-            add5(37)
+            let add5: (I32) -> I32 = make_adder(n: 5)
+            add5(x: 37)
         }
     ";
     let got = run_module(source, "run")?;

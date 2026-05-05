@@ -1095,7 +1095,6 @@ fn build_vtable_plumbing(
         let Some(trait_ref) = imp.trait_ref.as_ref() else {
             continue;
         };
-        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
         let trait_id = trait_ref.trait_id;
         let trait_decl = module
             .traits
@@ -1109,36 +1108,97 @@ fn build_vtable_plumbing(
             .ok_or(ModuleLowerError::VtableDataOverflow)?;
         vtable_offsets.insert((trait_id, impl_target_key(imp.target)), absolute_offset);
 
-        for trait_method in &trait_decl.methods {
-            let (method_idx_in_impl, _) = imp
-                .functions
-                .iter()
-                .enumerate()
-                .find(|(_, f)| f.name == trait_method.name)
-                .ok_or_else(|| ModuleLowerError::MissingTraitMethod {
-                    trait_name: trait_decl.name.clone(),
-                    method: trait_method.name.clone(),
-                    target: imp.target,
-                })?;
-            let m_idx_raw = u32::try_from(method_idx_in_impl)
-                .map_err(|_| ModuleLowerError::TooManyFunctions)?;
-            let key = (ImplId(impl_id_raw), MethodIdx(m_idx_raw));
-            let funcref_slot = method_funcref_indices
-                .get(&key)
-                .copied()
-                .ok_or(ModuleLowerError::TooManyFunctions)?;
+        // Walk the trait's *effective* methods — its own declared
+        // methods plus every inherited method from `composed_traits`,
+        // transitively. For each effective method, find the providing
+        // impl: if the method was declared on the current trait, look
+        // for it in `imp.functions`; otherwise the method comes from a
+        // parent trait, so locate the matching `impl <ParentTrait> for
+        // <Target>` block and read the funcref slot from there. This
+        // is what makes virtual dispatch through a composed trait
+        // (e.g. `let x: NamedRenderable = …; x.render()`) reach the
+        // inherited `Renderable::render` body.
+        for (owning_trait_id, trait_method) in
+            effective_trait_methods(trait_id, module)?.iter()
+        {
+            let funcref_slot = if *owning_trait_id == trait_id {
+                let (method_idx_in_impl, _) = imp
+                    .functions
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| f.name == trait_method.name)
+                    .ok_or_else(|| ModuleLowerError::MissingTraitMethod {
+                        trait_name: trait_decl.name.clone(),
+                        method: trait_method.name.clone(),
+                        target: imp.target,
+                    })?;
+                let impl_id_raw =
+                    u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                let m_idx_raw = u32::try_from(method_idx_in_impl)
+                    .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                let key = (ImplId(impl_id_raw), MethodIdx(m_idx_raw));
+                method_funcref_indices
+                    .get(&key)
+                    .copied()
+                    .ok_or(ModuleLowerError::TooManyFunctions)?
+            } else {
+                // Find `impl owning_trait_id for imp.target`.
+                let (parent_impl_idx, parent_impl, parent_method_idx_in_impl) = module
+                    .impls
+                    .iter()
+                    .enumerate()
+                    .find_map(|(idx, candidate)| {
+                        if candidate.is_extern {
+                            return None;
+                        }
+                        let tref = candidate.trait_ref.as_ref()?;
+                        if tref.trait_id != *owning_trait_id
+                            || candidate.target != imp.target
+                        {
+                            return None;
+                        }
+                        let (m_idx, _) = candidate
+                            .functions
+                            .iter()
+                            .enumerate()
+                            .find(|(_, f)| f.name == trait_method.name)?;
+                        Some((idx, candidate, m_idx))
+                    })
+                    .ok_or_else(|| ModuleLowerError::MissingTraitMethod {
+                        trait_name: trait_decl.name.clone(),
+                        method: trait_method.name.clone(),
+                        target: imp.target,
+                    })?;
+                let _ = parent_impl;
+                let parent_impl_id_raw = u32::try_from(parent_impl_idx)
+                    .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                let parent_m_idx_raw = u32::try_from(parent_method_idx_in_impl)
+                    .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                let key = (ImplId(parent_impl_id_raw), MethodIdx(parent_m_idx_raw));
+                method_funcref_indices
+                    .get(&key)
+                    .copied()
+                    .ok_or(ModuleLowerError::TooManyFunctions)?
+            };
             vtable_data.extend_from_slice(&funcref_slot.to_le_bytes());
         }
     }
 
     let mut call_type_indices: HashMap<(TraitId, MethodIdx), u32> = HashMap::new();
-    for (i, t) in module.traits.iter().enumerate() {
+    for (i, _) in module.traits.iter().enumerate() {
         let trait_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
-        for (j, sig) in t.methods.iter().enumerate() {
+        let trait_id = TraitId(trait_id_raw);
+        // Register a call_indirect type for every effective method —
+        // direct and inherited — so virtual call sites against this
+        // trait can dispatch through the inherited slots too.
+        for (j, (_, sig)) in effective_trait_methods(trait_id, module)?
+            .iter()
+            .enumerate()
+        {
             let method_idx_raw =
                 u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
             let type_idx = register_trait_method_call_type(sig, builder)?;
-            call_type_indices.insert((TraitId(trait_id_raw), MethodIdx(method_idx_raw)), type_idx);
+            call_type_indices.insert((trait_id, MethodIdx(method_idx_raw)), type_idx);
         }
     }
 
@@ -1149,6 +1209,43 @@ fn build_vtable_plumbing(
         vtable_data,
         vtable_data_base,
     }))
+}
+
+/// Flatten `trait_id`'s methods plus every method inherited from its
+/// `composed_traits`, transitively. Each entry is paired with the
+/// `TraitId` that originally *declared* the method so callers can
+/// look up the corresponding impl block. Methods are de-duplicated
+/// by name (the first occurrence wins). Inheritance walks
+/// breadth-first starting from `trait_id`'s own methods, then the
+/// direct parents in declaration order, then their parents, etc.
+fn effective_trait_methods(
+    trait_id: TraitId,
+    module: &IrModule,
+) -> Result<Vec<(TraitId, formalang::ir::IrFunctionSig)>, ModuleLowerError> {
+    let mut out: Vec<(TraitId, formalang::ir::IrFunctionSig)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stack: Vec<TraitId> = vec![trait_id];
+    let mut visited_traits: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
+    while let Some(tid) = stack.first().copied() {
+        stack.remove(0);
+        if !visited_traits.insert(tid.0) {
+            continue;
+        }
+        let t = module
+            .traits
+            .get(tid.0 as usize)
+            .ok_or(ModuleLowerError::UnknownTrait(tid))?;
+        for sig in &t.methods {
+            if seen.insert(sig.name.clone()) {
+                out.push((tid, sig.clone()));
+            }
+        }
+        for &parent in &t.composed_traits {
+            stack.push(parent);
+        }
+    }
+    Ok(out)
 }
 
 /// Register a wasm `func` type for `sig`'s `call_indirect` signature.

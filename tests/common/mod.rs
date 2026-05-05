@@ -27,9 +27,10 @@
 //! let arr_i32 = array_ty(primitive(I32));
 //! ```
 
-use formalang::ast::Visibility;
+use formalang::ast::{ParamConvention, Visibility};
 use formalang::ir::{
-    EnumId, GenericBase, IrEnum, IrModule, IrSpan, IrStruct, ResolvedType, StructId,
+    EnumId, GenericBase, IrEnum, IrEnumVariant, IrField, IrGenericParam, IrModule, IrSpan,
+    IrStruct, ResolvedType, StructId,
 };
 
 /// `StructId` the seeder assigns to `Array<T>` (0). Hand-built
@@ -42,10 +43,13 @@ pub(crate) const PRELUDE_RANGE_ID: StructId = StructId(2);
 /// `EnumId` the seeder assigns to `Optional<T>` (0).
 pub(crate) const PRELUDE_OPTIONAL_ID: EnumId = EnumId(0);
 
-/// Seed `module` with empty-body declarations for the four prelude
-/// built-ins (`Array<T>`, `Dictionary<K, V>`, `Range<T>`,
-/// `Optional<T>`), then rebuild the name→id indices so the
-/// `prelude_*_id()` accessors resolve.
+/// Seed `module` with declarations for the four prelude built-ins
+/// (`Array<T>`, `Dictionary<K, V>`, `Range<T>`, `Optional<T>`), then
+/// rebuild the name→id indices so the `prelude_*_id()` accessors
+/// resolve. The Optional declaration carries `[some(value: T), none]`
+/// to mirror the actual prelude — the canonical-ABI wrapper plans
+/// the enum layout from this so an empty-variant placeholder would
+/// trip [`crate::layout::LayoutError::UninhabitedEnum`].
 ///
 /// **Call this before pushing any user struct/enum** so the
 /// hard-coded ids in [`PRELUDE_ARRAY_ID`] / etc. line up.
@@ -54,7 +58,7 @@ pub(crate) fn seed_prelude(module: &mut IrModule) {
     module.structs.push(empty_generic_struct("Array"));
     module.structs.push(empty_generic_struct("Dictionary"));
     module.structs.push(empty_generic_struct("Range"));
-    module.enums.push(empty_generic_enum("Optional"));
+    module.enums.push(prelude_optional_enum());
     module.rebuild_indices();
 }
 
@@ -70,12 +74,35 @@ fn empty_generic_struct(name: &str) -> IrStruct {
     }
 }
 
-fn empty_generic_enum(name: &str) -> IrEnum {
+fn prelude_optional_enum() -> IrEnum {
     IrEnum {
-        name: name.to_owned(),
+        name: "Optional".to_owned(),
         visibility: Visibility::Public,
-        variants: Vec::new(),
-        generic_params: Vec::new(),
+        variants: vec![
+            IrEnumVariant {
+                name: "some".to_owned(),
+                fields: vec![IrField {
+                    name: "value".to_owned(),
+                    ty: ResolvedType::TypeParam("T".to_owned()),
+                    mutable: false,
+                    optional: false,
+                    default: None,
+                    doc: None,
+                    convention: ParamConvention::Let,
+                    span: IrSpan::default(),
+                }],
+                span: IrSpan::default(),
+            },
+            IrEnumVariant {
+                name: "none".to_owned(),
+                fields: Vec::new(),
+                span: IrSpan::default(),
+            },
+        ],
+        generic_params: vec![IrGenericParam {
+            name: "T".to_owned(),
+            constraints: Vec::new(),
+        }],
         doc: None,
         span: IrSpan::default(),
     }
