@@ -260,6 +260,9 @@ fn array_of_booleans_uses_one_byte_stride() -> TestResult {
 fn array_of_struct_pointers_stores_aggregate_pointers() -> TestResult {
     let mut module = IrModule::new();
     seed_prelude(&mut module);
+    // The prelude seeded Array=0, Dictionary=1, Range=2; user
+    // struct lands at the next free index.
+    let pair_struct_id = StructId(3);
     let pair = IrStruct {
         name: "Pair".to_owned(),
         visibility: Visibility::Private,
@@ -293,7 +296,7 @@ fn array_of_struct_pointers_stores_aggregate_pointers() -> TestResult {
     module.structs.push(pair);
 
     let pair_inst = |a: i128, b: i128| IrExpr::StructInst {
-        struct_id: Some(StructId(0)),
+        struct_id: Some(pair_struct_id),
         type_args: Vec::new(),
         fields: vec![
             (
@@ -307,16 +310,16 @@ fn array_of_struct_pointers_stores_aggregate_pointers() -> TestResult {
                 integer_literal(b, PrimitiveType::I32),
             ),
         ],
-        ty: ResolvedType::Struct(StructId(0)),
+        ty: ResolvedType::Struct(pair_struct_id),
         span: IrSpan::default(),
     };
 
     module.functions.push(function(
         "make",
-        array_ty(ResolvedType::Struct(StructId(0))),
+        array_ty(ResolvedType::Struct(pair_struct_id)),
         array_literal(
             vec![pair_inst(11, 22), pair_inst(33, 44)],
-            ResolvedType::Struct(StructId(0)),
+            ResolvedType::Struct(pair_struct_id),
         ),
     ));
 

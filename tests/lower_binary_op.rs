@@ -291,23 +291,5 @@ fn lowers_nested_binary_op() -> TestResult {
     validate(&build_binary_function(&expr, ValType::I32, ValType::I32)?)
 }
 
-// ── Range deferred to Phase 1c ────────────────────────────────────
-
-#[test]
-fn range_is_not_yet_implemented() -> TestResult {
-    let expr = binary_op(
-        BinaryOperator::Range,
-        integer_literal(0, PrimitiveType::I32),
-        integer_literal(10, PrimitiveType::I32),
-        PrimitiveType::I32,
-    );
-    let bindings = BindingMap::new();
-    let functions = FunctionMap::new();
-    let ctx = LowerContext::new(&bindings, &functions);
-    let mut body = Function::new(core::iter::empty());
-    let result = lower::lower_expr(&expr, &mut body.instructions(), &ctx);
-    match result {
-        Err(LowerError::NotYetImplemented { what }) if what.contains("Range") => Ok(()),
-        other => Err(format!("expected NotYetImplemented(Range), got {other:?}").into()),
-    }
-}
+// Range lowering moved out of "NotYetImplemented" in Phase 1c —
+// dedicated coverage lives in `tests/lower_range.rs`.

@@ -122,15 +122,15 @@ fn struct_optional_field_some_wraps_plain_initializer() -> TestResult {
     module.structs.push(struct_def);
 
     let body = IrExpr::StructInst {
-        struct_id: Some(StructId(0)),
+        struct_id: Some(StructId(3)),
         type_args: Vec::new(),
         fields: vec![("value".to_owned(), FieldIdx(0), integer_literal(42))],
-        ty: ResolvedType::Struct(StructId(0)),
+        ty: ResolvedType::Struct(StructId(3)),
         span: IrSpan::default(),
     };
     module
         .functions
-        .push(function("make", ResolvedType::Struct(StructId(0)), body));
+        .push(function("make", ResolvedType::Struct(StructId(3)), body));
 
     let bytes = module_lowering::lower_module(&module)?;
     validate(&bytes)?;
@@ -141,8 +141,10 @@ fn struct_optional_field_some_wraps_plain_initializer() -> TestResult {
 
     // The struct's `value` field lives at offset 0 and stores the
     // optional cell's pointer.
+    // After seed_prelude the Box struct is at index 3 (Array=0,
+    // Dictionary=1, Range=2 occupy the leading slots).
     let struct_layout = plan_struct(
-        module.structs.first().ok_or("no struct in module")?,
+        module.structs.get(3).ok_or("no Box struct in module")?,
         &module,
     )?;
     if struct_layout.size != 4 {

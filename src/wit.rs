@@ -472,17 +472,6 @@ fn function_signature_crosses_boundary(f: &IrFunction, module: &IrModule) -> boo
     true
 }
 
-/// Crate-internal escape hatch so `module_lowering` can apply the same
-/// "skip when unrepresentable" filter to wasm exports as
-/// [`emit_wit`] applies to WIT exports — without exposing every
-/// helper publicly. Returns `Ok(())` iff `ty` maps to a WIT type.
-pub(crate) fn resolved_wit_type_check(
-    ty: &ResolvedType,
-    module: &IrModule,
-) -> Result<(), WitEmitError> {
-    resolved_wit_type(ty, module).map(|_| ())
-}
-
 fn variant_tag(ty: &ResolvedType, module: &IrModule) -> String {
     match Compound::of(ty, module) {
         Compound::Array(_) => return "Array<T>".to_owned(),

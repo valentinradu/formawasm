@@ -298,7 +298,14 @@ fn sieve_runs_under_wasmtime_component_runtime() -> TestResult {
     config.wasm_component_model(true);
     let engine = Engine::new(&config)?;
     let component = Component::from_binary(&engine, &bytes)?;
-    let linker = Linker::<()>::new(&engine);
+    let mut linker = Linker::<()>::new(&engine);
+    // formalang's prelude declares `pub extern fn assert(condition: Boolean)`;
+    // every program parsed via `compile_to_ir_*` imports it. Wire to a host
+    // function that traps on `false` so failed assertions surface as wasmtime
+    // traps to the test caller.
+    linker.root().func_wrap("assert", |_store, (cond,): (bool,)| {
+        if cond { Ok(()) } else { Err(wasmtime::Error::msg("assert(false)")) }
+    })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &component)?;
     let sieve = instance.get_typed_func::<(i32,), (Vec<bool>,)>(&mut store, "sieve")?;

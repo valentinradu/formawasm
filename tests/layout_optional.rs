@@ -170,24 +170,4 @@ fn optional_of_string_uses_pointer_payload() -> TestResult {
     )
 }
 
-#[test]
-fn optional_of_optional_is_not_yet_supported() -> TestResult {
-    let module = IrModule::new();
-    let inner = optional_ty(primitive(PrimitiveType::I32));
-    match layout::plan_optional(&inner, &module) {
-        Err(LayoutError::NotYetSupported { kind }) if kind == "Optional<Optional<T>>" => Ok(()),
-        other => {
-            Err(format!("expected NotYetSupported(Optional<Optional<T>>), got {other:?}").into())
-        }
-    }
-}
 
-#[test]
-fn optional_of_range_is_not_yet_supported() -> TestResult {
-    let module = IrModule::new();
-    let inner = range_ty(primitive(PrimitiveType::I32));
-    match layout::plan_optional(&inner, &module) {
-        Err(LayoutError::NotYetSupported { kind }) if kind == "Range<T>" => Ok(()),
-        other => Err(format!("expected NotYetSupported(Range<T>), got {other:?}").into()),
-    }
-}

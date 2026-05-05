@@ -320,18 +320,6 @@ fn optional_field_lays_out_as_pointer() -> TestResult {
     )
 }
 
-#[test]
-fn nested_struct_field_is_not_yet_supported() -> TestResult {
-    let s = make_struct(
-        "Outer",
-        vec![field("inner", ResolvedType::Struct(StructId(0)))],
-    );
-    let module = IrModule::new();
-    match layout::plan_struct(&s, &module) {
-        Err(LayoutError::NotYetSupported { kind }) if kind == "Struct" => Ok(()),
-        other => Err(format!("expected NotYetSupported(Struct), got {other:?}").into()),
-    }
-}
 
 #[test]
 fn never_field_is_not_yet_supported() -> TestResult {

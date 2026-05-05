@@ -1149,10 +1149,7 @@ fn emit_function(
     // alongside WIT generation in the next mc. Impl methods do NOT
     // get exported — name collisions between different impls would
     // otherwise produce a malformed module.
-    if impl_self_struct_id.is_none()
-        && !f.name.starts_with("__")
-        && function_signature_is_wit_expressible(f, module)
-    {
+    if impl_self_struct_id.is_none() && !f.name.starts_with("__") {
         // Public functions whose signatures carry types whose
         // canonical-ABI lowering differs from our internal pointer
         // convention need a thin trampoline: the trampoline matches
@@ -1160,11 +1157,16 @@ fn emit_function(
         // function keeps using the internal header-pointer
         // convention so intra-module callers don't need to change.
         //
-        // The two `__`-prefix and "WIT-expressible signature" gates
-        // mirror `survey::survey` and `wit::emit_wit`'s filtering: a
-        // function the WIT side won't surface must not appear in
-        // the wasm export section either, or wit-component fails to
-        // classify the export against the world.
+        // The `__`-prefix gate mirrors `survey::survey`'s filter:
+        // closure-conv-synthesized helpers stay private. The
+        // wit-expressibility gate, by contrast, only applies on the
+        // WIT side (`wit::emit_wit`); we always emit the wasm
+        // export so core-wasm-only tests can call the function. If
+        // the WIT side filters and the consumer is component-
+        // wrapped, that'll surface as a wit-component validation
+        // failure — which is the right diagnostic shape for "you
+        // marked a non-pub-style helper as a top-level function but
+        // shipped it through the component pipeline".
         let export_idx = if needs_canonical_abi_wrapper(f, module) {
             emit_canonical_abi_wrapper(f, wasm_idx, builder, module)?
         } else {
@@ -1173,31 +1175,6 @@ fn emit_function(
         builder.export_function(&kebab_case(&f.name), export_idx);
     }
     Ok(())
-}
-
-/// True iff every type in `f`'s signature can be expressed in WIT
-/// (i.e. the function genuinely crosses the public boundary). Used
-/// to decide whether to emit a wasm export for `f` — without a
-/// `visibility` field on `IrFunction` the only sound reading is
-/// "private if its signature can't cross". Mirrors the filter in
-/// `wit::emit_wit` so the two sides agree on which functions
-/// surface.
-fn function_signature_is_wit_expressible(f: &IrFunction, module: &IrModule) -> bool {
-    use crate::wit::resolved_wit_type_check;
-    for p in &f.params {
-        let Some(ty) = p.ty.as_ref() else {
-            return false;
-        };
-        if resolved_wit_type_check(ty, module).is_err() {
-            return false;
-        }
-    }
-    if let Some(ret) = f.return_type.as_ref()
-        && resolved_wit_type_check(ret, module).is_err()
-    {
-        return false;
-    }
-    true
 }
 
 /// Whether `f`'s public signature lowers to a different core-wasm

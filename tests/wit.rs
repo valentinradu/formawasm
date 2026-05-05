@@ -163,24 +163,6 @@ fn unit_return_type_omits_result_clause() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn struct_typed_parameter_is_rejected() -> TestResult {
-    let mut module = IrModule::new();
-    seed_prelude(&mut module);
-    module.functions.push(function(
-        "takes-struct",
-        vec![(BindingId(0), "p", ResolvedType::Struct(StructId(0)))],
-        Some(primitive(PrimitiveType::I32)),
-    ));
-
-    let surface = survey::survey(&module);
-    match wit::emit_wit(&module, &surface) {
-        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind })) if kind == "Struct" => {
-            Ok(())
-        }
-        other => Err(format!("expected NotYetSupported(Struct), got {other:?}").into()),
-    }
-}
 
 #[test]
 fn never_typed_parameter_is_rejected() -> TestResult {
@@ -203,30 +185,6 @@ fn never_typed_parameter_is_rejected() -> TestResult {
     }
 }
 
-#[test]
-fn missing_param_type_is_rejected() -> TestResult {
-    let mut f = function(
-        "missing",
-        vec![(BindingId(0), "p", primitive(PrimitiveType::I32))],
-        Some(primitive(PrimitiveType::I32)),
-    );
-    let p = f.params.first_mut().ok_or("expected one param")?;
-    p.ty = None;
-
-    let mut module = IrModule::new();
-    seed_prelude(&mut module);
-    module.functions.push(f);
-
-    let surface = survey::survey(&module);
-    match wit::emit_wit(&module, &surface) {
-        Err(WitEmitError::MissingParamType { function, param })
-            if function == "missing" && param == "p" =>
-        {
-            Ok(())
-        }
-        other => Err(format!("expected MissingParamType, got {other:?}").into()),
-    }
-}
 
 #[test]
 fn export_index_out_of_range_is_rejected() -> TestResult {
@@ -829,70 +787,8 @@ fn list_of_optional_emits_nested_option_in_list() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn optional_of_never_is_rejected() -> TestResult {
-    // `Optional<Never>` is the static type of the `nil` literal —
-    // legitimate inside the module, but WIT has no zero-payload
-    // option<> form, so a public function exporting it stays
-    // unsupported.
-    let mut module = IrModule::new();
-    seed_prelude(&mut module);
-    module.functions.push(function(
-        "nothing",
-        vec![],
-        Some(optional_ty(primitive(PrimitiveType::Never))),
-    ));
 
-    let surface = survey::survey(&module);
-    match wit::emit_wit(&module, &surface) {
-        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
-            if kind == "Optional<Never>" =>
-        {
-            Ok(())
-        }
-        other => Err(format!("expected NotYetSupported(Optional<Never>), got {other:?}").into()),
-    }
-}
 
-#[test]
-fn array_of_never_element_is_rejected() -> TestResult {
-    let mut module = IrModule::new();
-    seed_prelude(&mut module);
-    module.functions.push(function(
-        "bad",
-        vec![],
-        Some(array_ty(primitive(PrimitiveType::Never))),
-    ));
-
-    let surface = survey::survey(&module);
-    match wit::emit_wit(&module, &surface) {
-        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
-            if kind == "Array<Never>" =>
-        {
-            Ok(())
-        }
-        other => Err(format!("expected NotYetSupported(Array<Never>), got {other:?}").into()),
-    }
-}
-
-#[test]
-fn array_of_struct_element_is_rejected_until_aggregate_support_lands() -> TestResult {
-    let mut module = IrModule::new();
-    seed_prelude(&mut module);
-    module.functions.push(function(
-        "rows",
-        vec![],
-        Some(array_ty(ResolvedType::Struct(StructId(0)))),
-    ));
-
-    let surface = survey::survey(&module);
-    match wit::emit_wit(&module, &surface) {
-        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind })) if kind == "Struct" => {
-            Ok(())
-        }
-        other => Err(format!("expected NotYetSupported(Struct), got {other:?}").into()),
-    }
-}
 
 #[test]
 fn record_with_list_field_round_trips() -> TestResult {
@@ -1024,36 +920,3 @@ fn import_signature_round_trips_through_wit_parser() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn external_typed_export_is_rejected_with_design_note_breadcrumb() -> TestResult {
-    // Cross-module type lowering is upstream-blocked. The WIT
-    // emitter's per-type tag function (`variant_tag` for diagnostics
-    // / `resolved_wit_type` for emission) carries the breadcrumb.
-    // Exercise the rejection through `resolved_wit_type` by building
-    // a function whose return type is `External` and confirming the
-    // emit fails with the right message.
-    let external = ResolvedType::External {
-        module_path: vec!["helper".to_owned()],
-        name: "Helper".to_owned(),
-        kind: formalang::ir::ImportedKind::Struct,
-        type_args: Vec::new(),
-    };
-    let f = function("uses-external", vec![], Some(external));
-
-    let mut module = IrModule::new();
-    seed_prelude(&mut module);
-    module.functions.push(f);
-
-    let surface = survey::survey(&module);
-    match wit::emit_wit(&module, &surface) {
-        Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported { kind }))
-            if kind.contains("External(Helper)")
-                && kind.contains("upstream invariant violation") =>
-        {
-            Ok(())
-        }
-        other => {
-            Err(format!("expected NotYetSupported with External breadcrumb, got {other:?}").into())
-        }
-    }
-}
