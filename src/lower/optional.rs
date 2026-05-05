@@ -116,14 +116,17 @@ fn primitive_to_valtype(ty: &ResolvedType) -> Result<ValType, LowerError> {
         formalang::ast::PrimitiveType::I64 => Ok(ValType::I64),
         formalang::ast::PrimitiveType::F32 => Ok(ValType::F32),
         formalang::ast::PrimitiveType::F64 => Ok(ValType::F64),
-        // Never / String / Path / Regex have no inline-storable size
-        // yet; layout::plan_optional rejects these earlier so we should
-        // never reach this arm in practice.
-        formalang::ast::PrimitiveType::Never
-        | formalang::ast::PrimitiveType::String
+        // String / Path / Regex are stored as `i32` header pointers
+        // — `primitive_size_align` lays them out at `(4, 4)` and
+        // `lower_string_literal` materialises them onto the stack
+        // as i32 pointer values. The Some-wrap path stashes that
+        // pointer in an `i32` scratch and stores it at the
+        // optional payload offset.
+        formalang::ast::PrimitiveType::String
         | formalang::ast::PrimitiveType::Path
-        | formalang::ast::PrimitiveType::Regex
-        | _ => Err(LowerError::NotYetImplemented {
+        | formalang::ast::PrimitiveType::Regex => Ok(ValType::I32),
+        // Never has no instance.
+        formalang::ast::PrimitiveType::Never | _ => Err(LowerError::NotYetImplemented {
             what: format!("Some-wrap scratch slot for {prim:?} payload"),
         }),
     }

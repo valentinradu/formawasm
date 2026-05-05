@@ -540,8 +540,30 @@ fn resolved_wit_type(
             },
             |e| Ok(Some(kebab_case(&e.name))),
         ),
+        ResolvedType::Tuple(fields) => {
+            // formalang tuples carry per-position field names but
+            // WIT's `tuple<T0, T1, ...>` is positional. Emit the
+            // canonical-ABI tuple shape; field names are dropped at
+            // the boundary (the layout planner stores them in
+            // declaration order so the index→field mapping stays
+            // stable on the producer side).
+            let mut out = String::from("tuple<");
+            for (i, (_name, inner)) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let inner_wit =
+                    resolved_wit_type(inner, module)?.ok_or_else(|| {
+                        WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                            kind: format!("Never inside tuple at position {i}"),
+                        })
+                    })?;
+                out.push_str(&inner_wit);
+            }
+            out.push('>');
+            Ok(Some(out))
+        }
         ResolvedType::Trait(_)
-        | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
         | ResolvedType::External { .. }

@@ -143,13 +143,45 @@ fn lower_assign(
             store_primitive(primitive, *field_layout, sink);
             Ok(())
         }
+        IrExpr::LetRef { binding_id, .. } => {
+            // `total = total + x` — assign to a `let mut` binding.
+            // Lower the rhs and `local.set` the binding's slot.
+            let local_idx = ctx
+                .bindings
+                .get(*binding_id)
+                .ok_or(LowerError::UnknownBinding(*binding_id))?;
+            lower_expr(value, sink, ctx)?;
+            sink.local_set(local_idx);
+            Ok(())
+        }
+        IrExpr::Reference { target: ref_target, .. } => {
+            // `x = expr` where `x` resolves to a parameter or a
+            // `let mut` local binding. Both kinds carry the same
+            // `BindingId`; look it up in `ctx.bindings` and emit
+            // `local.set` against the matching wasm local.
+            let binding_id = match ref_target {
+                formalang::ir::ReferenceTarget::Param(b)
+                | formalang::ir::ReferenceTarget::Local(b) => Some(*b),
+                _ => None,
+            };
+            if let Some(binding_id) = binding_id {
+                let local_idx = ctx
+                    .bindings
+                    .get(binding_id)
+                    .ok_or(LowerError::UnknownBinding(binding_id))?;
+                lower_expr(value, sink, ctx)?;
+                sink.local_set(local_idx);
+                return Ok(());
+            }
+            Err(LowerError::NotYetImplemented {
+                what: format!("IrBlockStatement::Assign to Reference target {ref_target:?}"),
+            })
+        }
         IrExpr::Literal { .. }
         | IrExpr::StructInst { .. }
         | IrExpr::EnumInst { .. }
         | IrExpr::Array { .. }
         | IrExpr::Tuple { .. }
-        | IrExpr::Reference { .. }
-        | IrExpr::LetRef { .. }
         | IrExpr::BinaryOp { .. }
         | IrExpr::UnaryOp { .. }
         | IrExpr::If { .. }

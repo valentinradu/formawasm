@@ -1581,6 +1581,9 @@ fn param_needs_split(ty: &ResolvedType, module: &IrModule) -> bool {
     if let Some(_eid) = crate::compound::enum_id_of(ty) {
         return true;
     }
+    if matches!(ty, ResolvedType::Tuple(_)) {
+        return true;
+    }
     false
 }
 
@@ -1631,12 +1634,25 @@ fn flatten_canonical_abi(ty: &ResolvedType, module: &IrModule) -> Result<Vec<Val
                 }
                 return Ok(out);
             }
+            if let ResolvedType::Tuple(fields) = ty {
+                let mut out = Vec::new();
+                for (_, inner) in fields {
+                    out.extend(flatten_canonical_abi(inner, module)?);
+                }
+                return Ok(out);
+            }
             if let Some(eid) = crate::compound::enum_id_of(ty) {
-                let e = module.enums.get(eid.0 as usize).ok_or_else(|| {
+                let e_decl = module.enums.get(eid.0 as usize).ok_or_else(|| {
                     ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
                         kind: format!("Enum({}) out of range", eid.0),
                     })
                 })?;
+                // Substitute the generic args so variant fields
+                // referencing `TypeParam("T")` lift correctly when
+                // the enum is `Optional<String>` etc.
+                let type_args = crate::compound::generic_args_for_enum(ty, eid);
+                let e_owned = crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
+                let e = &e_owned;
                 let mut max_payload: Vec<ValType> = Vec::new();
                 for variant in &e.variants {
                     let mut payload = Vec::new();
@@ -1817,6 +1833,41 @@ fn emit_canonical_abi_wrapper(
                 }),
             });
         }
+        // Tuples reuse the struct-style materialisation: alloc
+        // an inline aggregate with each field laid out in
+        // declaration order, then push the resulting pointer.
+        if let ResolvedType::Tuple(fields) = ty {
+            let synthetic = crate::lower::aggregate::synthetic_struct_for_tuple(ty)
+                .map_err(|e| match e {
+                    crate::lower::LowerError::FieldAccessOnNonAggregate { .. } => {
+                        ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                            kind: format!("synthetic tuple for {ty:?}"),
+                        })
+                    }
+                    other => ModuleLowerError::Lower(other),
+                })?;
+            let layout = crate::layout::plan_struct(&synthetic, module)?;
+            let mut field_ops: Vec<StructFieldOp> = Vec::with_capacity(fields.len());
+            for ((_, fty), flayout) in fields.iter().zip(layout.fields.iter()) {
+                field_ops.push(StructFieldOp {
+                    offset: flayout.offset,
+                    value: build_field_value(fty, cursor, scratch_count, scratch_base, module)?,
+                });
+            }
+            let scratch = scratch_base
+                .checked_add(*scratch_count)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            *scratch_count = scratch_count
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            return Ok(FieldValue::MaterialisedScratch {
+                scratch,
+                ops: Box::new(MaterialisationOps::Struct {
+                    size: layout.size,
+                    fields: field_ops,
+                }),
+            });
+        }
         // Nested struct / enum.
         if let Some(sid) = crate::compound::struct_id_of(ty) {
             let s = module.structs.get(sid.0 as usize).ok_or_else(|| {
@@ -1847,11 +1898,14 @@ fn emit_canonical_abi_wrapper(
             });
         }
         if let Some(eid) = crate::compound::enum_id_of(ty) {
-            let e = module.enums.get(eid.0 as usize).ok_or_else(|| {
+            let e_decl = module.enums.get(eid.0 as usize).ok_or_else(|| {
                 ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
                     kind: format!("Enum({}) out of range", eid.0),
                 })
             })?;
+            let type_args = crate::compound::generic_args_for_enum(ty, eid);
+            let e_owned = crate::compound::substitute_enum(e_decl, &e_decl.generic_params, type_args);
+            let e = &e_owned;
             let layout = crate::layout::plan_enum(e, module)?;
             let tag_slot = *cursor;
             *cursor = cursor

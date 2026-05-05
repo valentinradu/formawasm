@@ -1250,7 +1250,7 @@ pub(super) fn layout_for_aggregate(
 /// Build a synthetic [`IrStruct`] from a `ResolvedType::Tuple(...)`.
 /// Lets the layout planner be reused for tuples without duplicating
 /// its alignment logic.
-pub(super) fn synthetic_struct_for_tuple(ty: &ResolvedType) -> Result<IrStruct, LowerError> {
+pub(crate) fn synthetic_struct_for_tuple(ty: &ResolvedType) -> Result<IrStruct, LowerError> {
     let ResolvedType::Tuple(fields) = ty else {
         return Err(LowerError::FieldAccessOnNonAggregate { ty: ty.clone() });
     };

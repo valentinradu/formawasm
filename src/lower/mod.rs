@@ -10,7 +10,7 @@
 //! shared types ([`LowerError`], [`BindingMap`], [`FunctionMap`],
 //! [`LowerContext`]) and the recursive [`lower_expr`] dispatcher.
 
-mod aggregate;
+pub(crate) mod aggregate;
 mod binary_op;
 mod block;
 mod call;
