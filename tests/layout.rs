@@ -1,11 +1,12 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `layout::plan_struct`.
 //!
 //! Cover the empty struct, every primitive size class, a handful of
 //! mixed orderings that exercise field-alignment padding, the
 //! optional-field rejection, and a non-primitive-typed field
 //! rejection.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{IrField, IrModule, IrSpan, IrStruct, ResolvedType, StructId};
@@ -301,7 +302,7 @@ fn optional_field_lays_out_as_pointer() -> TestResult {
     // a layout rejection.
     let mut f = field(
         "maybe",
-        ResolvedType::Optional(Box::new(primitive(PrimitiveType::I32))),
+        optional_ty(primitive(PrimitiveType::I32)),
     );
     f.optional = true;
     let s = make_struct("Opt", vec![f]);

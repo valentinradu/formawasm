@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `lower::lower_array`.
 //!
 //! Build a tiny module whose entry point returns an `Array<T>` literal,
@@ -8,6 +6,9 @@
 //! header + element-buffer bytes through the exported memory to check
 //! that `{ ptr, len, cap }` and the in-buffer values are correct for
 //! every supported element type.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
@@ -32,9 +33,6 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-fn array_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Array(Box::new(elem))
-}
 
 fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     let suffix = if ty == PrimitiveType::I64 {
@@ -117,6 +115,7 @@ fn read_header(
 #[test]
 fn empty_array_of_i32_validates_and_has_zero_len() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "empty",
         array_ty(primitive(PrimitiveType::I32)),
@@ -143,6 +142,7 @@ fn empty_array_of_i32_validates_and_has_zero_len() -> TestResult {
 #[test]
 fn array_of_three_i32_writes_buffer_correctly() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         array_ty(primitive(PrimitiveType::I32)),
@@ -181,6 +181,7 @@ fn array_of_three_i32_writes_buffer_correctly() -> TestResult {
 #[test]
 fn array_of_two_i64_uses_eight_byte_stride() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         array_ty(primitive(PrimitiveType::I64)),
@@ -221,6 +222,7 @@ fn array_of_two_i64_uses_eight_byte_stride() -> TestResult {
 #[test]
 fn array_of_booleans_uses_one_byte_stride() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         array_ty(primitive(PrimitiveType::Boolean)),
@@ -257,6 +259,7 @@ fn array_of_booleans_uses_one_byte_stride() -> TestResult {
 #[test]
 fn array_of_struct_pointers_stores_aggregate_pointers() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let pair = IrStruct {
         name: "Pair".to_owned(),
         visibility: Visibility::Private,

@@ -1,8 +1,9 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Pre-flight rejection tests. Each test constructs a minimal
 //! `IrModule` exhibiting one of the five rejected shapes and asserts
 //! [`PreflightError`] surfaces the matching variant.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{Literal, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
@@ -77,6 +78,7 @@ fn field(name: &str, ty: ResolvedType) -> IrField {
 #[test]
 fn rejects_closure_in_function_body() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module
         .functions
         .push(empty_function("leaks_closure", Some(closure_expr())));
@@ -95,6 +97,7 @@ fn rejects_closure_in_function_body() -> TestResult {
 #[test]
 fn rejects_closure_in_let_value() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.lets.push(IrLet {
         name: "bad".to_owned(),
         visibility: Visibility::Private,
@@ -123,6 +126,7 @@ fn rejects_closure_in_let_value() -> TestResult {
 #[test]
 fn rejects_closure_field_on_public_struct() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let closure_ty = ResolvedType::Closure {
         param_tys: Vec::new(),
         return_ty: Box::new(bool_ty()),
@@ -154,6 +158,7 @@ fn rejects_closure_field_on_public_struct() -> TestResult {
 #[test]
 fn allows_closure_field_on_private_struct() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let closure_ty = ResolvedType::Closure {
         param_tys: Vec::new(),
         return_ty: Box::new(bool_ty()),
@@ -180,6 +185,7 @@ fn allows_closure_field_on_private_struct() -> TestResult {
 #[test]
 fn rejects_generic_trait() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.traits.push(IrTrait {
         name: "Container".to_owned(),
         visibility: Visibility::Public,
@@ -214,6 +220,7 @@ fn rejects_generic_trait() -> TestResult {
 #[test]
 fn allows_non_generic_trait() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.traits.push(IrTrait {
         name: "Drawable".to_owned(),
         visibility: Visibility::Public,
@@ -242,6 +249,7 @@ fn allows_non_generic_trait() -> TestResult {
 #[test]
 fn rejects_type_param_in_function_param() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(IrFunction {
         name: "identity".to_owned(),
         generic_params: Vec::new(),
@@ -279,11 +287,12 @@ fn rejects_type_param_in_function_param() -> TestResult {
 #[test]
 fn rejects_type_param_nested_in_array() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.lets.push(IrLet {
         name: "items".to_owned(),
         visibility: Visibility::Private,
         mutable: false,
-        ty: ResolvedType::Array(Box::new(ResolvedType::TypeParam("E".to_owned()))),
+        ty: array_ty(ResolvedType::TypeParam("E".to_owned())),
         value: bool_literal(),
         doc: None,
         span: IrSpan::default(),
@@ -307,6 +316,7 @@ fn rejects_type_param_nested_in_array() -> TestResult {
 #[test]
 fn rejects_error_type_in_struct_field() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.structs.push(IrStruct {
         name: "Broken".to_owned(),
         visibility: Visibility::Private,
@@ -331,6 +341,7 @@ fn rejects_error_type_in_struct_field() -> TestResult {
 #[test]
 fn rejects_error_type_in_enum_variant_field() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.enums.push(IrEnum {
         name: "Status".to_owned(),
         visibility: Visibility::Private,

@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `lower::lower_range` (dispatched from `lower_binary_op`
 //! when the operator is `BinaryOperator::Range`).
 //!
@@ -8,6 +6,9 @@
 //! `module_lowering::lower_module` pipeline, validate, instantiate
 //! under wasmtime, and read back the `{ start, end }` bytes through
 //! the exported memory.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
@@ -30,9 +31,6 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-fn range_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Range(Box::new(elem))
-}
 
 fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     let suffix = if ty == PrimitiveType::I64 {
@@ -97,6 +95,7 @@ fn read_memory<const N: usize>(
 #[test]
 fn range_of_i32_writes_start_and_end_inline() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         range_ty(primitive(PrimitiveType::I32)),
@@ -126,6 +125,7 @@ fn range_of_i32_writes_start_and_end_inline() -> TestResult {
 #[test]
 fn range_of_i64_writes_eight_byte_bounds() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         range_ty(primitive(PrimitiveType::I64)),
@@ -161,6 +161,7 @@ fn empty_range_of_i32_still_writes_both_bounds() -> TestResult {
     // start == end represents an empty range; the slot still holds
     // both literal values verbatim.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         range_ty(primitive(PrimitiveType::I32)),

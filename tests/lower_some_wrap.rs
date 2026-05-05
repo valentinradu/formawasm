@@ -1,11 +1,12 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! End-to-end coverage for the Some-wrap path on let bindings.
 //!
 //! Builds a module whose body assigns a primitive value to an
 //! `Optional<T>`-typed let binding and returns the resulting pointer.
 //! The produced bytes are validated, instantiated under wasmtime, and
 //! the tag + payload are read back from linear memory.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
 use formalang::ir::{
@@ -30,7 +31,7 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
 }
 
 fn optional(inner: ResolvedType) -> ResolvedType {
-    ResolvedType::Optional(Box::new(inner))
+    optional_ty(inner)
 }
 
 fn integer_literal(value: i128, prim: PrimitiveType) -> IrExpr {
@@ -116,6 +117,7 @@ fn make_some_wrap_module(payload_prim: PrimitiveType, value_expr: IrExpr) -> IrM
         span: IrSpan::default(),
     };
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function("make", target_ty, body));
     module
 }

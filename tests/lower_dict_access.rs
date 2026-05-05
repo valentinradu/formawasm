@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `lower::lower_dict_access` over `Array<T>` collections.
 //!
 //! Phase 1c mc5 lights up `arr[i]` reads. The Phase 2 dictionary form
@@ -9,6 +7,9 @@
 //! emitted bytes, and instantiates under wasmtime to read back the
 //! returned scalar — or, for the composed For-loop test, the resulting
 //! comprehension array.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
@@ -33,13 +34,6 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-fn array_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Array(Box::new(elem))
-}
-
-fn range_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Range(Box::new(elem))
-}
 
 fn integer_literal(value: i128, ty: PrimitiveType) -> IrExpr {
     let suffix = if ty == PrimitiveType::I64 {
@@ -132,6 +126,7 @@ fn read_header(
 /// Build `[10, 20, 30][idx]` and assert the call returns `expected`.
 fn run_i32_index(idx: i128, expected: i32) -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let arr = array_literal(
         vec![
             integer_literal(10, PrimitiveType::I32),
@@ -181,6 +176,7 @@ fn index_two_returns_third_i32_element() -> TestResult {
 fn index_into_i64_array_uses_eight_byte_stride() -> TestResult {
     // [0x0BAD_F00D_DEAD_BEEF, 0x1234_5678_9ABC_DEF0][1]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let arr = array_literal(
         vec![
             integer_literal(0x0BAD_F00D_DEAD_BEEF, PrimitiveType::I64),
@@ -217,6 +213,7 @@ fn for_over_range_indexes_outer_array_with_modulus() -> TestResult {
     //   for p in 0..6 { arr[p % 3] }
     // } -> [10, 20, 30, 10, 20, 30]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let arr_id = BindingId(1);
     let p_id = BindingId(2);
 

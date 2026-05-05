@@ -754,6 +754,15 @@ impl<'a> LowerContext<'a> {
             .ok_or(LowerError::MissingContext { what: "module" })
     }
 
+    /// Like [`Self::module`] but returns `None` instead of erroring
+    /// when the field is unset. Useful for lowerings that can fall
+    /// back to a non-module-aware behaviour (e.g. recognising
+    /// prelude Optional Some-wraps).
+    #[must_use]
+    pub fn module_opt(&self) -> Option<&'a IrModule> {
+        self.module
+    }
+
     /// Return the bump-allocator function index or surface
     /// [`LowerError::MissingContext`] if the field is unset.
     pub fn bump_allocator(&self) -> Result<u32, LowerError> {

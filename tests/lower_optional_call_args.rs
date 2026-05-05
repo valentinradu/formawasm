@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! End-to-end coverage for `Optional<T>` Some-wrap at function-call
 //! argument sites.
 //!
@@ -7,6 +5,9 @@
 //! into a callee whose parameter is typed `Optional<T>`. The callee
 //! returns the pointer it receives so the test can read the tag and
 //! payload bytes off the wrapped allocation through wasmtime.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType,
@@ -34,7 +35,7 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
 }
 
 fn optional(inner: ResolvedType) -> ResolvedType {
-    ResolvedType::Optional(Box::new(inner))
+    optional_ty(inner)
 }
 
 fn integer_literal(value: i128) -> IrExpr {
@@ -143,6 +144,7 @@ fn function_call_arg_some_wraps_plain_value() -> TestResult {
     );
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(echo);
     module.functions.push(caller);
 

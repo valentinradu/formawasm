@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `Literal::Nil` lowering.
 //!
 //! Build a small module whose entry point returns a tag-only
@@ -7,6 +5,9 @@
 //! production `module_lowering::lower_module` pipeline, validate,
 //! instantiate under wasmtime, and read back the discriminant tag
 //! through the exported memory.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{Literal, PrimitiveType};
 use formalang::ir::{
@@ -31,7 +32,7 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
 }
 
 fn optional(inner: ResolvedType) -> ResolvedType {
-    ResolvedType::Optional(Box::new(inner))
+    optional_ty(inner)
 }
 
 fn nil_literal() -> IrExpr {
@@ -80,6 +81,7 @@ fn nil_literal_returns_pointer_to_zero_tag() -> TestResult {
     // `fn make() -> Never? { nil }` — the simplest end-to-end exercise
     // for the new Literal::Nil lowering path.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         optional(primitive(PrimitiveType::Never)),
@@ -134,6 +136,7 @@ fn nil_widens_into_optional_i32_let_binding() -> TestResult {
     };
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
         optional(primitive(PrimitiveType::Never)),

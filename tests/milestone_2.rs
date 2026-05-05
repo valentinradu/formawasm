@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Phase 2 closing milestone — a single program that exercises every
 //! Phase 2 feature family at once:
 //!
@@ -14,6 +12,9 @@
 //! `greet(role)` function looks up `role` in a string-keyed
 //! dictionary, concatenates a hard-coded prefix with the looked-up
 //! value, and wraps a sentinel marker into an `I32?` along the way.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,
@@ -42,15 +43,9 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-fn dict_ty(key: ResolvedType, value: ResolvedType) -> ResolvedType {
-    ResolvedType::Dictionary {
-        key_ty: Box::new(key),
-        value_ty: Box::new(value),
-    }
-}
 
 fn optional(inner: ResolvedType) -> ResolvedType {
-    ResolvedType::Optional(Box::new(inner))
+    optional_ty(inner)
 }
 
 fn string_literal(text: &str) -> IrExpr {
@@ -198,6 +193,7 @@ fn phase_2_milestone_strings_optionals_dicts_concat() -> TestResult {
         span: IrSpan::default(),
     };
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(greet);
 
     let mut pipeline = Pipeline::new();

@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! End-to-end coverage for `Dictionary<K, V>` literal construction
 //! and lookup.
 //!
@@ -7,6 +5,9 @@
 //! header pointing at a buffer of pointers, each pointing to a
 //! `(k: K, v: V)` pair tuple. Lookup walks the buffer linearly
 //! comparing keys (string keys via `__str_eq`).
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType};
 use formalang::ir::{IrExpr, IrFunction, IrModule, IrSpan, ResolvedType};
@@ -27,12 +28,6 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-fn dict_ty(key: ResolvedType, value: ResolvedType) -> ResolvedType {
-    ResolvedType::Dictionary {
-        key_ty: Box::new(key),
-        value_ty: Box::new(value),
-    }
-}
 
 fn string_literal(text: &str) -> IrExpr {
     IrExpr::Literal {
@@ -98,6 +93,7 @@ fn dict_literal_lookup_returns_matching_value() -> TestResult {
         span: IrSpan::default(),
     };
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module
         .functions
         .push(function("lookup-b", primitive(PrimitiveType::I32), access));
@@ -140,6 +136,7 @@ fn dict_lookup_first_and_last_entries() -> TestResult {
         }
     };
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "first",
         primitive(PrimitiveType::I32),
@@ -186,6 +183,7 @@ fn dict_missing_key_traps() -> TestResult {
         span: IrSpan::default(),
     };
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module
         .functions
         .push(function("lookup", primitive(PrimitiveType::I32), access));

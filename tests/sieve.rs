@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Phase 1c milestone — Sieve of Eratosthenes through the full
 //! `Backend::generate` pipeline.
 //!
@@ -11,6 +9,9 @@
 //! survey, core lowering, WIT, component wrap), then instantiates the
 //! resulting component under wasmtime and verifies the returned
 //! `list<bool>` against the expected primes.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,
@@ -32,13 +33,7 @@ const fn primitive_ty(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-fn array_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Array(Box::new(elem))
-}
 
-fn range_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Range(Box::new(elem))
-}
 
 fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
@@ -282,6 +277,7 @@ fn sieve_function(is_prime_id: FunctionId) -> IrFunction {
 
 fn build_sieve_module() -> IrModule {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     // Function 0: check_divisor (self-recursive).
     module.functions.push(check_divisor_function(FunctionId(0)));
     // Function 1: is_prime (calls check_divisor).

@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `layout::plan_optional`.
 //!
 //! Cover the four numeric primitives (`I32` / `I64` / `F32` / `F64`),
@@ -8,6 +6,9 @@
 //! aggregate payloads (struct collapses to a 4-byte pointer), and the
 //! rejection paths for heap-typed primitives, nested optionals, and
 //! container payloads not yet supported.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::PrimitiveType;
 use formalang::ir::{IrModule, ResolvedType, StructId};
@@ -172,7 +173,7 @@ fn optional_of_string_uses_pointer_payload() -> TestResult {
 #[test]
 fn optional_of_optional_is_not_yet_supported() -> TestResult {
     let module = IrModule::new();
-    let inner = ResolvedType::Optional(Box::new(primitive(PrimitiveType::I32)));
+    let inner = optional_ty(primitive(PrimitiveType::I32));
     match layout::plan_optional(&inner, &module) {
         Err(LayoutError::NotYetSupported { kind }) if kind == "Optional<Optional<T>>" => Ok(()),
         other => {
@@ -184,7 +185,7 @@ fn optional_of_optional_is_not_yet_supported() -> TestResult {
 #[test]
 fn optional_of_range_is_not_yet_supported() -> TestResult {
     let module = IrModule::new();
-    let inner = ResolvedType::Range(Box::new(primitive(PrimitiveType::I32)));
+    let inner = range_ty(primitive(PrimitiveType::I32));
     match layout::plan_optional(&inner, &module) {
         Err(LayoutError::NotYetSupported { kind }) if kind == "Range<T>" => Ok(()),
         other => Err(format!("expected NotYetSupported(Range<T>), got {other:?}").into()),

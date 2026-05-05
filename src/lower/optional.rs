@@ -152,12 +152,19 @@ pub(super) fn lower_coerced(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    let module = ctx.module()?;
-    if let Some(payload_ty) = some_wrap_payload(target_ty, value_expr.ty(), module) {
-        lower_some_wrap(value_expr, payload_ty, sink, ctx)
-    } else {
-        lower_expr(value_expr, sink, ctx)
+    // Some-wrap recognition needs the prelude's Optional id, which
+    // lives on the IrModule. When the lowering context doesn't carry
+    // a module (the legacy primitive-only `lower_function_body`
+    // entry point), an Optional Some-wrap can't apply by definition
+    // — there's no Optional<T> declaration to recognise. Fall
+    // through to the plain lowering rather than tripping
+    // `MissingContext`.
+    if let Some(module) = ctx.module_opt()
+        && let Some(payload_ty) = some_wrap_payload(target_ty, value_expr.ty(), module)
+    {
+        return lower_some_wrap(value_expr, payload_ty, sink, ctx);
     }
+    lower_expr(value_expr, sink, ctx)
 }
 
 /// Add the scratch-slot reservations a Some-wrap coercion at this

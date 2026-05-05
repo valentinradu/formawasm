@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `lower::lower_for`.
 //!
 //! Build a tiny module whose entry point evaluates a `for var in
@@ -8,6 +6,9 @@
 //! under wasmtime, and read back the comprehension's output array
 //! (`{ ptr, len, cap }` header + element buffer) through the exported
 //! memory.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, PrimitiveType,
@@ -32,13 +33,7 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
     ResolvedType::Primitive(p)
 }
 
-fn array_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Array(Box::new(elem))
-}
 
-fn range_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Range(Box::new(elem))
-}
 
 fn integer_literal(value: i128) -> IrExpr {
     IrExpr::Literal {
@@ -190,6 +185,7 @@ fn read_header(
 fn for_over_one_to_five_collects_loop_variable() -> TestResult {
     // for p in 1..5 { p } -> [1, 2, 3, 4]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(7);
     module.functions.push(function(
         "make",
@@ -229,6 +225,7 @@ fn for_over_one_to_five_collects_loop_variable() -> TestResult {
 fn empty_range_for_loop_returns_empty_array() -> TestResult {
     // for p in 0..0 { p } -> []
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(7);
     module.functions.push(function(
         "make",
@@ -260,6 +257,7 @@ fn empty_range_for_loop_returns_empty_array() -> TestResult {
 fn for_over_i64_range_uses_typed_loop_arithmetic() -> TestResult {
     // for p in 100I64..103I64 { p } -> [100, 101, 102]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(11);
     let i64_ty = primitive(PrimitiveType::I64);
 
@@ -329,6 +327,7 @@ fn for_over_i64_range_uses_typed_loop_arithmetic() -> TestResult {
 fn for_with_body_arithmetic_collects_squared_values() -> TestResult {
     // for p in 2..6 { p * p } -> [4, 9, 16, 25]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(7);
     let body = IrExpr::BinaryOp {
         left: Box::new(let_ref(var_id, "p")),
@@ -375,6 +374,7 @@ fn for_with_body_arithmetic_collects_squared_values() -> TestResult {
 fn for_over_i32_array_passes_each_element_into_body() -> TestResult {
     // for x in [10, 20, 30] { x + 1 } -> [11, 21, 31]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(11);
     let arr = array_literal(
         vec![
@@ -429,6 +429,7 @@ fn for_over_i32_array_passes_each_element_into_body() -> TestResult {
 fn for_over_empty_array_returns_empty_array() -> TestResult {
     // for x in [] { x } -> []
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(11);
     let arr = array_literal(Vec::new(), primitive(PrimitiveType::I32));
     module.functions.push(function(
@@ -462,6 +463,7 @@ fn for_over_empty_array_returns_empty_array() -> TestResult {
 fn for_over_i64_array_uses_eight_byte_stride_for_element_load() -> TestResult {
     // for x in [10I64, 20I64, 30I64] { x * x } -> [100, 400, 900]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(11);
     let arr = array_literal(
         vec![
@@ -523,6 +525,7 @@ fn for_over_array_inside_block_uses_outer_let_binding() -> TestResult {
     //   for x in xs { x * 10 }
     // } -> [40, 50, 60]
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let xs_id = BindingId(1);
     let var_id = BindingId(2);
 
@@ -590,6 +593,7 @@ fn for_over_array_inside_block_uses_outer_let_binding() -> TestResult {
 fn for_over_f32_array_uses_f32_load_for_var() -> TestResult {
     // for x in [1.5, 2.5] { x + x } -> [3.0, 5.0] — exercises the F32 load path.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(11);
     let arr = IrExpr::Array {
         elements: vec![
@@ -659,6 +663,7 @@ fn for_over_f32_range_iterates_one_per_step() -> TestResult {
     // counter advances by 1.0 each iteration; `len = ceil(3.0) = 3`
     // so the output buffer holds three F32 squares.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(13);
     let f32_ty = primitive(PrimitiveType::F32);
 
@@ -740,6 +745,7 @@ fn for_over_f64_range_iterates_one_per_step() -> TestResult {
     // for x in 1.0..4.0 { x + x } -> [2.0, 4.0, 6.0]. Mirrors the
     // F32 path above against the F64 typed-arithmetic helpers.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let var_id = BindingId(14);
     let f64_ty = primitive(PrimitiveType::F64);
 

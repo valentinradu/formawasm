@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Coverage for `Optional<T>` Some-wrap at struct-field and array-
 //! element initializer sites.
 //!
@@ -8,6 +6,9 @@
 //! Each scenario runs through the production module-lowering pipeline,
 //! validates, instantiates under wasmtime, and reads the wrapped
 //! cell's tag + payload through linear memory.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention, PrimitiveType, Visibility,
@@ -34,7 +35,7 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
 }
 
 fn optional(inner: ResolvedType) -> ResolvedType {
-    ResolvedType::Optional(Box::new(inner))
+    optional_ty(inner)
 }
 
 fn integer_literal(value: i128) -> IrExpr {
@@ -99,6 +100,7 @@ fn struct_optional_field_some_wraps_plain_initializer() -> TestResult {
     // through linear memory and verifies the wrapped cell carries
     // tag = SOME and the original payload.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     let struct_def = IrStruct {
         name: "Box".to_owned(),
         visibility: Visibility::Public,
@@ -193,13 +195,14 @@ fn array_optional_element_some_wraps_each_initializer() -> TestResult {
     let elem_ty = optional(primitive(PrimitiveType::I32));
     let body = IrExpr::Array {
         elements: vec![integer_literal(1), integer_literal(2), integer_literal(3)],
-        ty: ResolvedType::Array(Box::new(elem_ty.clone())),
+        ty: array_ty(elem_ty.clone()),
         span: IrSpan::default(),
     };
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "make",
-        ResolvedType::Array(Box::new(elem_ty)),
+        array_ty(elem_ty),
         body,
     ));
 

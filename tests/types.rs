@@ -1,11 +1,14 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for the formalang → core-wasm type mapping.
 
+mod common;
+
 use formalang::ast::PrimitiveType;
-use formalang::ir::ResolvedType;
+use formalang::ir::{IrModule, ResolvedType};
 use formawasm::types::{self, TypeMapError};
 use wasm_encoder::ValType;
+
+use common::{array_ty, seed_prelude};
+// Note: `array_ty` assumes `seed_prelude` was called first.
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
 type TestResult = Result<(), TestError>;
@@ -72,11 +75,20 @@ fn regex_maps_to_i32_pointer() -> TestResult {
 }
 
 #[test]
-fn aggregate_types_are_not_yet_supported() -> TestResult {
-    let array = ResolvedType::Array(Box::new(ResolvedType::Primitive(PrimitiveType::I32)));
-    match types::resolved_value_type(&array) {
-        Err(TypeMapError::NotYetSupported { kind }) if kind.contains("Array") => Ok(()),
-        other => Err(format!("expected NotYetSupported(Array<T>), got {other:?}").into()),
+fn aggregate_types_are_not_supported_at_strict_wit_path() -> TestResult {
+    // After the 0.0.4-beta migration, Array<T> rides
+    // `ResolvedType::Generic { base: GenericBase::Struct(prelude_array_id), args }`.
+    // The strict `resolved_value_type` rejects every `Generic`
+    // since those types live in linear memory and need the WIT
+    // emitter's structural mapping rather than a single-valtype
+    // boundary representation.
+    let mut module = IrModule::new();
+    seed_prelude(&mut module);
+    let _ = &module; // silences "unused" since types::resolved_value_type takes only ty
+    let arr = array_ty(ResolvedType::Primitive(PrimitiveType::I32));
+    match types::resolved_value_type(&arr) {
+        Err(TypeMapError::NotYetSupported { kind }) if kind.contains("Generic") => Ok(()),
+        other => Err(format!("expected NotYetSupported(Generic), got {other:?}").into()),
     }
 }
 

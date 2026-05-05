@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Coverage for the cross-site Optional<T> coercion paths beyond
 //! let-bindings (Phase 2 mc4 covered Let; this file exercises function
 //! returns and if branches).
@@ -8,6 +6,9 @@
 //! production `module_lowering::lower_module` pipeline, validates the
 //! emitted core wasm, instantiates under wasmtime, and reads back the
 //! tag/payload bytes from linear memory.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{
     BinaryOperator, Literal, NumberLiteral, NumberValue, NumericSuffix, ParamConvention,
@@ -35,7 +36,7 @@ const fn primitive(p: PrimitiveType) -> ResolvedType {
 }
 
 fn optional(inner: ResolvedType) -> ResolvedType {
-    ResolvedType::Optional(Box::new(inner))
+    optional_ty(inner)
 }
 
 fn integer_literal(value: i128) -> IrExpr {
@@ -118,6 +119,7 @@ fn function_return_some_wraps_plain_value() -> TestResult {
     // into a Some(Optional<I32>) cell.
     let body = integer_literal(42);
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "maybe",
         Vec::new(),
@@ -183,6 +185,7 @@ fn if_branch_some_wrap_then_arm_passthrough_else_arm_nil() -> TestResult {
     };
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "classify",
         vec![function_param("n", primitive(PrimitiveType::I32))],
@@ -253,6 +256,7 @@ fn if_branch_nil_then_some_else_swaps_arms_correctly() -> TestResult {
     };
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "classify",
         vec![function_param("n", primitive(PrimitiveType::I32))],

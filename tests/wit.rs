@@ -1,10 +1,11 @@
-#![cfg(any())] // TODO 0.0.4-beta migration: hand-built IR needs prelude-id seeding
-
 //! Tests for `wit::emit_wit`.
 //!
 //! Cover the empty-surface case, a fibonacci-shaped function, the
 //! non-primitive rejection path, and a round-trip back through
 //! `wit_parser::Resolve` to confirm the emitted text is real WIT.
+
+mod common;
+use common::{seed_prelude, optional_ty, array_ty, range_ty, dict_ty};
 
 use formalang::ast::{ExternAbi, ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
@@ -73,6 +74,7 @@ fn empty_module_emits_world_with_no_exports() -> TestResult {
 #[test]
 fn fibonacci_function_emits_export_with_s32_signature() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "fib",
         vec![(BindingId(0), "n", primitive(PrimitiveType::I32))],
@@ -92,6 +94,7 @@ fn fibonacci_function_emits_export_with_s32_signature() -> TestResult {
 #[test]
 fn all_primitive_value_types_round_trip() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "use-i64",
         vec![(BindingId(0), "n", primitive(PrimitiveType::I64))],
@@ -129,6 +132,7 @@ fn all_primitive_value_types_round_trip() -> TestResult {
 #[test]
 fn never_return_type_omits_result_clause() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "diverges",
         vec![],
@@ -147,6 +151,7 @@ fn never_return_type_omits_result_clause() -> TestResult {
 #[test]
 fn unit_return_type_omits_result_clause() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function("noop", vec![], None));
 
     let surface = survey::survey(&module);
@@ -161,6 +166,7 @@ fn unit_return_type_omits_result_clause() -> TestResult {
 #[test]
 fn struct_typed_parameter_is_rejected() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "takes-struct",
         vec![(BindingId(0), "p", ResolvedType::Struct(StructId(0)))],
@@ -179,6 +185,7 @@ fn struct_typed_parameter_is_rejected() -> TestResult {
 #[test]
 fn never_typed_parameter_is_rejected() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "takes-never",
         vec![(BindingId(0), "p", primitive(PrimitiveType::Never))],
@@ -207,6 +214,7 @@ fn missing_param_type_is_rejected() -> TestResult {
     p.ty = None;
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(f);
 
     let surface = survey::survey(&module);
@@ -248,6 +256,7 @@ fn primitive_field(name: &str, p: PrimitiveType) -> IrField {
 #[test]
 fn public_struct_emits_record_with_kebab_case_fields() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.structs.push(IrStruct {
         name: "Pair".to_owned(),
         visibility: Visibility::Public,
@@ -279,6 +288,7 @@ fn public_struct_emits_record_with_kebab_case_fields() -> TestResult {
 #[test]
 fn public_enum_emits_variant_with_unit_and_payload_arms() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.enums.push(IrEnum {
         name: "Maybe".to_owned(),
         visibility: Visibility::Public,
@@ -317,6 +327,7 @@ fn public_enum_emits_variant_with_unit_and_payload_arms() -> TestResult {
 #[test]
 fn multi_field_variant_payload_emits_tuple_arm() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.enums.push(IrEnum {
         name: "Pair".to_owned(),
         visibility: Visibility::Public,
@@ -352,6 +363,7 @@ fn mixed_type_variant_payload_emits_typed_tuple() -> TestResult {
     // field independently — no per-field-type fast path can hide a
     // bug.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.enums.push(IrEnum {
         name: "Triple".to_owned(),
         visibility: Visibility::Public,
@@ -381,6 +393,7 @@ fn mixed_type_variant_payload_emits_typed_tuple() -> TestResult {
 #[test]
 fn multi_field_variant_round_trips_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.enums.push(IrEnum {
         name: "Pair".to_owned(),
         visibility: Visibility::Public,
@@ -416,6 +429,7 @@ fn multi_field_variant_round_trips_through_wit_parser() -> TestResult {
 #[test]
 fn record_and_variant_round_trip_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.structs.push(IrStruct {
         name: "Point".to_owned(),
         visibility: Visibility::Public,
@@ -462,24 +476,10 @@ fn record_and_variant_round_trip_through_wit_parser() -> TestResult {
     Ok(())
 }
 
-fn array_ty(elem: ResolvedType) -> ResolvedType {
-    ResolvedType::Array(Box::new(elem))
-}
-
-fn optional_ty(inner: ResolvedType) -> ResolvedType {
-    ResolvedType::Optional(Box::new(inner))
-}
-
-fn dict_ty(key: ResolvedType, value: ResolvedType) -> ResolvedType {
-    ResolvedType::Dictionary {
-        key_ty: Box::new(key),
-        value_ty: Box::new(value),
-    }
-}
-
 #[test]
 fn dictionary_emits_list_of_tuple_pairs() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "table",
         vec![],
@@ -502,6 +502,7 @@ fn dictionary_emits_list_of_tuple_pairs() -> TestResult {
 #[test]
 fn dictionary_signature_round_trips_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "lookup-table",
         vec![(
@@ -527,6 +528,7 @@ fn dictionary_signature_round_trips_through_wit_parser() -> TestResult {
 #[test]
 fn string_parameter_emits_string_wit_type() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "echo",
         vec![(BindingId(0), "s", primitive(PrimitiveType::String))],
@@ -551,6 +553,7 @@ fn path_and_regex_map_to_string_at_the_boundary() -> TestResult {
     // that consumes the generated component sees them as plain
     // strings.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "use-path",
         vec![(BindingId(0), "p", primitive(PrimitiveType::Path))],
@@ -579,6 +582,7 @@ fn path_and_regex_map_to_string_at_the_boundary() -> TestResult {
 #[test]
 fn list_of_string_emits_list_string() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "lines",
         vec![],
@@ -598,6 +602,7 @@ fn list_of_string_emits_list_string() -> TestResult {
 #[test]
 fn option_of_string_emits_option_string() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "find",
         vec![(BindingId(0), "needle", primitive(PrimitiveType::String))],
@@ -617,6 +622,7 @@ fn option_of_string_emits_option_string() -> TestResult {
 #[test]
 fn string_signature_round_trips_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "greet",
         vec![(BindingId(0), "name", primitive(PrimitiveType::String))],
@@ -635,6 +641,7 @@ fn string_signature_round_trips_through_wit_parser() -> TestResult {
 #[test]
 fn array_parameter_emits_list_of_element_wit_type() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "sum",
         vec![(BindingId(0), "xs", array_ty(primitive(PrimitiveType::I32)))],
@@ -654,6 +661,7 @@ fn array_parameter_emits_list_of_element_wit_type() -> TestResult {
 #[test]
 fn array_return_type_emits_list_in_result_clause() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "ones",
         vec![(BindingId(0), "n", primitive(PrimitiveType::I32))],
@@ -673,6 +681,7 @@ fn array_return_type_emits_list_in_result_clause() -> TestResult {
 #[test]
 fn array_of_bool_and_i64_use_correct_wit_element_names() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "checks",
         vec![],
@@ -701,6 +710,7 @@ fn array_of_bool_and_i64_use_correct_wit_element_names() -> TestResult {
 #[test]
 fn list_signature_round_trips_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "primes",
         vec![(BindingId(0), "limit", primitive(PrimitiveType::I32))],
@@ -719,6 +729,7 @@ fn list_signature_round_trips_through_wit_parser() -> TestResult {
 #[test]
 fn nested_list_of_list_emits_nested_list_type() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "matrix",
         vec![],
@@ -738,6 +749,7 @@ fn nested_list_of_list_emits_nested_list_type() -> TestResult {
 #[test]
 fn optional_parameter_emits_option_of_inner_wit_type() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "set",
         vec![(
@@ -761,6 +773,7 @@ fn optional_parameter_emits_option_of_inner_wit_type() -> TestResult {
 #[test]
 fn optional_return_type_emits_option_in_result_clause() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "lookup",
         vec![(BindingId(0), "key", primitive(PrimitiveType::I64))],
@@ -780,6 +793,7 @@ fn optional_return_type_emits_option_in_result_clause() -> TestResult {
 #[test]
 fn optional_signature_round_trips_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "find",
         vec![(BindingId(0), "needle", primitive(PrimitiveType::I32))],
@@ -798,6 +812,7 @@ fn optional_signature_round_trips_through_wit_parser() -> TestResult {
 #[test]
 fn list_of_optional_emits_nested_option_in_list() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "rows",
         vec![],
@@ -821,6 +836,7 @@ fn optional_of_never_is_rejected() -> TestResult {
     // option<> form, so a public function exporting it stays
     // unsupported.
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "nothing",
         vec![],
@@ -841,6 +857,7 @@ fn optional_of_never_is_rejected() -> TestResult {
 #[test]
 fn array_of_never_element_is_rejected() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "bad",
         vec![],
@@ -861,6 +878,7 @@ fn array_of_never_element_is_rejected() -> TestResult {
 #[test]
 fn array_of_struct_element_is_rejected_until_aggregate_support_lands() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "rows",
         vec![],
@@ -879,6 +897,7 @@ fn array_of_struct_element_is_rejected_until_aggregate_support_lands() -> TestRe
 #[test]
 fn record_with_list_field_round_trips() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.structs.push(IrStruct {
         name: "Stats".to_owned(),
         visibility: Visibility::Public,
@@ -916,6 +935,7 @@ fn record_with_list_field_round_trips() -> TestResult {
 #[test]
 fn emitted_wit_round_trips_through_wit_parser() -> TestResult {
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(function(
         "fib",
         vec![(BindingId(0), "n", primitive(PrimitiveType::I32))],
@@ -951,6 +971,7 @@ fn extern_function_emits_import_with_signature() -> TestResult {
     f.extern_abi = Some(ExternAbi::C);
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(f);
 
     let surface = survey::survey(&module);
@@ -979,6 +1000,7 @@ fn import_signature_round_trips_through_wit_parser() -> TestResult {
     host.extern_abi = Some(ExternAbi::C);
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(host);
     module.functions.push(function(
         "use-host",
@@ -1019,6 +1041,7 @@ fn external_typed_export_is_rejected_with_design_note_breadcrumb() -> TestResult
     let f = function("uses-external", vec![], Some(external));
 
     let mut module = IrModule::new();
+    seed_prelude(&mut module);
     module.functions.push(f);
 
     let surface = survey::survey(&module);
