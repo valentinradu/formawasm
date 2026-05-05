@@ -644,10 +644,32 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         call_type_indices: &p.call_type_indices,
     });
 
-    for f in &module.functions {
+    // WIT export names must be unique. Pre-compute the set of
+    // top-level FunctionIds that "win" each kebab-cased name (first
+    // occurrence wins, mirroring `wit::emit_wit`'s emit-once filter)
+    // so duplicates lower to internal-only functions without
+    // emitting a colliding wasm export.
+    let mut export_winners: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    {
+        let mut taken: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for (i, f) in module.functions.iter().enumerate() {
+            if f.is_extern() || f.name.starts_with("__") {
+                continue;
+            }
+            let i_u32 = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            let name = kebab_case(&f.name);
+            if taken.insert(name) {
+                export_winners.insert(i_u32);
+            }
+        }
+    }
+    for (i, f) in module.functions.iter().enumerate() {
         if f.is_extern() {
             continue;
         }
+        let i_u32 = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        let allow_export = export_winners.contains(&i_u32);
         emit_function(
             f,
             &mut builder,
@@ -661,6 +683,7 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
             string_pool.lookup_map(),
             str_eq_idx,
             str_concat_idx,
+            allow_export,
         )?;
     }
     for (i, imp) in module.impls.iter().enumerate() {
@@ -1350,6 +1373,10 @@ fn emit_impl(
             string_pool,
             str_eq,
             str_concat,
+            // Impl methods are never WIT-level exports — the export
+            // gate inside `emit_function` already filters them via
+            // `impl_self_struct_id`.
+            false,
         )?;
     }
     Ok(())
@@ -1372,6 +1399,7 @@ fn emit_function(
     string_pool: &HashMap<String, u32>,
     str_eq: u32,
     str_concat: u32,
+    allow_export: bool,
 ) -> Result<(), ModuleLowerError> {
     let body_expr = f
         .body
@@ -1416,7 +1444,7 @@ fn emit_function(
     // alongside WIT generation in the next mc. Impl methods do NOT
     // get exported — name collisions between different impls would
     // otherwise produce a malformed module.
-    if impl_self_struct_id.is_none() && !f.name.starts_with("__") {
+    if impl_self_struct_id.is_none() && !f.name.starts_with("__") && allow_export {
         // Public functions whose signatures carry types whose
         // canonical-ABI lowering differs from our internal pointer
         // convention need a thin trampoline: the trampoline matches

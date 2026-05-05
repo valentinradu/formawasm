@@ -175,10 +175,14 @@ pub(super) fn lower_coerced(
     // knowing the concrete impl. Vtable offsets come from
     // `ctx.vtable_offset(trait_id, impl_target_key(target))` —
     // populated by `module_lowering::build_vtable_plumbing`.
-    if let ResolvedType::Trait(trait_id) = target_ty
-        && let Some(target) = trait_dispatch_target(value_expr.ty())
-    {
-        return materialize_trait_fat_pointer(*trait_id, target, value_expr, sink, ctx);
+    //
+    // For control-flow values (If, Match, Block) whose branches each
+    // produce a *different* concrete type, the static vtable offset
+    // would only be right for one branch. Push the coercion into
+    // each branch instead so every leaf materialises with its own
+    // matching vtable.
+    if let ResolvedType::Trait(trait_id) = target_ty {
+        return lower_trait_coercion(*trait_id, value_expr, sink, ctx);
     }
     lower_expr(value_expr, sink, ctx)
 }
@@ -197,6 +201,92 @@ fn trait_dispatch_target(ty: &ResolvedType) -> Option<formalang::ir::ImplTarget>
         return Some(ImplTarget::Enum(eid));
     }
     None
+}
+
+/// Coerce `value_expr` into a trait fat pointer. For control-flow
+/// shapes whose branches each produce a different concrete type
+/// (If / Match / tail-expression Block), recurse so the
+/// materialisation happens at every leaf with its branch's matching
+/// vtable. Otherwise emit a single materialisation against the
+/// value's static type.
+fn lower_trait_coercion(
+    trait_id: formalang::ir::TraitId,
+    value_expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    // Already a trait fat pointer — passthrough.
+    if matches!(value_expr.ty(), ResolvedType::Trait(_)) {
+        return lower_expr(value_expr, sink, ctx);
+    }
+    match value_expr {
+        IrExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            // Mirror `lower_if`: condition + framed if/else, but with
+            // each branch coerced into the trait shape (i32 cell ptr).
+            lower_expr(condition, sink, ctx)?;
+            sink.if_(wasm_encoder::BlockType::Result(ValType::I32));
+            lower_trait_coercion(trait_id, then_branch, sink, ctx)?;
+            if let Some(else_b) = else_branch {
+                sink.else_();
+                lower_trait_coercion(trait_id, else_b, sink, ctx)?;
+            }
+            sink.end();
+            Ok(())
+        }
+        IrExpr::Match { .. } => {
+            // Match arms each produce a concrete branch value too.
+            // Falling back to a single materialisation here would
+            // miscompile cross-impl dispatch — surface explicitly so
+            // a future pass adds the per-arm wiring.
+            Err(LowerError::NotYetImplemented {
+                what: "trait coercion through `match` arms (push lower_coerced into each arm)"
+                    .to_owned(),
+            })
+        }
+        IrExpr::Block {
+            statements, result, ..
+        } => {
+            // Lower preceding statements normally; coerce the result expression.
+            for stmt in statements {
+                super::block::lower_block_statement(stmt, sink, ctx)?;
+            }
+            lower_trait_coercion(trait_id, result, sink, ctx)
+        }
+        IrExpr::Literal { .. }
+        | IrExpr::StructInst { .. }
+        | IrExpr::EnumInst { .. }
+        | IrExpr::Array { .. }
+        | IrExpr::Tuple { .. }
+        | IrExpr::Reference { .. }
+        | IrExpr::SelfFieldRef { .. }
+        | IrExpr::FieldAccess { .. }
+        | IrExpr::LetRef { .. }
+        | IrExpr::BinaryOp { .. }
+        | IrExpr::UnaryOp { .. }
+        | IrExpr::For { .. }
+        | IrExpr::FunctionCall { .. }
+        | IrExpr::CallClosure { .. }
+        | IrExpr::MethodCall { .. }
+        | IrExpr::Closure { .. }
+        | IrExpr::ClosureRef { .. }
+        | IrExpr::DictLiteral { .. }
+        | IrExpr::DictAccess { .. } => {
+            let target = trait_dispatch_target(value_expr.ty()).ok_or_else(|| {
+                LowerError::NotYetImplemented {
+                    what: format!(
+                        "trait coercion of value with non-aggregate type {:?}",
+                        value_expr.ty()
+                    ),
+                }
+            })?;
+            materialize_trait_fat_pointer(trait_id, target, value_expr, sink, ctx)
+        }
+    }
 }
 
 /// Allocate an 8-byte fat-pointer cell `(vtable_offset:i32,
@@ -252,10 +342,11 @@ fn materialize_trait_fat_pointer(
 /// lowering walker's consumption.
 pub(super) fn coercion_scratch_counts(
     target_ty: &ResolvedType,
-    value_ty: &ResolvedType,
+    value_expr: &IrExpr,
     out: &mut ScratchCounts,
     module: Option<&formalang::ir::IrModule>,
 ) -> Result<(), LowerError> {
+    let value_ty = value_expr.ty();
     // Without module access we can't classify Optional<T> from
     // Generic — over-reserving is harmless to correctness, but
     // skipping when None mirrors the previous behaviour where
@@ -263,15 +354,12 @@ pub(super) fn coercion_scratch_counts(
     let Some(module) = module else {
         return Ok(());
     };
-    // Trait-erasure widening: target=Trait(_), value=Struct/Enum.
-    // Reserve two i32 scratch locals — one for the data pointer,
-    // one for the fat-pointer cell pointer.
-    if matches!(target_ty, ResolvedType::Trait(_))
-        && trait_dispatch_target(value_ty).is_some()
-    {
-        bump_count(&mut out.i32)?;
-        bump_count(&mut out.i32)?;
-        return Ok(());
+    // Trait-erasure widening: target=Trait(_), value coerces into a
+    // fat-pointer cell. The lowering path pushes the coercion into
+    // each branch of an If/Match/Block, so we count two i32 scratch
+    // locals per *leaf* materialisation, not per outer call.
+    if matches!(target_ty, ResolvedType::Trait(_)) {
+        return count_trait_coercion_leaves(value_expr, out);
     }
     let Some(payload_ty) = some_wrap_payload(target_ty, value_ty, module) else {
         return Ok(());
@@ -290,4 +378,57 @@ pub(super) fn coercion_scratch_counts(
         }
     }
     Ok(())
+}
+
+/// Walk `value_expr` and reserve 2 i32 scratch locals per
+/// materialisation leaf, mirroring the recursion in
+/// [`lower_trait_coercion`]. An If contributes leaves through both
+/// arms; a Block contributes through its result expression. Other
+/// shapes count as a single leaf.
+fn count_trait_coercion_leaves(
+    value_expr: &IrExpr,
+    out: &mut ScratchCounts,
+) -> Result<(), LowerError> {
+    if matches!(value_expr.ty(), ResolvedType::Trait(_)) {
+        // Already a trait fat pointer — passthrough, no extra scratch.
+        return Ok(());
+    }
+    match value_expr {
+        IrExpr::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            count_trait_coercion_leaves(then_branch, out)?;
+            if let Some(else_b) = else_branch {
+                count_trait_coercion_leaves(else_b, out)?;
+            }
+            Ok(())
+        }
+        IrExpr::Block { result, .. } => count_trait_coercion_leaves(result, out),
+        IrExpr::Literal { .. }
+        | IrExpr::StructInst { .. }
+        | IrExpr::EnumInst { .. }
+        | IrExpr::Array { .. }
+        | IrExpr::Tuple { .. }
+        | IrExpr::Reference { .. }
+        | IrExpr::SelfFieldRef { .. }
+        | IrExpr::FieldAccess { .. }
+        | IrExpr::LetRef { .. }
+        | IrExpr::BinaryOp { .. }
+        | IrExpr::UnaryOp { .. }
+        | IrExpr::For { .. }
+        | IrExpr::Match { .. }
+        | IrExpr::FunctionCall { .. }
+        | IrExpr::CallClosure { .. }
+        | IrExpr::MethodCall { .. }
+        | IrExpr::Closure { .. }
+        | IrExpr::ClosureRef { .. }
+        | IrExpr::DictLiteral { .. }
+        | IrExpr::DictAccess { .. } => {
+            bump_count(&mut out.i32)?;
+            bump_count(&mut out.i32)?;
+            Ok(())
+        }
+    }
 }

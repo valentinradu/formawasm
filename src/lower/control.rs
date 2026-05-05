@@ -232,6 +232,11 @@ pub fn lower_match(
     let arm_count_u32 = u32::try_from(num_arms).map_err(|_| LowerError::NotYetImplemented {
         what: "more than u32::MAX match arms in a single function".to_owned(),
     })?;
+    // The prelude's Optional uses canonical tag values
+    // (`OPTIONAL_TAG_NIL=0` / `OPTIONAL_TAG_SOME=1`) regardless of
+    // the variant declaration order in the IR. Detect that case so
+    // we override the position-based mapping below.
+    let is_prelude_optional = module.prelude_optional_id() == Some(enum_id);
     let mut targets = vec![arm_count_u32; num_variants];
     let mut wildcard_idx: Option<usize> = None;
     for (p, arm) in arms.iter().enumerate() {
@@ -242,7 +247,28 @@ pub fn lower_match(
         let p_u32 = u32::try_from(p).map_err(|_| LowerError::NotYetImplemented {
             what: "more than u32::MAX match arms in a single function".to_owned(),
         })?;
-        let tag = arm.variant_idx.0 as usize;
+        // Resolve the arm's variant by *name* against the enum
+        // declaration. The frontend sometimes leaves `variant_idx`
+        // as a `VariantIdx(0)` placeholder (every arm collides on
+        // index 0), which would route the br_table by accident.
+        // Variant names compare case-insensitively because formalang
+        // sources use `Some` while the IR canonicalises to `some`.
+        let tag = if is_prelude_optional {
+            if arm.variant.eq_ignore_ascii_case("some") {
+                crate::layout::OPTIONAL_TAG_SOME as usize
+            } else if arm.variant.eq_ignore_ascii_case("none")
+                || arm.variant.eq_ignore_ascii_case("nil")
+            {
+                crate::layout::OPTIONAL_TAG_NIL as usize
+            } else {
+                arm.variant_idx.0 as usize
+            }
+        } else {
+            e.variants
+                .iter()
+                .position(|v| v.name.eq_ignore_ascii_case(&arm.variant))
+                .unwrap_or(arm.variant_idx.0 as usize)
+        };
         if let Some(slot) = targets.get_mut(tag) {
             *slot = p_u32;
         }
@@ -306,9 +332,17 @@ fn emit_arm_bindings(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
+    // Resolve by variant name first — the frontend sometimes leaves
+    // `variant_idx` as a `VariantIdx(0)` placeholder regardless of
+    // the actual variant. Mirrors the dispatch fix in `lower_match`.
+    let variant_idx = layout
+        .variants
+        .iter()
+        .position(|v| v.name.eq_ignore_ascii_case(&arm.variant))
+        .unwrap_or(arm.variant_idx.0 as usize);
     let variant_layout = layout
         .variants
-        .get(arm.variant_idx.0 as usize)
+        .get(variant_idx)
         .ok_or_else(|| LowerError::UnknownVariant {
             enum_name: "<scrutinee enum>".to_owned(),
             variant: arm.variant.clone(),

@@ -215,6 +215,14 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
         }
     }
 
+    // WIT can't represent function overloading, so multiple
+    // formalang functions sharing a source name (resolved by argument
+    // labels at the call site) collapse to one external name. Track
+    // the kebab-cased names already emitted and skip later
+    // collisions — the surviving overload is the first declared.
+    // Internal call sites still resolve via FunctionId, so the
+    // skipped overloads remain reachable from the rest of the module.
+    let mut emitted_export_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for &fid in &surface.exports {
         let f = module
             .functions
@@ -233,6 +241,10 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
         // the only sound reading. `pub fn` with such a signature is
         // already rejected at preflight.
         if !function_signature_crosses_boundary(f, module) {
+            continue;
+        }
+        let name = kebab_case(&f.name);
+        if !emitted_export_names.insert(name) {
             continue;
         }
         write_export(&mut out, f, module)?;

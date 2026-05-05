@@ -38,8 +38,50 @@ pub fn lower_function_call(
         });
     };
 
-    let id =
-        function_id.ok_or_else(|| LowerError::UnresolvedFunctionCall { path: path.clone() })?;
+    // Frontend passes (DeadCodeElimination, MonomorphisePass) can
+    // renumber `module.functions` and leave the IR's `function_id`
+    // pointing at a stale slot — *and* overloads compound the
+    // problem because every overload shares the same source name.
+    // When a module is in context, resolve by
+    // *(name, argument-label set)*: a candidate is the function
+    // whose name matches the path's last segment AND whose parameter
+    // names cover every labelled argument the call passes. Validate
+    // `function_id` against that filter first; fall back to a search
+    // when it disagrees. Without module context (legacy hand-built
+    // tests), trust `function_id` as authoritative.
+    let module = ctx.module().ok();
+    let id = if let Some(m) = module {
+        let path_last = path.last().map(String::as_str);
+        let arg_labels: Vec<&str> = args
+            .iter()
+            .filter_map(|(label, _)| label.as_deref())
+            .collect();
+        let matches_signature = |f: &formalang::ir::IrFunction| -> bool {
+            Some(f.name.as_str()) == path_last
+                && f.params.len() == args.len()
+                && arg_labels
+                    .iter()
+                    .all(|label| f.params.iter().any(|p| p.name == *label))
+        };
+        let id_valid = function_id.and_then(|id| {
+            let f = m.functions.get(id.0 as usize)?;
+            if matches_signature(f) { Some(id) } else { None }
+        });
+        let resolved_id = id_valid.or_else(|| {
+            m.functions.iter().enumerate().find_map(|(i, f)| {
+                if matches_signature(f) {
+                    u32::try_from(i).ok().map(formalang::ir::FunctionId)
+                } else {
+                    None
+                }
+            })
+        });
+        resolved_id
+            .or(*function_id)
+            .ok_or_else(|| LowerError::UnresolvedFunctionCall { path: path.clone() })?
+    } else {
+        function_id.ok_or_else(|| LowerError::UnresolvedFunctionCall { path: path.clone() })?
+    };
     let wasm_idx = ctx
         .functions
         .get(id)
@@ -48,10 +90,7 @@ pub fn lower_function_call(
     // Look up the callee in the IR module so each argument can coerce
     // to its parameter's declared type (Some-wrap widens a plain T
     // into an Optional<T> param at the call site).
-    let callee = ctx
-        .module()
-        .ok()
-        .and_then(|m| m.functions.get(id.0 as usize));
+    let callee = module.and_then(|m| m.functions.get(id.0 as usize));
     for (param_name, arg) in args {
         let target = callee.and_then(|f| {
             param_name.as_ref().and_then(|n| {

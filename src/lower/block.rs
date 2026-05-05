@@ -34,7 +34,7 @@ pub fn lower_block(
     lower_expr(result, sink, ctx)
 }
 
-fn lower_block_statement(
+pub(super) fn lower_block_statement(
     stmt: &IrBlockStatement,
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
@@ -97,9 +97,7 @@ fn lower_assign(
     use crate::layout::plan_struct;
 
     match target {
-        IrExpr::SelfFieldRef {
-            field, field_idx, ..
-        } => {
+        IrExpr::SelfFieldRef { field, .. } => {
             let struct_id = ctx.self_struct_id.ok_or(LowerError::MissingSelfStruct)?;
             let module = ctx.module()?;
             let s = module
@@ -107,36 +105,21 @@ fn lower_assign(
                 .get(struct_id.0 as usize)
                 .ok_or(LowerError::UnknownStruct(struct_id))?;
             let layout = plan_struct(s, module)?;
-            let idx = field_idx.0 as usize;
-            let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
-                && let Some(fd) = s.fields.get(idx)
-            {
-                (fl, fd)
-            } else {
-                lookup_field_by_name(s, &layout.fields, field)?
-            };
+            // The frontend emits `FieldIdx(0)` as a placeholder, so
+            // resolving by index would silently pick the first field —
+            // mirror the read path and key on the field name.
+            let (field_layout, field_def) = lookup_field_by_name(s, &layout.fields, field)?;
             let primitive = primitive_of(&field_def.ty)?;
             sink.local_get(0);
             lower_expr(value, sink, ctx)?;
             store_primitive(primitive, *field_layout, sink);
             Ok(())
         }
-        IrExpr::FieldAccess {
-            object,
-            field,
-            field_idx,
-            ..
-        } => {
+        IrExpr::FieldAccess { object, field, .. } => {
             let module = ctx.module()?;
             let (layout, fields_meta) = layout_for_aggregate(object.ty(), module)?;
-            let idx = field_idx.0 as usize;
-            let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
-                && let Some(fd) = fields_meta.get(idx)
-            {
-                (fl, fd)
-            } else {
-                lookup_field_by_name_with_meta(&fields_meta, &layout.fields, field, "<aggregate>")?
-            };
+            let (field_layout, field_def) =
+                lookup_field_by_name_with_meta(&fields_meta, &layout.fields, field, "<aggregate>")?;
             let primitive = primitive_of(&field_def.ty)?;
             lower_expr(object, sink, ctx)?;
             lower_expr(value, sink, ctx)?;
@@ -506,7 +489,7 @@ fn count_scratch_locals(
     // closing site, so any Some-wrap that happens there reserves
     // scratch slots up-front just like the per-expression sites.
     if let Some(target) = return_ty {
-        super::optional::coercion_scratch_counts(target, expr.ty(), &mut counts, module)?;
+        super::optional::coercion_scratch_counts(target, expr, &mut counts, module)?;
     }
     walk_count(expr, module, &mut counts)?;
     Ok(counts)
@@ -529,7 +512,7 @@ fn walk_count_block_statement(
     match stmt {
         IrBlockStatement::Let { ty, value, .. } => {
             if let Some(target) = ty.as_ref() {
-                super::optional::coercion_scratch_counts(target, value.ty(), out, module)?;
+                super::optional::coercion_scratch_counts(target, value, out, module)?;
             }
             walk_count(value, module, out)
         }
@@ -564,7 +547,7 @@ fn walk_count(
             {
                 for (name, _idx, e) in fields {
                     if let Some(decl) = s.fields.iter().find(|f| f.name == *name) {
-                        super::optional::coercion_scratch_counts(&decl.ty, e.ty(), out, module)?;
+                        super::optional::coercion_scratch_counts(&decl.ty, e, out, module)?;
                     }
                     walk_count(e, module, out)?;
                 }
@@ -588,7 +571,7 @@ fn walk_count(
             {
                 for (name, _idx, value) in fields {
                     if let Some(decl) = v.fields.iter().find(|f| f.name == *name) {
-                        super::optional::coercion_scratch_counts(&decl.ty, value.ty(), out, module)?;
+                        super::optional::coercion_scratch_counts(&decl.ty, value, out, module)?;
                     }
                     walk_count(value, module, out)?;
                 }
@@ -612,7 +595,7 @@ fn walk_count(
                 if let Some(targets) = target_fields
                     && let Some((_, t)) = targets.iter().find(|(n, _)| n == name)
                 {
-                    super::optional::coercion_scratch_counts(t, e.ty(), out, module)?;
+                    super::optional::coercion_scratch_counts(t, e, out, module)?;
                 }
                 walk_count(e, module, out)?;
             }
@@ -650,10 +633,10 @@ fn walk_count(
             // (`Optional` widening only — every other type combination
             // contributes nothing). Count those wraps so the pre-walk's
             // totals match the lowering walker.
-            super::optional::coercion_scratch_counts(ty, then_branch.ty(), out, module)?;
+            super::optional::coercion_scratch_counts(ty, then_branch, out, module)?;
             walk_count(then_branch, module, out)?;
             if let Some(else_branch) = else_branch {
-                super::optional::coercion_scratch_counts(ty, else_branch.ty(), out, module)?;
+                super::optional::coercion_scratch_counts(ty, else_branch, out, module)?;
                 walk_count(else_branch, module, out)?;
             }
         }
@@ -675,7 +658,7 @@ fn walk_count(
                             .and_then(|p| p.ty.as_ref())
                     });
                     if let Some(t) = target {
-                        super::optional::coercion_scratch_counts(t, arg.ty(), out, module)?;
+                        super::optional::coercion_scratch_counts(t, arg, out, module)?;
                     }
                     walk_count(arg, module, out)?;
                 }
@@ -737,7 +720,7 @@ fn walk_count(
                     })
                 });
                 if let Some(t) = target {
-                    super::optional::coercion_scratch_counts(t, arg.ty(), out, module)?;
+                    super::optional::coercion_scratch_counts(t, arg, out, module)?;
                 }
                 walk_count(arg, module, out)?;
             }
@@ -777,7 +760,7 @@ fn walk_count(
             bump_count(&mut out.i32)?;
             walk_count(scrutinee, module, out)?;
             for arm in arms {
-                super::optional::coercion_scratch_counts(ty, arm.body.ty(), out, module)?;
+                super::optional::coercion_scratch_counts(ty, &arm.body, out, module)?;
                 walk_count(&arm.body, module, out)?;
             }
         }
@@ -797,7 +780,7 @@ fn walk_count(
                 module.and_then(|m| crate::compound::array_elem(ty, m));
             for e in elements {
                 if let Some(t) = elem_ty {
-                    super::optional::coercion_scratch_counts(t, e.ty(), out, module)?;
+                    super::optional::coercion_scratch_counts(t, e, out, module)?;
                 }
                 walk_count(e, module, out)?;
             }

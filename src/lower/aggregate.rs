@@ -36,7 +36,10 @@ pub fn lower_struct_inst(
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
     let IrExpr::StructInst {
-        struct_id, fields, ..
+        struct_id,
+        fields,
+        ty,
+        ..
     } = expr
     else {
         return Err(LowerError::NotYetImplemented {
@@ -44,7 +47,14 @@ pub fn lower_struct_inst(
         });
     };
 
-    let id = struct_id.ok_or(LowerError::ExternalStructInst)?;
+    // Prefer `ty`'s carried StructId — passes (DeadCodeElimination)
+    // can renumber `module.structs` and leave the IR's `struct_id`
+    // field pointing at the pre-renumbering slot. The post-pass
+    // type-checker keeps `ty` in sync, so `compound::struct_id_of`
+    // resolves to the live id.
+    let id = crate::compound::struct_id_of(ty)
+        .or(*struct_id)
+        .ok_or(LowerError::ExternalStructInst)?;
     let module = ctx.module()?;
     let s = module
         .structs
@@ -1120,10 +1130,7 @@ pub fn lower_self_field_ref(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    let IrExpr::SelfFieldRef {
-        field, field_idx, ..
-    } = expr
-    else {
+    let IrExpr::SelfFieldRef { field, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
             what: "lower_self_field_ref called with non-SelfFieldRef expression".to_owned(),
         });
@@ -1137,14 +1144,10 @@ pub fn lower_self_field_ref(
         .ok_or(LowerError::UnknownStruct(struct_id))?;
     let layout = plan_struct(s, module)?;
 
-    let idx = field_idx.0 as usize;
-    let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
-        && let Some(fd) = s.fields.get(idx)
-    {
-        (fl, fd)
-    } else {
-        lookup_field_by_name(s, &layout.fields, field)?
-    };
+    // The frontend emits `FieldIdx(0)` as a placeholder on every
+    // `SelfFieldRef`, so resolving by index would silently pick the
+    // first field. The carried `field` name is authoritative.
+    let (field_layout, field_def) = lookup_field_by_name(s, &layout.fields, field)?;
 
     let primitive = primitive_of(&field_def.ty)?;
     // `self` is the first wasm parameter — local index 0.
@@ -1164,13 +1167,7 @@ pub fn lower_field_access(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    let IrExpr::FieldAccess {
-        object,
-        field,
-        field_idx,
-        ..
-    } = expr
-    else {
+    let IrExpr::FieldAccess { object, field, .. } = expr else {
         return Err(LowerError::NotYetImplemented {
             what: "lower_field_access called with non-FieldAccess expression".to_owned(),
         });
@@ -1179,17 +1176,17 @@ pub fn lower_field_access(
     let module = ctx.module()?;
     let (layout, fields_meta) = layout_for_aggregate(object.ty(), module)?;
 
-    // Resolve the field. `field_idx` carries the resolved position;
-    // fall back to a name lookup if it points past the end (older IR
-    // emitters sometimes leave it as `FieldIdx(0)` placeholder).
-    let idx = field_idx.0 as usize;
-    let (field_layout, field_def) = if let Some(fl) = layout.fields.get(idx)
-        && let Some(fd) = fields_meta.get(idx)
-    {
-        (fl, fd)
-    } else {
-        lookup_field_by_name_with_meta(&fields_meta, &layout.fields, field, &type_tag(object.ty()))?
-    };
+    // The frontend often leaves `field_idx` as a `FieldIdx(0)`
+    // placeholder, so resolving by index would silently pick the
+    // first field. The carried `field` name is authoritative for
+    // both structs and tuples (tuple synthetic fields use the
+    // positional names "0"/"1"/...).
+    let (field_layout, field_def) = lookup_field_by_name_with_meta(
+        &fields_meta,
+        &layout.fields,
+        field,
+        &type_tag(object.ty()),
+    )?;
 
     // Aggregate field types (Optional<T>, Struct, Tuple, …) live as
     // a heap-pointer cell at the field's offset; primitive fields
