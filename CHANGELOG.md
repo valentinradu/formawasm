@@ -14,7 +14,69 @@ plumbing and the feature-gated module skeleton are wired, but
 content emission is a tick-box. Garbage collection over the bump
 allocator and async support stay deferred as separate initiatives.
 
-## [Unreleased]
+## [0.0.1-beta] — 2026-05-05
+
+First crates.io release. The full backend pipeline is wired —
+preflight, survey, lowering, runtime helpers, virtual dispatch,
+canonical-ABI wrappers, WIT generation, component wrap. All 20
+end-to-end examples in `examples/` pass; the test suite is at
+328 passing / 0 failing on this commit.
+
+### Backend correctness sweep (2026-05-05)
+
+- Stale-id resilience: every IR-side id (`FieldIdx`, `VariantIdx`,
+  `function_id`, `struct_id`) is treated as a hint when the
+  carried name resolves a different live target. Closes example
+  failures around DeadCodeElimination renumbering and frontend
+  placeholders.
+- Composed traits: virtual dispatch through a trait that inherits
+  methods (e.g. `pub trait NamedRenderable: Named + Renderable {}`)
+  walks `composed_traits` transitively when building the per-impl
+  vtable, so `let x: NamedRenderable = ...; x.render()` reaches
+  the parent-trait impl.
+- `let s: TraitTy = if cond { Square(...) } else { Rectangle(...) }`
+  now materialises the fat-pointer cell per-branch so each side
+  records the matching vtable offset.
+- Optional match dispatch uses canonical
+  `OPTIONAL_TAG_NIL` / `OPTIONAL_TAG_SOME` constants regardless
+  of the variant declaration order in the prelude IR.
+- WIT export deduplication: when overloaded source-level functions
+  collapse to one external name, the first overload wins; later
+  overloads stay reachable internally through `FunctionId`.
+- Closure-typed fields on private structs lay out as 4-byte heap
+  pointers (`pub` structs with closure fields stay rejected by
+  preflight, per the language spec).
+- Private structs / enums in a public function signature mark the
+  surrounding function as not-WIT-crossing instead of emitting an
+  undeclared type reference.
+
+### Code-quality pass (2026-05-05)
+
+- 0 clippy errors with `cargo clippy --all-targets -- -D warnings`,
+  including the strict denies in `Cargo.toml` (`unwrap_used`,
+  `panic_in_result_fn`, `wildcard_enum_match_arm`,
+  `arithmetic_side_effects`, the cast-safety lints, etc.).
+- Wildcard match arms enumerated explicitly across every site that
+  matches a `#[non_exhaustive]` upstream enum. The one remaining
+  `#[expect(clippy::match_same_arms, reason = ...)]` covers the
+  string-pool walker over `Literal`, where a wildcard arm is
+  language-mandated and clippy double-counts identical no-op
+  arms.
+- `emit_canonical_abi_wrapper`'s nested type definitions and
+  recursive helpers hoisted to module scope
+  (`CabiPlan` / `CabiMaterialisationOps` / `build_cabi_field_value` /
+  `emit_cabi_materialise`); recursive struct / variant builds
+  factored into `build_cabi_struct_value` /
+  `build_cabi_variant_value`.
+- `lower_match` extracts `build_match_dispatch_table`;
+  `build_vtable_plumbing` extracts `write_vtable_cells`;
+  `wit::emit_wit` extracts `write_types_interface` /
+  `write_extern_impl_imports`; `wit::resolved_wit_type` extracts
+  three named helpers.
+- Test fixtures: shared `tests/common/mod.rs` helpers no longer
+  carry per-target `#[expect(dead_code, ...)]` whose fulfillment
+  flickered across the compile matrix. A single
+  `_force_use_helpers` test references every helper.
 
 ### Phase-5 housekeeping (2026-05-02)
 

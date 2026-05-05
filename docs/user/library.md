@@ -8,11 +8,11 @@ In your `Cargo.toml`:
 
 ```toml
 [dependencies]
-formalang = "0.0.2-beta"
-formawasm = { git = "https://github.com/valentinradu/formawasm" }
+formalang = "0.0.5-beta"
+formawasm = "0.0.1-beta"
 ```
 
-(formawasm is pre-1.0 and not on crates.io yet; pin to a commit if you need stable upstream behavior.)
+formawasm is pre-1.0; pinning to an exact patch is recommended until a `0.1.0` line lands.
 
 ## End-to-end example
 

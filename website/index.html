@@ -68,7 +68,7 @@
             <h2 class="text-xl font-semibold text-cyan mb-4 text-center">From source to component to run, no Rust needed</h2>
             <div class="code-card">
                 <pre class="text-sm leading-relaxed"><span class="text-comment"># Install the CLI…</span>
-cargo install --git https://github.com/valentinradu/formawasm formawasm
+cargo install formawasm
 
 <span class="text-comment"># …write a FormaLang source file…</span>
 echo <span class="text-green">'pub fn id(x: I32) -> I32 { x }'</span> &gt; id.fv
@@ -93,11 +93,11 @@ wasmtime run --invoke <span class="text-green">'id(42)'</span> id.wasm
 
         <!-- Quick example: library -->
         <section class="max-w-3xl mx-auto px-6 pb-24">
-            <h2 class="text-xl font-semibold text-cyan mb-4 text-center">…or wire the backend into your build</h2>
+            <h2 class="text-xl font-semibold text-cyan mb-4 text-center">Or wire the backend into your build</h2>
             <div class="code-card">
                 <pre class="text-sm leading-relaxed"><span class="text-comment">// Cargo.toml</span>
 <span class="text-yellow">[dependencies]</span>
-formawasm = { <span class="text-magenta">git</span> = <span class="text-green">"https://github.com/valentinradu/formawasm"</span> }
+formawasm = <span class="text-green">"0.0.1-beta"</span>
 
 <span class="text-comment">// main.rs</span>
 <span class="text-magenta">use</span> formalang::{Pipeline, compile_to_ir};

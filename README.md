@@ -21,7 +21,13 @@ The boundary between a component and its host is described in **WIT** — the sm
 Install the CLI:
 
 ```bash
-cargo install --git https://github.com/valentinradu/formawasm formawasm
+cargo install formawasm
+```
+
+Or pin to a specific version:
+
+```bash
+cargo install formawasm --version 0.0.1-beta
 ```
 
 Compile a `.fv` source file:

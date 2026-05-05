@@ -10,7 +10,7 @@ Enable in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-formawasm = { version = "...", features = ["wasm-opt"] }
+formawasm = { version = "0.0.1-beta", features = ["wasm-opt"] }
 ```
 
 Or, when compiling formawasm directly:
@@ -32,7 +32,7 @@ Attaches DWARF debug sections (`.debug_info`, `.debug_abbrev`, `.debug_line`, `.
 
 ```toml
 [dependencies]
-formawasm = { version = "...", features = ["dwarf"] }
+formawasm = { version = "0.0.1-beta", features = ["dwarf"] }
 ```
 
 Granularity is function-level: one subprogram DIE per user function with `name + decl_file + decl_line + low_pc / high_pc`, plus a `.debug_line` row pointing at each function's first source line. Per-statement line tables can layer on later.
@@ -51,7 +51,7 @@ All three are independent and compose cleanly:
 
 ```toml
 [dependencies]
-formawasm = { version = "...", features = ["wasm-opt", "dwarf"] }
+formawasm = { version = "0.0.1-beta", features = ["wasm-opt", "dwarf"] }
 ```
 
 Order of operations in `WasmBackend::generate` when all are enabled:

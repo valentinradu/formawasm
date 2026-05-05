@@ -6,28 +6,41 @@ The repo's [`examples/`](https://github.com/valentinradu/formawasm/tree/main/exa
 
 ```bash
 # formawasm CLI
-cargo install --git https://github.com/valentinradu/formawasm formawasm
+cargo install formawasm
 
 # wasmtime CLI
 curl https://wasmtime.dev/install.sh -sSf | bash
-# …or: brew install wasmtime
+# Or: brew install wasmtime
 ```
 
 ## Compile and run
 
+The repo's numbered `.fv` files each declare one or more `pub fn`
+exports plus a `pub fn run_checks()` that asserts the expected
+outputs. Compile any of them with the CLI:
+
 ```bash
-formawasm examples/fibonacci.fv
-wasmtime run --invoke 'fib(10)' examples/fibonacci.wasm
-# 55
+formawasm examples/02_generics_pair_result.fv
+wasmtime run --invoke 'pair-sum()' examples/02_generics_pair_result.wasm
+# 3
 ```
 
-The `examples/sum.fv` file shows multiple exports in one component:
+Examples like `12_numeric_primitives.fv` carry several primitive-typed
+exports in one component:
 
 ```bash
-formawasm examples/sum.fv
-wasmtime run --invoke 'double(21)'   examples/sum.wasm   # 42
-wasmtime run --invoke 'sum(7, 35)'   examples/sum.wasm   # 42
-wasmtime run --invoke 'factorial(5)' examples/sum.wasm   # 120
+formawasm examples/12_numeric_primitives.fv
+wasmtime run --invoke 'i32-add(7, 35)'  examples/12_numeric_primitives.wasm   # 42
+wasmtime run --invoke 'i64-mul(6, 7)'   examples/12_numeric_primitives.wasm   # 42
+```
+
+To exercise the embedded `assert(...)` calls in each example's
+`run-checks` export, run the test harness — it wires `assert` to
+a host function that traps on `false`, so passing means every
+embedded assertion held:
+
+```bash
+cargo test --test examples
 ```
 
 ## Limits of `wasmtime --invoke`
