@@ -198,6 +198,11 @@ pub enum ModuleLowerError {
     /// every vtable byte must fit in that range.
     #[error("static data segment exceeds u32::MAX after appending vtable bytes")]
     VtableDataOverflow,
+
+    /// A layout-planner failure surfaced during canonical-ABI
+    /// wrapper synthesis (e.g. struct/enum size overflow).
+    #[error(transparent)]
+    Layout(#[from] crate::layout::LayoutError),
 }
 
 /// Walk `module` and return the encoded core-Wasm bytes.
@@ -517,7 +522,12 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         local_counter = local_counter
             .checked_add(1)
             .ok_or(ModuleLowerError::TooManyFunctions)?;
-        if needs_canonical_abi_wrapper(f, module) {
+        // Only reserve a wrapper slot when `emit_function`'s export
+        // path will actually emit one — closure-conv-lifted
+        // helpers (`__` prefix) skip exports and so skip wrappers.
+        // Without this guard we'd reserve a slot we never fill,
+        // shifting every later function index by 1.
+        if !f.name.starts_with("__") && needs_canonical_abi_wrapper(f, module) {
             local_counter = local_counter
                 .checked_add(1)
                 .ok_or(ModuleLowerError::TooManyFunctions)?;
@@ -1545,7 +1555,8 @@ fn needs_canonical_abi_wrapper(f: &IrFunction, module: &IrModule) -> bool {
 
 /// Whether a parameter type lowers to multiple core-wasm i32 values
 /// at the canonical-ABI boundary. `string` / `Path` / `Regex` / list
-/// pass as `(ptr, len)`; everything else stays as a single value.
+/// pass as `(ptr, len)`; record / variant types flatten as a
+/// concatenation of their fields' canonical representations.
 fn param_needs_split(ty: &ResolvedType, module: &IrModule) -> bool {
     if matches!(
         ty,
@@ -1557,7 +1568,93 @@ fn param_needs_split(ty: &ResolvedType, module: &IrModule) -> bool {
     ) {
         return true;
     }
-    matches!(crate::compound::Compound::of(ty, module), crate::compound::Compound::Array(_))
+    if matches!(crate::compound::Compound::of(ty, module), crate::compound::Compound::Array(_)) {
+        return true;
+    }
+    // Record / variant flatten: the canonical-ABI passes the
+    // fields directly. Structs always need flattening (every
+    // non-empty pub struct surfaces as a record on the WIT
+    // side); enums similarly flatten as `(tag, ...payload)`.
+    if let Some(_sid) = crate::compound::struct_id_of(ty) {
+        return true;
+    }
+    if let Some(_eid) = crate::compound::enum_id_of(ty) {
+        return true;
+    }
+    false
+}
+
+/// Flatten a [`ResolvedType`] into the sequence of core-wasm value
+/// types the canonical ABI represents it with at the component
+/// boundary. Mirrors the spec's `flatten_type` lifting rules:
+///
+/// - Numeric / boolean primitives flatten to one matching
+///   `ValType` slot.
+/// - `string`, `Path`, `Regex`, `list<T>` flatten to `(ptr, len)`
+///   = two `ValType::I32` slots.
+/// - Non-empty structs flatten to the concatenation of their
+///   fields' canonical reps.
+/// - Variants flatten to `(tag, ...flat-of-largest-arm-payload)`.
+///
+/// Empty structs and `Never` collapse to zero slots — `Never` is
+/// also rejected upstream as a parameter type.
+fn flatten_canonical_abi(ty: &ResolvedType, module: &IrModule) -> Result<Vec<ValType>, ModuleLowerError> {
+    use formalang::ast::PrimitiveType;
+    match ty {
+        ResolvedType::Primitive(p) => match p {
+            PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex => {
+                Ok(vec![ValType::I32, ValType::I32])
+            }
+            PrimitiveType::Never => Ok(Vec::new()),
+            _ => {
+                let vt = body_value_type(ty)?.ok_or_else(|| {
+                    ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                        kind: format!("primitive {p:?} as canonical-ABI value"),
+                    })
+                })?;
+                Ok(vec![vt])
+            }
+        },
+        _ => {
+            if matches!(crate::compound::Compound::of(ty, module), crate::compound::Compound::Array(_)) {
+                return Ok(vec![ValType::I32, ValType::I32]);
+            }
+            if let Some(sid) = crate::compound::struct_id_of(ty) {
+                let s = module.structs.get(sid.0 as usize).ok_or_else(|| {
+                    ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                        kind: format!("Struct({}) out of range", sid.0),
+                    })
+                })?;
+                let mut out = Vec::new();
+                for field in &s.fields {
+                    out.extend(flatten_canonical_abi(&field.ty, module)?);
+                }
+                return Ok(out);
+            }
+            if let Some(eid) = crate::compound::enum_id_of(ty) {
+                let e = module.enums.get(eid.0 as usize).ok_or_else(|| {
+                    ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                        kind: format!("Enum({}) out of range", eid.0),
+                    })
+                })?;
+                let mut max_payload: Vec<ValType> = Vec::new();
+                for variant in &e.variants {
+                    let mut payload = Vec::new();
+                    for field in &variant.fields {
+                        payload.extend(flatten_canonical_abi(&field.ty, module)?);
+                    }
+                    if payload.len() > max_payload.len() {
+                        max_payload = payload;
+                    }
+                }
+                let mut out = Vec::with_capacity(max_payload.len() + 1);
+                out.push(ValType::I32);
+                out.extend(max_payload);
+                return Ok(out);
+            }
+            Ok(vec![body_value_type(ty)?.unwrap_or(ValType::I32)])
+        }
+    }
 }
 
 /// Build a thin trampoline matching the canonical-ABI signature of
@@ -1577,17 +1674,20 @@ fn emit_canonical_abi_wrapper(
     builder: &mut ModuleBuilder,
     module: &IrModule,
 ) -> Result<u32, ModuleLowerError> {
-    use crate::layout::{STRING_HEADER_SIZE, STRING_LEN_OFFSET, STRING_PTR_OFFSET};
-    use crate::module::MEMORY_INDEX;
-    use wasm_encoder::{Function, MemArg};
+    use wasm_encoder::Function;
 
-    // Build the canonical-ABI parameter list and remember each split
-    // param's (ptr_index, len_index) so the wrapper body can read
-    // both back when assembling the header.
+    // Pass 1: walk the params once to compute (a) the wrapper's
+    // canonical-ABI valtype list and (b) the per-param "input
+    // slots" — the indices into the wrapper's locals where each
+    // canonical chunk lands. The materialiser walks
+    // `f.params` again in pass 2 and consumes those slots.
+    let alloc_idx = builder.declare_bump_allocator();
     let mut param_valtypes: Vec<ValType> = Vec::with_capacity(f.params.len());
-    let mut split_params: Vec<(u32, u32)> = Vec::new();
-    let mut single_params: Vec<u32> = Vec::new();
-
+    struct ParamSlots {
+        flat_start: u32,
+        flat_count: u32,
+    }
+    let mut param_slots: Vec<ParamSlots> = Vec::with_capacity(f.params.len());
     for p in &f.params {
         let ty =
             p.ty.as_ref()
@@ -1595,90 +1695,358 @@ fn emit_canonical_abi_wrapper(
                     function: f.name.clone(),
                     name: p.name.clone(),
                 })?;
-        if param_needs_split(ty, module) {
-            let ptr_idx = u32::try_from(param_valtypes.len())
-                .map_err(|_| ModuleLowerError::TooManyFunctions)?;
-            param_valtypes.push(ValType::I32);
-            param_valtypes.push(ValType::I32);
-            let len_idx = ptr_idx.saturating_add(1);
-            split_params.push((ptr_idx, len_idx));
-        } else {
-            let single_idx = u32::try_from(param_valtypes.len())
-                .map_err(|_| ModuleLowerError::TooManyFunctions)?;
-            let vt = body_value_type(ty)?.ok_or_else(|| {
-                ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: "Never-typed parameter on public function".to_owned(),
-                })
-            })?;
-            param_valtypes.push(vt);
-            single_params.push(single_idx);
-        }
+        let flat_start = u32::try_from(param_valtypes.len())
+            .map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        let flat = flatten_canonical_abi(ty, module)?;
+        let flat_count =
+            u32::try_from(flat.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        param_valtypes.extend(flat);
+        param_slots.push(ParamSlots { flat_start, flat_count });
     }
-
     let result_valtypes = body_result_types(f.return_type.as_ref())?;
 
-    // The wrapper needs one i32 scratch local per split param to
-    // hold the freshly-allocated header pointer between the
-    // allocator call and the forwarded `call` to the inner.
-    let scratch_count =
-        u32::try_from(split_params.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+    // Track scratch locals: one i32 per "materialisation" we
+    // perform inside the wrapper. Each materialised value
+    // (string header, struct, enum cell, array header) needs an
+    // i32 scratch to hold its allocator-returned pointer between
+    // emission and the final `call`.
     let scratch_base =
         u32::try_from(param_valtypes.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?;
-    let alloc_idx = builder.declare_bump_allocator();
+    let mut scratch_count: u32 = 0;
+
+    // Pre-emit the materialisation IR into a per-param plan so we
+    // know the scratch count up front (`Function::new` needs the
+    // local declaration vector before we open `body.instructions`).
+    enum Plan {
+        Direct {
+            slot: u32,
+        },
+        // Materialise a value at the given top-level scratch
+        // local using one of the recipes below; push that scratch
+        // when assembling the inner call.
+        Materialised {
+            scratch: u32,
+            ops: MaterialisationOps,
+        },
+    }
+    use crate::layout::{ARRAY_HEADER_LEN_OFFSET, ARRAY_HEADER_PTR_OFFSET, ARRAY_HEADER_SIZE,
+        STRING_HEADER_SIZE, STRING_LEN_OFFSET, STRING_PTR_OFFSET};
+
+    enum MaterialisationOps {
+        StringFromSlots {
+            ptr_slot: u32,
+            len_slot: u32,
+        },
+        ListFromSlots {
+            ptr_slot: u32,
+            len_slot: u32,
+        },
+        // Build a struct of `size` bytes by storing each field
+        // produced by a sub-recipe at its layout offset. The sub-
+        // recipe owns its own scratch when the field type itself
+        // requires materialisation.
+        Struct {
+            size: u32,
+            fields: Vec<StructFieldOp>,
+        },
+        // Variant: alloc enum cell, store tag from `tag_slot`,
+        // for each variant try to dispatch on tag; today we
+        // unconditionally store ALL flat-payload bytes at
+        // `payload_offset` since each arm's storage shares the
+        // pointer-aligned payload region.
+        Variant {
+            size: u32,
+            tag_slot: u32,
+            payload_offset: u32,
+            payload_slots: Vec<u32>,
+        },
+    }
+    struct StructFieldOp {
+        offset: u32,
+        // Either a direct i32-value-store (primitive field) or a
+        // sub-materialisation that produces an i32 pointer to
+        // store at the field offset.
+        value: FieldValue,
+    }
+    enum FieldValue {
+        DirectSlot { slot: u32, valtype: ValType },
+        MaterialisedScratch { scratch: u32, ops: Box<MaterialisationOps> },
+    }
+
+    // Recursively build a `MaterialisationOps` for a given type
+    // pulling consecutive flat slots from `cursor`. Returns the
+    // ops together with whether materialisation is needed (vs a
+    // direct slot pass-through).
+    fn build_field_value(
+        ty: &ResolvedType,
+        cursor: &mut u32,
+        scratch_count: &mut u32,
+        scratch_base: u32,
+        module: &IrModule,
+    ) -> Result<FieldValue, ModuleLowerError> {
+        use formalang::ast::PrimitiveType;
+        // Strings / lists materialise to a header.
+        let needs_string_header = matches!(
+            ty,
+            ResolvedType::Primitive(PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex)
+        );
+        let needs_list_header = matches!(
+            crate::compound::Compound::of(ty, module),
+            crate::compound::Compound::Array(_)
+        );
+        if needs_string_header || needs_list_header {
+            let ptr_slot = *cursor;
+            let len_slot = ptr_slot
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            *cursor = cursor
+                .checked_add(2)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            let scratch = scratch_base
+                .checked_add(*scratch_count)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            *scratch_count = scratch_count
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            return Ok(FieldValue::MaterialisedScratch {
+                scratch,
+                ops: Box::new(if needs_string_header {
+                    MaterialisationOps::StringFromSlots { ptr_slot, len_slot }
+                } else {
+                    MaterialisationOps::ListFromSlots { ptr_slot, len_slot }
+                }),
+            });
+        }
+        // Nested struct / enum.
+        if let Some(sid) = crate::compound::struct_id_of(ty) {
+            let s = module.structs.get(sid.0 as usize).ok_or_else(|| {
+                ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: format!("Struct({}) out of range", sid.0),
+                })
+            })?;
+            let layout = crate::layout::plan_struct(s, module)?;
+            let mut fields: Vec<StructFieldOp> = Vec::with_capacity(s.fields.len());
+            for (fdef, flayout) in s.fields.iter().zip(layout.fields.iter()) {
+                fields.push(StructFieldOp {
+                    offset: flayout.offset,
+                    value: build_field_value(&fdef.ty, cursor, scratch_count, scratch_base, module)?,
+                });
+            }
+            let scratch = scratch_base
+                .checked_add(*scratch_count)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            *scratch_count = scratch_count
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            return Ok(FieldValue::MaterialisedScratch {
+                scratch,
+                ops: Box::new(MaterialisationOps::Struct {
+                    size: layout.size,
+                    fields,
+                }),
+            });
+        }
+        if let Some(eid) = crate::compound::enum_id_of(ty) {
+            let e = module.enums.get(eid.0 as usize).ok_or_else(|| {
+                ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: format!("Enum({}) out of range", eid.0),
+                })
+            })?;
+            let layout = crate::layout::plan_enum(e, module)?;
+            let tag_slot = *cursor;
+            *cursor = cursor
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            // Determine the longest payload's flat count among
+            // arms so the cursor advances correctly.
+            let mut max_payload_count: u32 = 0;
+            for v in &e.variants {
+                let mut sub_count: u32 = 0;
+                for fdef in &v.fields {
+                    let f = flatten_canonical_abi(&fdef.ty, module)?;
+                    sub_count = sub_count
+                        .checked_add(u32::try_from(f.len()).map_err(|_| ModuleLowerError::TooManyFunctions)?)
+                        .ok_or(ModuleLowerError::TooManyFunctions)?;
+                }
+                if sub_count > max_payload_count {
+                    max_payload_count = sub_count;
+                }
+            }
+            let mut payload_slots = Vec::with_capacity(max_payload_count as usize);
+            for _ in 0..max_payload_count {
+                payload_slots.push(*cursor);
+                *cursor = cursor
+                    .checked_add(1)
+                    .ok_or(ModuleLowerError::TooManyFunctions)?;
+            }
+            let scratch = scratch_base
+                .checked_add(*scratch_count)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            *scratch_count = scratch_count
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            return Ok(FieldValue::MaterialisedScratch {
+                scratch,
+                ops: Box::new(MaterialisationOps::Variant {
+                    size: layout.size,
+                    tag_slot,
+                    payload_offset: layout.payload_offset,
+                    payload_slots,
+                }),
+            });
+        }
+        // Primitive: direct pass-through of one slot.
+        let valtype = body_value_type(ty)?.ok_or_else(|| {
+            ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                kind: format!("Never / unsupported parameter type {ty:?}"),
+            })
+        })?;
+        let slot = *cursor;
+        *cursor = cursor
+            .checked_add(1)
+            .ok_or(ModuleLowerError::TooManyFunctions)?;
+        Ok(FieldValue::DirectSlot { slot, valtype })
+    }
+
+    // Walk params to build per-param plans.
+    let mut plans: Vec<Plan> = Vec::with_capacity(f.params.len());
+    for (i, p) in f.params.iter().enumerate() {
+        let ty =
+            p.ty.as_ref()
+                .ok_or_else(|| ModuleLowerError::MissingParamType {
+                    function: f.name.clone(),
+                    name: p.name.clone(),
+                })?;
+        let slots = &param_slots[i];
+        let mut cursor = slots.flat_start;
+        // For "single-i32" primitive-only params we still want a
+        // direct-slot pass-through. Recursive logic below handles
+        // the general case.
+        let value = build_field_value(ty, &mut cursor, &mut scratch_count, scratch_base, module)?;
+        // Sanity: we should have consumed exactly the param's
+        // canonical flat slot count.
+        let consumed = cursor.saturating_sub(slots.flat_start);
+        if consumed != slots.flat_count {
+            return Err(ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                kind: format!(
+                    "canonical-ABI flatten/build mismatch for param `{}` of {ty:?}: consumed {} vs expected {}",
+                    p.name, consumed, slots.flat_count
+                ),
+            }));
+        }
+        plans.push(match value {
+            FieldValue::DirectSlot { slot, .. } => Plan::Direct { slot },
+            FieldValue::MaterialisedScratch { scratch, ops } => {
+                Plan::Materialised { scratch, ops: *ops }
+            }
+        });
+    }
 
     let mut body = Function::new(if scratch_count > 0 {
         vec![(scratch_count, ValType::I32)]
     } else {
         Vec::new()
     });
-    let header_size_signed = i32::try_from(STRING_HEADER_SIZE).unwrap_or(8);
-    let mem_arg = |offset: u64| MemArg {
-        offset,
-        align: 2, // log2(4)
-        memory_index: MEMORY_INDEX,
+
+    let mem_arg = |offset: u32| wasm_encoder::MemArg {
+        offset: u64::from(offset),
+        align: 2,
+        memory_index: crate::module::MEMORY_INDEX,
     };
-    {
-        let mut i = body.instructions();
 
-        // For each split param: alloc 8 bytes, store ptr/len, stash
-        // the header pointer in the wrapper's scratch local.
-        for (slot, (ptr_idx, len_idx)) in split_params.iter().enumerate() {
-            let scratch_idx = scratch_base.saturating_add(
-                u32::try_from(slot).map_err(|_| ModuleLowerError::TooManyFunctions)?,
-            );
-            i.i32_const(header_size_signed)
-                .call(alloc_idx)
-                .local_set(scratch_idx);
-            i.local_get(scratch_idx)
-                .local_get(*ptr_idx)
-                .i32_store(mem_arg(u64::from(STRING_PTR_OFFSET)));
-            i.local_get(scratch_idx)
-                .local_get(*len_idx)
-                .i32_store(mem_arg(u64::from(STRING_LEN_OFFSET)));
-        }
-
-        // Push every parameter onto the stack in declaration order:
-        // each split param contributes its scratch (header pointer);
-        // each single param contributes its raw local. Both
-        // iterators were sized in the loop above to exactly match
-        // each `f.params` entry's classification, so the index
-        // arithmetic below cannot overflow.
-        let mut split_iter = (0u32..).map(|s| scratch_base.saturating_add(s));
-        let mut single_iter = single_params.iter().copied();
-        for p in &f.params {
-            // `param_needs_split` is total over `Option<&ResolvedType>`
-            // when treating `None` as not-split (matches the missing-
-            // type path the loop above flagged as MissingParamType).
-            let split = p.ty.as_ref().is_some_and(|ty| param_needs_split(ty, module));
-            if split {
-                let scratch_idx = split_iter.next().unwrap_or(scratch_base);
-                i.local_get(scratch_idx);
-            } else {
-                let single_idx = single_iter.next().unwrap_or(0);
-                i.local_get(single_idx);
+    fn emit_materialise(
+        ops: &MaterialisationOps,
+        scratch: u32,
+        i: &mut wasm_encoder::InstructionSink<'_>,
+        alloc_idx: u32,
+        mem_arg: &impl Fn(u32) -> wasm_encoder::MemArg,
+    ) -> Result<(), ModuleLowerError> {
+        match ops {
+            MaterialisationOps::StringFromSlots { ptr_slot, len_slot }
+            | MaterialisationOps::ListFromSlots { ptr_slot, len_slot } => {
+                let header_size = match ops {
+                    MaterialisationOps::StringFromSlots { .. } => STRING_HEADER_SIZE,
+                    _ => ARRAY_HEADER_SIZE,
+                };
+                let header_size_signed = i32::try_from(header_size).unwrap_or(8);
+                i.i32_const(header_size_signed).call(alloc_idx).local_set(scratch);
+                i.local_get(scratch).local_get(*ptr_slot).i32_store(mem_arg(STRING_PTR_OFFSET));
+                i.local_get(scratch).local_get(*len_slot).i32_store(mem_arg(STRING_LEN_OFFSET));
+                if matches!(ops, MaterialisationOps::ListFromSlots { .. }) {
+                    // Array header is { ptr, len, cap }; we fill
+                    // ptr/len from the canonical (ptr, len) and
+                    // mirror len into cap so consumers reading
+                    // the cap see a coherent value.
+                    let cap_offset = ARRAY_HEADER_LEN_OFFSET + 4;
+                    i.local_get(scratch).local_get(*len_slot).i32_store(mem_arg(cap_offset));
+                    let _ = ARRAY_HEADER_PTR_OFFSET; // referenced for clarity
+                }
+            }
+            MaterialisationOps::Struct { size, fields } => {
+                let size_signed = i32::try_from(*size).unwrap_or(0);
+                i.i32_const(size_signed).call(alloc_idx).local_set(scratch);
+                for f in fields {
+                    match &f.value {
+                        FieldValue::DirectSlot { slot, valtype } => {
+                            i.local_get(scratch).local_get(*slot);
+                            match valtype {
+                                ValType::I32 => i.i32_store(mem_arg(f.offset)),
+                                ValType::I64 => i.i64_store(mem_arg(f.offset)),
+                                ValType::F32 => i.f32_store(mem_arg(f.offset)),
+                                ValType::F64 => i.f64_store(mem_arg(f.offset)),
+                                _ => return Err(ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                                    kind: format!("canonical-ABI store of unsupported valtype {valtype:?}"),
+                                })),
+                            };
+                        }
+                        FieldValue::MaterialisedScratch { scratch: sub_scratch, ops: sub_ops } => {
+                            emit_materialise(sub_ops, *sub_scratch, i, alloc_idx, mem_arg)?;
+                            i.local_get(scratch).local_get(*sub_scratch).i32_store(mem_arg(f.offset));
+                        }
+                    }
+                }
+            }
+            MaterialisationOps::Variant { size, tag_slot, payload_offset, payload_slots } => {
+                let size_signed = i32::try_from(*size).unwrap_or(0);
+                i.i32_const(size_signed).call(alloc_idx).local_set(scratch);
+                i.local_get(scratch).local_get(*tag_slot).i32_store(mem_arg(0));
+                // Store each payload slot at successive 4-byte
+                // offsets past payload_offset. Today every
+                // payload field is i32-shaped (the layout planner
+                // gates wider types out); when wider types land
+                // we'll need per-arm dispatch.
+                for (idx, slot) in payload_slots.iter().enumerate() {
+                    let off = payload_offset
+                        .checked_add(u32::try_from(idx).unwrap_or(0).saturating_mul(4))
+                        .unwrap_or(*payload_offset);
+                    i.local_get(scratch).local_get(*slot).i32_store(mem_arg(off));
+                }
             }
         }
+        Ok(())
+    }
 
+    {
+        let mut i = body.instructions();
+        // First pass: emit all materialisations so each plan's
+        // scratch holds the materialised pointer.
+        for plan in &plans {
+            if let Plan::Materialised { scratch, ops } = plan {
+                emit_materialise(ops, *scratch, &mut i, alloc_idx, &mem_arg)?;
+            }
+        }
+        // Second pass: push each param's "single value" onto the
+        // stack in declaration order, then forward to the inner.
+        for plan in &plans {
+            match plan {
+                Plan::Direct { slot } => {
+                    i.local_get(*slot);
+                }
+                Plan::Materialised { scratch, .. } => {
+                    i.local_get(*scratch);
+                }
+            }
+        }
         i.call(inner_idx).end();
     }
 
