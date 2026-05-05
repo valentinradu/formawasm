@@ -7,6 +7,7 @@
         background-color: theme("colors.bg");
         color: theme("colors.fg");
         color-scheme: dark;
+        font-size: 125%;
     }
 
     body {
