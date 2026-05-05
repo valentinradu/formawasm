@@ -702,6 +702,15 @@ fn walk_count(
             dispatch,
             ..
         } => {
+            // Trait-typed receiver: virtual dispatch through a fat
+            // pointer cell needs one i32 scratch to park the cell
+            // pointer between the two `i32_load` reads
+            // (vtable_offset + data_ptr).
+            if matches!(dispatch, formalang::ir::DispatchKind::Virtual { .. })
+                && matches!(receiver.ty(), formalang::ir::ResolvedType::Trait(_))
+            {
+                bump_count(&mut out.i32)?;
+            }
             walk_count(receiver, module, out)?;
             // Static-dispatch arg coercion reads from the impl
             // method's IrFunction signature; virtual-dispatch arg

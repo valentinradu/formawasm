@@ -197,9 +197,10 @@ fn type_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
-        ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
-            kind: "Trait".to_owned(),
-        }),
+        // Trait-typed locals materialise as 8-byte fat-pointer
+        // cells in linear memory — the binding holds an `i32`
+        // pointer to that cell.
+        ResolvedType::Trait(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),
         }),
@@ -401,7 +402,7 @@ pub const ARRAY_HEADER_LEN_OFFSET: u32 = 4;
 pub const ARRAY_HEADER_CAP_OFFSET: u32 = 8;
 
 /// Pointer size used for aggregate element types.
-const POINTER_SIZE: u32 = 4;
+pub(crate) const POINTER_SIZE: u32 = 4;
 
 /// Pointer alignment used for aggregate element types.
 const POINTER_ALIGN: u32 = 4;
@@ -776,9 +777,10 @@ fn optional_payload_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutEr
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
-        ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
-            kind: "Trait".to_owned(),
-        }),
+        // Trait-typed locals materialise as 8-byte fat-pointer
+        // cells in linear memory — the binding holds an `i32`
+        // pointer to that cell.
+        ResolvedType::Trait(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),
         }),
@@ -812,9 +814,10 @@ fn array_element_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
-        ResolvedType::Trait(_) => Err(LayoutError::NotYetSupported {
-            kind: "Trait".to_owned(),
-        }),
+        // Trait-typed locals materialise as 8-byte fat-pointer
+        // cells in linear memory — the binding holds an `i32`
+        // pointer to that cell.
+        ResolvedType::Trait(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),
         }),

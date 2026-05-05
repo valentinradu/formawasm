@@ -167,7 +167,82 @@ pub(super) fn lower_coerced(
     {
         return lower_some_wrap(value_expr, payload_ty, sink, ctx);
     }
+    // Trait-erasure widening: `let s: Shape = Square(...)`. The
+    // value's static type is a concrete `Struct(_)` / `Enum(_)`;
+    // the binding's declared type is `Trait(_)`. Materialise an
+    // 8-byte fat-pointer cell `(vtable_offset, data_ptr)` so the
+    // surrounding code can dispatch through the trait without
+    // knowing the concrete impl. Vtable offsets come from
+    // `ctx.vtable_offset(trait_id, impl_target_key(target))` —
+    // populated by `module_lowering::build_vtable_plumbing`.
+    if let ResolvedType::Trait(trait_id) = target_ty
+        && let Some(target) = trait_dispatch_target(value_expr.ty())
+    {
+        return materialize_trait_fat_pointer(*trait_id, target, value_expr, sink, ctx);
+    }
     lower_expr(value_expr, sink, ctx)
+}
+
+/// Resolve a concrete `(Struct/Enum)` ImplTarget for a value's
+/// type so the trait-erasure path can pick the matching vtable.
+/// Returns `None` for primitive / closure / trait-typed values
+/// (the latter is already a fat pointer; no re-materialisation
+/// needed).
+fn trait_dispatch_target(ty: &ResolvedType) -> Option<formalang::ir::ImplTarget> {
+    use formalang::ir::ImplTarget;
+    if let Some(sid) = crate::compound::struct_id_of(ty) {
+        return Some(ImplTarget::Struct(sid));
+    }
+    if let Some(eid) = crate::compound::enum_id_of(ty) {
+        return Some(ImplTarget::Enum(eid));
+    }
+    None
+}
+
+/// Allocate an 8-byte fat-pointer cell `(vtable_offset:i32,
+/// data_ptr:i32)` and leave the cell pointer on the wasm stack.
+/// `vtable_offset` is resolved from the lowering context; the
+/// data pointer is the concrete value the inner `value_expr`
+/// produces.
+fn materialize_trait_fat_pointer(
+    trait_id: formalang::ir::TraitId,
+    target: formalang::ir::ImplTarget,
+    value_expr: &IrExpr,
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+) -> Result<(), LowerError> {
+    use crate::layout::POINTER_SIZE;
+    use crate::module::MEMORY_INDEX;
+    use wasm_encoder::MemArg;
+    let vtable_offset = ctx.vtable_offset(
+        trait_id,
+        crate::module_lowering::impl_target_key(target),
+    )?;
+    // Stash the data pointer in a scratch local so we can store
+    // it after evaluating the allocator call.
+    let data_scratch = ctx.next_scratch_local(ValType::I32)?;
+    super::lower_expr(value_expr, sink, ctx)?;
+    sink.local_set(data_scratch);
+
+    let cell_size = i32::try_from(POINTER_SIZE.saturating_mul(2)).unwrap_or(8);
+    let bump_idx = ctx.bump_allocator()?;
+    let cell_scratch = ctx.next_scratch_local(ValType::I32)?;
+    sink.i32_const(cell_size).call(bump_idx).local_set(cell_scratch);
+
+    let mem_arg = |off: u64| MemArg {
+        offset: off,
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    };
+    let vtable_off_signed = i32::try_from(vtable_offset).unwrap_or(i32::MAX);
+    sink.local_get(cell_scratch);
+    sink.i32_const(vtable_off_signed);
+    sink.i32_store(mem_arg(0));
+    sink.local_get(cell_scratch);
+    sink.local_get(data_scratch);
+    sink.i32_store(mem_arg(u64::from(POINTER_SIZE)));
+    sink.local_get(cell_scratch);
+    Ok(())
 }
 
 /// Add the scratch-slot reservations a Some-wrap coercion at this
@@ -188,6 +263,16 @@ pub(super) fn coercion_scratch_counts(
     let Some(module) = module else {
         return Ok(());
     };
+    // Trait-erasure widening: target=Trait(_), value=Struct/Enum.
+    // Reserve two i32 scratch locals — one for the data pointer,
+    // one for the fat-pointer cell pointer.
+    if matches!(target_ty, ResolvedType::Trait(_))
+        && trait_dispatch_target(value_ty).is_some()
+    {
+        bump_count(&mut out.i32)?;
+        bump_count(&mut out.i32)?;
+        return Ok(());
+    }
     let Some(payload_ty) = some_wrap_payload(target_ty, value_ty, module) else {
         return Ok(());
     };

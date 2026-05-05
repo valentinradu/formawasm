@@ -190,10 +190,12 @@ pub fn body_value_type(ty: &ResolvedType) -> Result<Option<ValType>, TypeMapErro
         | ResolvedType::Tuple(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Generic { .. }
-        | ResolvedType::Closure { .. } => Ok(Some(ValType::I32)),
-        ResolvedType::Trait(_) => Err(TypeMapError::NotYetSupported {
-            kind: "Trait".to_owned(),
-        }),
+        | ResolvedType::Closure { .. }
+        // Trait-typed bindings carry an `i32` fat-pointer cell:
+        // `(vtable_offset, data_ptr)` packed into 8 bytes. The
+        // body-side ABI is the same as every other aggregate —
+        // pass the cell pointer in an `i32`.
+        | ResolvedType::Trait(_) => Ok(Some(ValType::I32)),
         ResolvedType::TypeParam(name) => Err(TypeMapError::NotYetSupported {
             kind: format!("TypeParam({name})"),
         }),

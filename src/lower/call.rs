@@ -231,6 +231,89 @@ fn lower_static_method_call(
     Ok(())
 }
 
+/// Dispatch a method call where the receiver carries a trait
+/// type — its concrete impl was erased at the assignment site.
+/// The receiver evaluates to a pointer at an 8-byte fat-pointer
+/// cell `(vtable_offset, data_ptr)` materialised by
+/// `super::optional::materialize_trait_fat_pointer`. We load
+/// both fields, push `data_ptr` as the call's first arg, lower
+/// the explicit args, then load the funcref at
+/// `vtable_offset + method_idx * VTABLE_SLOT_SIZE` and
+/// `call_indirect`.
+fn lower_trait_typed_dispatch(
+    method_idx: formalang::ir::MethodIdx,
+    receiver: &IrExpr,
+    args: &[(Option<String>, IrExpr)],
+    sink: &mut InstructionSink<'_>,
+    ctx: &LowerContext<'_>,
+    trait_id: formalang::ir::TraitId,
+) -> Result<(), LowerError> {
+    use crate::layout::{POINTER_SIZE, VTABLE_SLOT_SIZE};
+    use crate::module::MEMORY_INDEX;
+    use wasm_encoder::{MemArg, ValType};
+
+    let table_idx = ctx.method_table_index()?;
+    let type_idx = ctx.virtual_call_type_index(trait_id, method_idx)?;
+
+    // Park the cell pointer in a scratch local so we can read
+    // both fields and re-push the data pointer for the call.
+    let cell_scratch = ctx.next_scratch_local(ValType::I32)?;
+    lower_expr(receiver, sink, ctx)?;
+    sink.local_set(cell_scratch);
+
+    let mem_arg = |off: u64| MemArg {
+        offset: off,
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    };
+
+    // Push data_ptr (the actual struct/enum receiver).
+    sink.local_get(cell_scratch);
+    sink.i32_load(mem_arg(u64::from(POINTER_SIZE)));
+
+    // Lower explicit args, coercing against the trait method's
+    // declared param types (mirrors the static path).
+    let trait_method_sig = ctx
+        .module()
+        .ok()
+        .and_then(|m| m.traits.get(trait_id.0 as usize))
+        .and_then(|t| t.methods.get(method_idx.0 as usize));
+    for (param_name, arg) in args {
+        let target_ty = trait_method_sig.and_then(|sig| {
+            param_name.as_ref().and_then(|n| {
+                sig.params
+                    .iter()
+                    .find(|p| p.name == *n)
+                    .and_then(|p| p.ty.as_ref())
+            })
+        });
+        if let Some(t) = target_ty {
+            super::optional::lower_coerced(arg, t, sink, ctx)?;
+        } else {
+            lower_expr(arg, sink, ctx)?;
+        }
+    }
+
+    // Load funcref at vtable_offset + method_idx * VTABLE_SLOT_SIZE.
+    sink.local_get(cell_scratch);
+    sink.i32_load(mem_arg(0)); // vtable_offset
+    let method_byte_off = u64::from(method_idx.0)
+        .checked_mul(u64::from(VTABLE_SLOT_SIZE))
+        .ok_or_else(|| LowerError::NotYetImplemented {
+            what: "vtable slot byte offset overflow".to_owned(),
+        })?;
+    let method_byte_off_signed = i32::try_from(method_byte_off).unwrap_or(i32::MAX);
+    sink.i32_const(method_byte_off_signed);
+    sink.i32_add();
+    sink.i32_load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    });
+    sink.call_indirect(table_idx, type_idx);
+    Ok(())
+}
+
 fn lower_virtual_method_call(
     trait_id: formalang::ir::TraitId,
     method_idx: formalang::ir::MethodIdx,
@@ -239,9 +322,27 @@ fn lower_virtual_method_call(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
+    // A trait-typed receiver carries an 8-byte fat-pointer cell
+    // `(vtable_offset, data_ptr)`. Detect it and dispatch via a
+    // dynamic vtable load: load the cell pointer's first i32 to
+    // get vtable_offset, the second to get data_ptr, then walk
+    // method_idx slots into the vtable. This is the only path
+    // where vtable_base isn't statically known at compile time.
+    if let ResolvedType::Trait(_) = receiver.ty() {
+        return lower_trait_typed_dispatch(method_idx, receiver, args, sink, ctx, trait_id);
+    }
     let target = match receiver.ty() {
         ResolvedType::Struct(id) => ImplTarget::Struct(*id),
         ResolvedType::Enum(id) => ImplTarget::Enum(*id),
+        // Generic-form struct / enum: peek through to the
+        // underlying concrete id so a monomorphic instantiation
+        // dispatches through the same vtable as its declaration.
+        ty if crate::compound::struct_id_of(ty).is_some() => {
+            ImplTarget::Struct(crate::compound::struct_id_of(ty).unwrap())
+        }
+        ty if crate::compound::enum_id_of(ty).is_some() => {
+            ImplTarget::Enum(crate::compound::enum_id_of(ty).unwrap())
+        }
         other @ (ResolvedType::Primitive(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Tuple(_)
