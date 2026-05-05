@@ -172,6 +172,49 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
         write_import(&mut out, f, module)?;
     }
 
+    // `extern impl <UserStruct>` / `<UserEnum>` blocks: each method
+    // is a host-supplied function. Emit a WIT `import` per method
+    // using the `<struct>-<method>` kebab-case name the
+    // module_lowering import phase commits to. Skip primitive
+    // targets — the prelude's `extern impl <String>` block is
+    // satisfied by built-in runtime helpers, not host imports.
+    for imp in &module.impls {
+        if !imp.is_extern {
+            continue;
+        }
+        // Skip prelude built-ins; the backend's runtime helpers
+        // resolve those — they don't cross the component import
+        // boundary. Mirrors the filter in
+        // `module_lowering::lower_module`.
+        let is_prelude_target = match imp.target {
+            formalang::ir::ImplTarget::Struct(sid) => {
+                Some(sid) == module.prelude_array_id()
+                    || Some(sid) == module.prelude_dictionary_id()
+                    || Some(sid) == module.prelude_range_id()
+            }
+            formalang::ir::ImplTarget::Enum(eid) => Some(eid) == module.prelude_optional_id(),
+            formalang::ir::ImplTarget::Primitive(_) => true,
+        };
+        if is_prelude_target {
+            continue;
+        }
+        let target_name: Option<&str> = match &imp.target {
+            formalang::ir::ImplTarget::Struct(sid) => {
+                module.structs.get(sid.0 as usize).map(|s| s.name.as_str())
+            }
+            formalang::ir::ImplTarget::Enum(eid) => {
+                module.enums.get(eid.0 as usize).map(|e| e.name.as_str())
+            }
+            formalang::ir::ImplTarget::Primitive(_) => None,
+        };
+        let Some(target_name) = target_name else {
+            continue;
+        };
+        for m in &imp.functions {
+            write_extern_method_import(&mut out, target_name, m, module, &imp.target)?;
+        }
+    }
+
     for &fid in &surface.exports {
         let f = module
             .functions
@@ -291,6 +334,77 @@ fn write_import(
     write_world_func(out, f, "import", module)
 }
 
+/// Emit one WIT `import` line per extern-impl method, using the
+/// `<target>-<method>` import name `module_lowering` commits to.
+/// The `self` parameter is materialised explicitly: the host sees
+/// the struct as its first argument so the import signature
+/// matches our declared wasm import. Skip the receiver entirely
+/// when the impl target is an empty struct (filtered out of the
+/// public surface) — the WIT can't reference a record we won't
+/// emit.
+fn write_extern_method_import(
+    out: &mut String,
+    target_name: &str,
+    m: &IrFunction,
+    module: &IrModule,
+    target: &formalang::ir::ImplTarget,
+) -> Result<(), WitEmitError> {
+    let import_name = format!("{}-{}", kebab_case(target_name), kebab_case(&m.name));
+
+    // Self type: resolve through ImplTarget. Struct targets emit
+    // the kebab-cased name iff the struct is non-empty (empty
+    // ones are filtered from `surface.exported_structs` and
+    // can't appear in a WIT signature).
+    let self_ty: Option<String> = match target {
+        formalang::ir::ImplTarget::Struct(sid) => {
+            let Some(s) = module.structs.get(sid.0 as usize) else {
+                return Ok(()); // out-of-range, nothing to emit
+            };
+            if s.fields.is_empty() {
+                None
+            } else {
+                Some(kebab_case(&s.name))
+            }
+        }
+        formalang::ir::ImplTarget::Enum(eid) => module
+            .enums
+            .get(eid.0 as usize)
+            .map(|e| kebab_case(&e.name)),
+        formalang::ir::ImplTarget::Primitive(_) => return Ok(()),
+    };
+
+    write!(out, "  import {import_name}: func(").map_err(invalid_format)?;
+    let mut wrote_param = false;
+    if let Some(ty_name) = &self_ty {
+        write!(out, "self: {ty_name}").map_err(invalid_format)?;
+        wrote_param = true;
+    }
+    // Walk explicit params (skip leading `self`).
+    for p in m.params.iter().skip(1) {
+        if wrote_param {
+            out.push_str(", ");
+        }
+        let ty = p.ty.as_ref().ok_or_else(|| WitEmitError::MissingParamType {
+            function: import_name.clone(),
+            param: p.name.clone(),
+        })?;
+        let wit_ty = resolved_wit_type(ty, module)?.ok_or_else(|| WitEmitError::NeverParam {
+            function: import_name.clone(),
+            param: p.name.clone(),
+        })?;
+        write!(out, "{}: {wit_ty}", kebab_case(&p.name)).map_err(invalid_format)?;
+        wrote_param = true;
+    }
+    write!(out, ")").map_err(invalid_format)?;
+    if let Some(ret) = m.return_type.as_ref()
+        && let Some(wit_ty) = resolved_wit_type(ret, module)?
+    {
+        write!(out, " -> {wit_ty}").map_err(invalid_format)?;
+    }
+    writeln!(out, ";").map_err(invalid_format)?;
+    Ok(())
+}
+
 /// Emit a single `import` or `export` line for `f` inside the world
 /// block. The signature shape is identical for both directions —
 /// only the leading keyword differs.
@@ -399,7 +513,24 @@ fn resolved_wit_type(
                     kind: format!("Struct(out-of-range #{})", id.0),
                 }))
             },
-            |s| Ok(Some(kebab_case(&s.name))),
+            |s| {
+                // Empty pub structs are filtered out of the public
+                // surface (wit-component rejects empty records). A
+                // function signature that mentions one therefore
+                // can't cross the boundary either — surface that as
+                // a typed error so the higher-level filter
+                // (`function_signature_crosses_boundary`) treats
+                // the function as private.
+                if s.fields.is_empty() {
+                    return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                        kind: format!(
+                            "Struct({}) is empty; wit-component rejects empty records, so the surrounding function cannot cross the WIT boundary",
+                            s.name
+                        ),
+                    }));
+                }
+                Ok(Some(kebab_case(&s.name)))
+            },
         ),
         ResolvedType::Enum(id) => module.get_enum(*id).map_or_else(
             || {

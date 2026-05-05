@@ -85,6 +85,29 @@ fn run_checks(name: &str) -> TestResult {
                 Err(wasmtime::Error::msg("formalang assert(false) — example produced an unexpected value"))
             }
         })?;
+    // Wire example 16's extern fn / extern impl method imports.
+    // Examples that don't reference these names ignore them; the
+    // linker's `func_wrap` only enforces matches at instantiate
+    // time, when wasmtime checks the imports the *component*
+    // actually declares.
+    linker
+        .root()
+        .func_wrap("host-double", |_store, (x,): (i32,)| Ok((x * 2,)))?;
+    linker
+        .root()
+        .func_wrap("host-log", |_store, (_msg,): (String,)| Ok(()))?;
+    linker
+        .root()
+        .func_wrap("canvas-width", |_store, (): ()| Ok((640i32,)))?;
+    linker
+        .root()
+        .func_wrap("canvas-height", |_store, (): ()| Ok((480i32,)))?;
+    linker
+        .root()
+        .func_wrap("connection-open", |_store, (): ()| Ok((true,)))?;
+    linker
+        .root()
+        .func_wrap("connection-close", |_store, (): ()| Ok(()))?;
 
     let mut store = Store::new(&engine, HostState);
     let instance = linker.instantiate(&mut store, &component)?;

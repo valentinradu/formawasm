@@ -333,6 +333,11 @@ impl MethodMap {
         self.by_id.insert(key, wasm_index);
     }
 
+    /// Iterate over `(key, wasm_index)` pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&(ImplId, MethodIdx), &u32)> {
+        self.by_id.iter()
+    }
+
     /// Look up a method's wasm function index.
     #[must_use]
     pub fn get(&self, key: (ImplId, MethodIdx)) -> Option<u32> {

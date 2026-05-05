@@ -70,6 +70,30 @@ pub const STR_STARTS_WITH_NAME: &str = "__str_starts_with";
 /// byte offset, else 0. Backs `String::contains`.
 pub const STR_CONTAINS_NAME: &str = "__str_contains";
 
+/// Source-level name for the `Array<T>::len` helper.
+pub const ARRAY_LEN_NAME: &str = "__array_len";
+
+/// Source-level name for the `Array<T>::is_empty` helper.
+pub const ARRAY_IS_EMPTY_NAME: &str = "__array_is_empty";
+
+/// Source-level name for the `Optional<T>::is_some` helper.
+pub const OPTIONAL_IS_SOME_NAME: &str = "__optional_is_some";
+
+/// Source-level name for the `Optional<T>::is_none` helper.
+pub const OPTIONAL_IS_NONE_NAME: &str = "__optional_is_none";
+
+/// Source-level name for the `Range<I32>::len` helper.
+pub const RANGE_LEN_NAME: &str = "__range_len";
+
+/// Source-level name for the `Range<I32>::is_empty` helper.
+pub const RANGE_IS_EMPTY_NAME: &str = "__range_is_empty";
+
+/// Source-level name for the `Dictionary<K,V>::len` helper.
+pub const DICT_LEN_NAME: &str = "__dict_len";
+
+/// Source-level name for the `Dictionary<K,V>::is_empty` helper.
+pub const DICT_IS_EMPTY_NAME: &str = "__dict_is_empty";
+
 /// Canonical-ABI export name the host calls when it needs to allocate
 /// (or grow) a buffer in our linear memory before passing a `string`
 /// or `list<T>` argument across the component boundary.
@@ -169,6 +193,30 @@ pub struct ModuleBuilder {
     /// Index of the substring-match predicate. Lazily declared by
     /// [`Self::declare_str_contains`].
     str_contains: Option<u32>,
+    /// Index of the `Array<T>::len` helper. Lazily declared by
+    /// [`Self::declare_array_len`].
+    array_len: Option<u32>,
+    /// Index of the `Array<T>::is_empty` helper. Lazily declared
+    /// by [`Self::declare_array_is_empty`].
+    array_is_empty: Option<u32>,
+    /// Index of the `Optional<T>::is_some` helper. Lazily declared
+    /// by [`Self::declare_optional_is_some`].
+    optional_is_some: Option<u32>,
+    /// Index of the `Optional<T>::is_none` helper. Lazily declared
+    /// by [`Self::declare_optional_is_none`].
+    optional_is_none: Option<u32>,
+    /// Index of the `Range<I32>::len` helper. Lazily declared by
+    /// [`Self::declare_range_len`].
+    range_len: Option<u32>,
+    /// Index of the `Range<I32>::is_empty` helper. Lazily declared
+    /// by [`Self::declare_range_is_empty`].
+    range_is_empty: Option<u32>,
+    /// Index of the `Dictionary<K,V>::len` helper. Lazily declared
+    /// by [`Self::declare_dict_len`].
+    dict_len: Option<u32>,
+    /// Index of the `Dictionary<K,V>::is_empty` helper. Lazily
+    /// declared by [`Self::declare_dict_is_empty`].
+    dict_is_empty: Option<u32>,
     /// Index of the funcref `Table` carrying every closure-callable
     /// function. Created lazily by [`Self::declare_closure_table`]; the
     /// `ElementSection` populates it with concrete `wasm` function
@@ -239,6 +287,14 @@ impl ModuleBuilder {
             str_slice: None,
             str_starts_with: None,
             str_contains: None,
+            array_len: None,
+            array_is_empty: None,
+            optional_is_some: None,
+            optional_is_none: None,
+            range_len: None,
+            range_is_empty: None,
+            dict_len: None,
+            dict_is_empty: None,
             closure_table_idx: None,
             method_table_idx: None,
             static_data: Vec::new(),
@@ -1190,6 +1246,197 @@ impl ModuleBuilder {
     #[must_use]
     pub const fn str_contains_index(&self) -> Option<u32> {
         self.str_contains
+    }
+
+    /// Declare and emit the `__array_len` runtime helper. Reads the
+    /// `len` field of the `{ ptr, len, cap }` array header.
+    /// Signature: `__array_len(arr: i32) -> i32`.
+    pub fn declare_array_len(&mut self) -> u32 {
+        if let Some(idx) = self.array_len {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::ARRAY_HEADER_LEN_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, ARRAY_LEN_NAME);
+        self.array_len = Some(idx);
+        idx
+    }
+
+    /// Declare and emit the `__array_is_empty` helper. Returns 1
+    /// when the array's `len` is 0, else 0.
+    pub fn declare_array_is_empty(&mut self) -> u32 {
+        if let Some(idx) = self.array_is_empty {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::ARRAY_HEADER_LEN_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_eqz()
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, ARRAY_IS_EMPTY_NAME);
+        self.array_is_empty = Some(idx);
+        idx
+    }
+
+    /// Declare and emit the `__optional_is_some` helper. Loads the
+    /// 4-byte tag at offset 0; the prelude reserves
+    /// [`crate::layout::OPTIONAL_TAG_NIL`] (0) for the nil/none arm
+    /// so any non-zero tag indicates `Some(_)`.
+    pub fn declare_optional_is_some(&mut self) -> u32 {
+        if let Some(idx) = self.optional_is_some {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_const(0)
+            .i32_ne()
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, OPTIONAL_IS_SOME_NAME);
+        self.optional_is_some = Some(idx);
+        idx
+    }
+
+    /// Declare and emit the `__optional_is_none` helper. Returns 1
+    /// when the tag at offset 0 is `OPTIONAL_TAG_NIL` (0).
+    pub fn declare_optional_is_none(&mut self) -> u32 {
+        if let Some(idx) = self.optional_is_none {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_eqz()
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, OPTIONAL_IS_NONE_NAME);
+        self.optional_is_none = Some(idx);
+        idx
+    }
+
+    /// Declare and emit the `__range_len` helper for `Range<I32>`.
+    /// Computes `end - start` from the two i32 fields of a Range
+    /// header. Range over wider types lands in a follow-up.
+    pub fn declare_range_len(&mut self) -> u32 {
+        if let Some(idx) = self.range_len {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: 4, // RANGE_END_OFFSET assuming i32 start/end
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_sub()
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, RANGE_LEN_NAME);
+        self.range_len = Some(idx);
+        idx
+    }
+
+    /// Declare and emit the `__range_is_empty` helper for
+    /// `Range<I32>`. Returns 1 when `end <= start`.
+    pub fn declare_range_is_empty(&mut self) -> u32 {
+        if let Some(idx) = self.range_is_empty {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: 4,
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_le_s()
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, RANGE_IS_EMPTY_NAME);
+        self.range_is_empty = Some(idx);
+        idx
+    }
+
+    /// Declare and emit the `__dict_len` helper. Mirrors
+    /// `__array_len` since the Dictionary header reuses the array
+    /// `{ ptr, len, cap }` shape.
+    pub fn declare_dict_len(&mut self) -> u32 {
+        if let Some(idx) = self.dict_len {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::ARRAY_HEADER_LEN_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, DICT_LEN_NAME);
+        self.dict_len = Some(idx);
+        idx
+    }
+
+    /// Declare and emit the `__dict_is_empty` helper.
+    pub fn declare_dict_is_empty(&mut self) -> u32 {
+        if let Some(idx) = self.dict_is_empty {
+            return idx;
+        }
+        let mut body = Function::new(core::iter::empty());
+        body.instructions()
+            .local_get(0)
+            .i32_load(MemArg {
+                offset: u64::from(crate::layout::ARRAY_HEADER_LEN_OFFSET),
+                align: 2,
+                memory_index: MEMORY_INDEX,
+            })
+            .i32_eqz()
+            .end();
+        let idx = self.declare_function_with_body(&[ValType::I32], &[ValType::I32], &body);
+        self.set_function_name(idx, DICT_IS_EMPTY_NAME);
+        self.dict_is_empty = Some(idx);
+        idx
     }
 
     /// Declare and export `cabi_realloc`, the canonical-ABI hook the

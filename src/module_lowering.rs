@@ -71,6 +71,14 @@ struct PreludeHelpers {
     str_slice: u32,
     str_starts_with: u32,
     str_contains: u32,
+    array_len: u32,
+    array_is_empty: u32,
+    optional_is_some: u32,
+    optional_is_none: u32,
+    range_len: u32,
+    range_is_empty: u32,
+    dict_len: u32,
+    dict_is_empty: u32,
 }
 
 /// Look up the wasm function index of the runtime helper that
@@ -229,19 +237,130 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     // wasm function-index space, so they must be declared before the
     // bump allocator and other runtime helpers (which are local
     // function definitions and consume the indices that follow).
+    // First pass: declare every extern fn as a wasm import using
+    // the *canonical-ABI* shape the host actually provides
+    // (`String` / `Path` / `Regex` / `list<T>` lift to `(ptr,
+    // len)` rather than a single header pointer). The import
+    // declaration is what wit-component validates against, so it
+    // must match the WIT signature.
+    //
+    // We can't update `function_map` to point at the raw import
+    // directly: internal call sites (`IrExpr::FunctionCall` →
+    // `sink.call(wasm_idx)`) push internal-ABI args (a header
+    // pointer per String). A second pass emits a per-import
+    // trampoline that bridges the two: load `(ptr, len)` from
+    // each header on entry, call the raw import, propagate
+    // results.
+    let mut extern_import_indices: Vec<(FunctionId, u32, &IrFunction)> = Vec::new();
     for (i, f) in module.functions.iter().enumerate() {
         if !f.is_extern() {
             continue;
         }
         let id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
-        let (params, results) = lower_function_signature(f)?;
+        let (params, results) = canonical_abi_import_signature(f, module)?;
         let wasm_idx = builder.declare_function_import(
             IMPORT_MODULE_NAME,
             &kebab_case(&f.name),
             &params,
             &results,
         );
-        function_map.insert(FunctionId(id_raw), wasm_idx);
+        extern_import_indices.push((FunctionId(id_raw), wasm_idx, f));
+    }
+
+    // `extern impl <Struct>` blocks: each method becomes a wasm
+    // function import. Names follow the `<struct>-<method>`
+    // kebab-case convention so the host-side WIT world can declare
+    // each as a free `import` once the WIT emitter learns the same
+    // shape. Register the imported index in `method_map` directly
+    // — it lives in the same wasm function-index space as user
+    // method bodies, but landed earlier (in the import region).
+    //
+    // Primitive-target extern impls (the prelude's String surface)
+    // are still handled by the runtime-helper path further down;
+    // this loop only covers `extern impl <UserStruct>` /
+    // `<UserEnum>` shapes coming from user `.fv` source.
+    let mut extern_method_map: MethodMap = MethodMap::new();
+    for (i, imp) in module.impls.iter().enumerate() {
+        if !imp.is_extern {
+            continue;
+        }
+        // Skip prelude built-ins (Optional / Array / Dictionary /
+        // Range / String). Each is `extern impl` in
+        // `src/prelude.fv` because the language-side surface is
+        // declared there, but the methods are backend-supplied
+        // runtime helpers — not host imports. Registering them
+        // here would force every component embedder to wire
+        // `array-len`, `optional-is-some` &c. just to instantiate
+        // a module that calls them. Calls into prelude methods
+        // resolve through `prelude_helper_index` further down.
+        let is_prelude_target = match imp.target {
+            ImplTarget::Struct(sid) => Some(sid) == module.prelude_array_id()
+                || Some(sid) == module.prelude_dictionary_id()
+                || Some(sid) == module.prelude_range_id(),
+            ImplTarget::Enum(eid) => Some(eid) == module.prelude_optional_id(),
+            ImplTarget::Primitive(_) => true,
+        };
+        if is_prelude_target {
+            continue;
+        }
+        let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+        let (target_name, drops_self): (Option<String>, bool) = match imp.target {
+            ImplTarget::Struct(sid) => match module.structs.get(sid.0 as usize) {
+                // Empty receiver structs (`pub struct Canvas {}`)
+                // are filtered from the WIT public surface (wit-
+                // component rejects empty records), so the WIT
+                // signature drops self. To keep the wasm import
+                // shape matching the WIT, drop self here too —
+                // and let the call-site path materialise the host
+                // call by stripping the receiver pointer
+                // (handled by the dispatch lowering as a follow-
+                // up if needed; today the host can simply ignore
+                // the missing receiver since empty structs carry
+                // no state).
+                Some(s) if s.fields.is_empty() => (Some(s.name.clone()), true),
+                Some(s) => (Some(s.name.clone()), false),
+                None => (None, false),
+            },
+            ImplTarget::Enum(eid) => (
+                module
+                    .enums
+                    .get(eid.0 as usize)
+                    .map(|e| e.name.clone()),
+                false,
+            ),
+            ImplTarget::Primitive(_) => (None, false), // handled separately
+        };
+        let Some(target_name) = target_name else {
+            continue;
+        };
+        for (j, m) in imp.functions.iter().enumerate() {
+            let m_idx_raw = u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            // Inject the impl's self-struct/enum type for the
+            // implicit `self` param so signature lowering succeeds
+            // even when the frontend leaves `self.ty == None`.
+            let self_ty = match imp.target {
+                ImplTarget::Struct(sid) => Some(ResolvedType::Struct(sid)),
+                ImplTarget::Enum(eid) => Some(ResolvedType::Enum(eid)),
+                ImplTarget::Primitive(_) => None,
+            };
+            let (mut params, _) = lower_params_with_self_ty(m, self_ty)?;
+            if drops_self && !params.is_empty() {
+                // Strip the leading `self` valtype so the wasm
+                // import matches the WIT (which omits self for
+                // empty receiver structs).
+                params.remove(0);
+            }
+            let results = body_result_types(m.return_type.as_ref())?;
+            let import_name =
+                format!("{}-{}", kebab_case(&target_name), kebab_case(&m.name));
+            let wasm_idx = builder.declare_function_import(
+                IMPORT_MODULE_NAME,
+                &import_name,
+                &params,
+                &results,
+            );
+            extern_method_map.insert((ImplId(impl_id_raw), MethodIdx(m_idx_raw)), wasm_idx);
+        }
     }
 
     let bump_idx = builder.declare_bump_allocator();
@@ -264,15 +383,112 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         str_slice: builder.declare_str_slice(),
         str_starts_with: builder.declare_str_starts_with(),
         str_contains: builder.declare_str_contains(),
+        array_len: builder.declare_array_len(),
+        array_is_empty: builder.declare_array_is_empty(),
+        optional_is_some: builder.declare_optional_is_some(),
+        optional_is_none: builder.declare_optional_is_none(),
+        range_len: builder.declare_range_len(),
+        range_is_empty: builder.declare_range_is_empty(),
+        dict_len: builder.declare_dict_len(),
+        dict_is_empty: builder.declare_dict_is_empty(),
     };
     // `cabi_realloc` is exported so the component runtime can
     // allocate buffers in our linear memory when lowering `string`
     // / `list<T>` arguments. Always declared so any public function
     // that takes one of those types lands an export-ready module.
     let cabi_realloc_idx = builder.declare_cabi_realloc();
-    let user_offset = cabi_realloc_idx
+    let mut helpers_end = cabi_realloc_idx
         .checked_add(1)
         .ok_or(ModuleLowerError::TooManyFunctions)?;
+
+    // Emit per-method trampolines for extern impl methods on
+    // empty receiver structs: callers push `self`, but the WIT
+    // and raw wasm import drop it. The trampoline takes the
+    // internal-ABI shape (with self), drops the receiver, and
+    // forwards the rest to the raw import.
+    let extern_method_keys: Vec<(ImplId, MethodIdx, u32)> = extern_method_map
+        .iter()
+        .map(|(k, v)| (k.0, k.1, *v))
+        .collect();
+    let mut method_trampoline_replace: Vec<((ImplId, MethodIdx), u32)> = Vec::new();
+    for (impl_id, method_idx, raw_import_idx) in extern_method_keys {
+        let imp = match module.impls.get(impl_id.0 as usize) {
+            Some(i) => i,
+            None => continue,
+        };
+        let drops_self = match &imp.target {
+            ImplTarget::Struct(sid) => module
+                .structs
+                .get(sid.0 as usize)
+                .is_some_and(|s| s.fields.is_empty()),
+            _ => false,
+        };
+        if !drops_self {
+            continue;
+        }
+        let m = match imp.functions.get(method_idx.0 as usize) {
+            Some(m) => m,
+            None => continue,
+        };
+        let self_struct_id = match imp.target {
+            ImplTarget::Struct(sid) => Some(sid),
+            _ => None,
+        };
+        let (internal_params, _) = lower_params_with_self(m, self_struct_id)?;
+        let result_valtypes = body_result_types(m.return_type.as_ref())?;
+        let mut body = wasm_encoder::Function::new(Vec::new());
+        {
+            let mut i = body.instructions();
+            // Push every internal param except slot 0 (the
+            // dropped receiver).
+            for slot in 1..internal_params.len() {
+                let slot_idx = u32::try_from(slot).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                i.local_get(slot_idx);
+            }
+            i.call(raw_import_idx);
+            i.end();
+        }
+        let trampoline_idx =
+            builder.declare_function_with_body(&internal_params, &result_valtypes, &body);
+        if trampoline_idx != helpers_end {
+            return Err(ModuleLowerError::TooManyFunctions);
+        }
+        helpers_end = helpers_end
+            .checked_add(1)
+            .ok_or(ModuleLowerError::TooManyFunctions)?;
+        method_trampoline_replace.push(((impl_id, method_idx), trampoline_idx));
+    }
+    for ((impl_id, method_idx), trampoline_idx) in method_trampoline_replace {
+        extern_method_map.insert((impl_id, method_idx), trampoline_idx);
+    }
+
+    // Emit one trampoline per extern fn import whose canonical-ABI
+    // shape diverges from the internal pointer ABI. The trampoline
+    // takes header pointers, reads `(ptr, len)` from each, calls
+    // the raw import, and forwards results. `function_map[fid]`
+    // points at the trampoline so internal callers don't need to
+    // know about the `ptr/len` split.
+    for (fid, raw_import_idx, f) in extern_import_indices {
+        let trampoline_idx = if needs_canonical_abi_wrapper(f, module) {
+            let idx = emit_canonical_abi_import_trampoline(
+                f,
+                raw_import_idx,
+                bump_idx,
+                &mut builder,
+                module,
+                helpers_end,
+            )?;
+            helpers_end = helpers_end
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+            idx
+        } else {
+            raw_import_idx
+        };
+        function_map.insert(fid, trampoline_idx);
+    }
+
+    let user_offset = helpers_end;
 
     // Locally-defined user functions follow the runtime helpers.
     // Walk `module.functions` again, this time assigning a wasm
@@ -318,6 +534,14 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         .checked_add(local_counter)
         .ok_or(ModuleLowerError::TooManyFunctions)?;
     let mut method_map = MethodMap::new();
+    // Carry forward extern-impl method imports registered at the
+    // earlier import-declaration phase. Their wasm indices already
+    // live in the import region; the rest of the impl walk
+    // resolves user-defined methods to indices past
+    // `methods_offset`.
+    for (key, idx) in extern_method_map.iter() {
+        method_map.insert(*key, *idx);
+    }
     let mut method_counter: u32 = 0;
     for (i, imp) in module.impls.iter().enumerate() {
         let impl_id_raw = u32::try_from(i).map_err(|_| ModuleLowerError::TooManyFunctions)?;
@@ -343,6 +567,39 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
                     // it.
                     if let Some(helper_idx) = prelude_helper_index(p, &m.name, helpers) {
                         method_map.insert((ImplId(impl_id_raw), MethodIdx(m_idx_raw)), helper_idx);
+                    }
+                }
+            }
+            // `extern impl <prelude compound>` (Optional / Array /
+            // Range / Dictionary): each method resolves to a
+            // backend-emitted runtime helper rather than a host
+            // import. Methods we don't yet wire fall through to
+            // `UnknownMethod` at lowering, matching the String
+            // path's behaviour above.
+            let prelude_compound: Option<&str> = match imp.target {
+                ImplTarget::Struct(sid) if Some(sid) == module.prelude_array_id() => Some("array"),
+                ImplTarget::Struct(sid) if Some(sid) == module.prelude_range_id() => Some("range"),
+                ImplTarget::Struct(sid) if Some(sid) == module.prelude_dictionary_id() => Some("dict"),
+                ImplTarget::Enum(eid) if Some(eid) == module.prelude_optional_id() => Some("optional"),
+                _ => None,
+            };
+            if let Some(target) = prelude_compound {
+                for (j, m) in imp.functions.iter().enumerate() {
+                    let m_idx_raw =
+                        u32::try_from(j).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+                    let helper_idx = match (target, m.name.as_str()) {
+                        ("array", "len") => Some(helpers.array_len),
+                        ("array", "is_empty") => Some(helpers.array_is_empty),
+                        ("optional", "is_some") => Some(helpers.optional_is_some),
+                        ("optional", "is_none") => Some(helpers.optional_is_none),
+                        ("range", "len") => Some(helpers.range_len),
+                        ("range", "is_empty") => Some(helpers.range_is_empty),
+                        ("dict", "len") => Some(helpers.dict_len),
+                        ("dict", "is_empty") => Some(helpers.dict_is_empty),
+                        _ => None,
+                    };
+                    if let Some(idx) = helper_idx {
+                        method_map.insert((ImplId(impl_id_raw), MethodIdx(m_idx_raw)), idx);
                     }
                 }
             }
@@ -1185,6 +1442,101 @@ fn emit_function(
 /// Returns of those types match the internal i32-pointer return
 /// directly because the canonical ABI's "return area pointer"
 /// convention coincides with our header layout.
+/// Build the canonical-ABI `(params, results)` signature for an
+/// extern fn import: each `String` / `Path` / `Regex` / `list<T>`
+/// param expands to two i32s `(ptr, len)`, the rest pass through
+/// unchanged. Results follow the same shape as `body_result_types`
+/// — extern fns never return aggregates today.
+fn canonical_abi_import_signature(
+    f: &IrFunction,
+    module: &IrModule,
+) -> Result<(Vec<ValType>, Vec<ValType>), ModuleLowerError> {
+    let mut params = Vec::with_capacity(f.params.len());
+    for p in &f.params {
+        let ty =
+            p.ty.as_ref()
+                .ok_or_else(|| ModuleLowerError::MissingParamType {
+                    function: f.name.clone(),
+                    name: p.name.clone(),
+                })?;
+        if param_needs_split(ty, module) {
+            params.push(ValType::I32);
+            params.push(ValType::I32);
+        } else {
+            let vt = body_value_type(ty)?.ok_or_else(|| {
+                ModuleLowerError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Never-typed parameter on extern function".to_owned(),
+                })
+            })?;
+            params.push(vt);
+        }
+    }
+    let results = body_result_types(f.return_type.as_ref())?;
+    Ok((params, results))
+}
+
+/// Emit a thin trampoline that bridges the internal pointer ABI
+/// (one `i32` header pointer per `String` / `list<T>` param) to the
+/// canonical-ABI shape the raw import was declared with (two
+/// `i32`s `(ptr, len)` per such param). Returns the trampoline's
+/// wasm function index. Internal call sites continue to push
+/// header pointers; the trampoline reads `(ptr, len)` from each
+/// header and forwards them to the import.
+fn emit_canonical_abi_import_trampoline(
+    f: &IrFunction,
+    raw_import_idx: u32,
+    _bump_idx: u32,
+    builder: &mut ModuleBuilder,
+    module: &IrModule,
+    expected_idx: u32,
+) -> Result<u32, ModuleLowerError> {
+    use crate::layout::{STRING_LEN_OFFSET, STRING_PTR_OFFSET};
+    use crate::module::MEMORY_INDEX;
+    use wasm_encoder::{Function, MemArg};
+
+    // Internal-ABI param valtypes: every param is one i32 header
+    // pointer for split types, otherwise the matching primitive
+    // valtype.
+    let (internal_params, _) = lower_function_signature(f)?;
+    let result_valtypes = body_result_types(f.return_type.as_ref())?;
+
+    let mut body = Function::new(Vec::new());
+    let mem_arg = |offset: u64| MemArg {
+        offset,
+        align: 2,
+        memory_index: MEMORY_INDEX,
+    };
+    {
+        let mut i = body.instructions();
+        for (idx, p) in f.params.iter().enumerate() {
+            let local_idx = u32::try_from(idx).map_err(|_| ModuleLowerError::TooManyFunctions)?;
+            let ty =
+                p.ty.as_ref()
+                    .ok_or_else(|| ModuleLowerError::MissingParamType {
+                        function: f.name.clone(),
+                        name: p.name.clone(),
+                    })?;
+            if param_needs_split(ty, module) {
+                // Read (ptr, len) from the header at offsets 0 and 4.
+                i.local_get(local_idx)
+                    .i32_load(mem_arg(u64::from(STRING_PTR_OFFSET)));
+                i.local_get(local_idx)
+                    .i32_load(mem_arg(u64::from(STRING_LEN_OFFSET)));
+            } else {
+                i.local_get(local_idx);
+            }
+        }
+        i.call(raw_import_idx);
+        i.end();
+    }
+
+    let actual_idx = builder.declare_function_with_body(&internal_params, &result_valtypes, &body);
+    if actual_idx != expected_idx {
+        return Err(ModuleLowerError::TooManyFunctions);
+    }
+    Ok(actual_idx)
+}
+
 fn needs_canonical_abi_wrapper(f: &IrFunction, module: &IrModule) -> bool {
     f.params
         .iter()
@@ -1391,18 +1743,30 @@ fn lower_params_with_self(
     f: &IrFunction,
     self_struct_id: Option<StructId>,
 ) -> Result<(Vec<ValType>, Vec<ParamBinding>), ModuleLowerError> {
+    lower_params_with_self_ty(f, self_struct_id.map(ResolvedType::Struct))
+}
+
+/// Generalised version of [`lower_params_with_self`] that accepts
+/// any [`ResolvedType`] for the implicit self. Used by the impl
+/// walker to handle `extern impl <Enum>` (where the receiver is
+/// `Enum(id)`) on top of the struct path.
+fn lower_params_with_self_ty(
+    f: &IrFunction,
+    self_ty: Option<ResolvedType>,
+) -> Result<(Vec<ValType>, Vec<ParamBinding>), ModuleLowerError> {
     let mut valtypes = Vec::with_capacity(f.params.len());
     let mut bindings = Vec::with_capacity(f.params.len());
 
     for (idx, param) in f.params.iter().enumerate() {
-        let injected_self = (idx == 0 && param.name == "self" && param.ty.is_none())
-            .then_some(())
-            .and(self_struct_id)
-            .map(ResolvedType::Struct);
+        let injected_self = if idx == 0 && param.name == "self" && param.ty.is_none() {
+            self_ty.as_ref()
+        } else {
+            None
+        };
         let ty = param
             .ty
             .as_ref()
-            .or(injected_self.as_ref())
+            .or(injected_self)
             .ok_or_else(|| ModuleLowerError::MissingParamType {
                 function: f.name.clone(),
                 name: param.name.clone(),

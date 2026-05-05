@@ -78,6 +78,15 @@ pub fn survey(module: &IrModule) -> PublicSurface {
         {
             continue;
         }
+        // Empty `pub struct` declarations (the user's
+        // `pub struct Canvas {}` / `Connection {}` patterns) are
+        // valid formalang but wit-component rejects empty records
+        // ("record type must have at least one field"). The struct
+        // is still useful as an opaque marker for `extern impl`
+        // method receivers — we just don't emit it as a WIT type.
+        if s.fields.is_empty() {
+            continue;
+        }
         surface.exported_structs.push(id);
     }
 
