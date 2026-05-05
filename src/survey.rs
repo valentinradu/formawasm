@@ -45,9 +45,17 @@ pub fn survey(module: &IrModule) -> PublicSurface {
         let id = FunctionId(u32_from_index(idx));
         if f.is_extern() {
             surface.imports.push(id);
-        } else {
-            surface.exports.push(id);
+            continue;
         }
+        // Closure-conversion synthesizes lifted top-level functions
+        // named `__closure<N>` (and `__closureN_make_adder_0` etc.).
+        // They're internal call targets only — never part of the
+        // public surface. Filter by the `__` name prefix the
+        // upstream pass commits to.
+        if f.name.starts_with("__") {
+            continue;
+        }
+        surface.exports.push(id);
     }
 
     // Prelude built-ins (Array / Dictionary / Range / Optional) are

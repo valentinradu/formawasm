@@ -19,9 +19,9 @@
 #[must_use]
 pub(crate) fn kebab_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
-    for (i, ch) in name.chars().enumerate() {
+    for ch in name.chars() {
         if ch.is_ascii_uppercase() {
-            if i > 0 && !out.ends_with('-') {
+            if !out.is_empty() && !out.ends_with('-') {
                 out.push('-');
             }
             out.extend(ch.to_lowercase());

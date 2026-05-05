@@ -180,6 +180,18 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
                 index: fid.0,
                 len: module.functions.len(),
             })?;
+        // formalang's IR doesn't carry a `visibility` field on
+        // IrFunction yet, so the survey treats every non-extern
+        // top-level function as a candidate export. That over-reports
+        // private helper functions (`fn apply(op: (I32) -> I32, ...)`).
+        // Skip any function whose signature mentions a non-WIT-
+        // expressible type (closures most notably) — those genuinely
+        // can't cross the boundary, and treating them as private is
+        // the only sound reading. `pub fn` with such a signature is
+        // already rejected at preflight.
+        if !function_signature_crosses_boundary(f, module) {
+            continue;
+        }
         write_export(&mut out, f, module)?;
     }
 
@@ -438,6 +450,39 @@ fn primitive_wit_type(p: PrimitiveType) -> Result<Option<String>, WitEmitError> 
 /// `NotYetSupported` diagnostic. Mirrors the tags chosen in
 /// [`crate::types::resolved_value_type`] so messages stay consistent
 /// across the two surfaces.
+/// True iff every type in `f`'s signature can be expressed as a WIT
+/// type. Used to skip private helper functions whose signatures
+/// reference closure / type-param types that can't cross the
+/// boundary; without a visibility field on `IrFunction` we have to
+/// infer privacy from signature shape.
+fn function_signature_crosses_boundary(f: &IrFunction, module: &IrModule) -> bool {
+    for p in &f.params {
+        let Some(ty) = p.ty.as_ref() else {
+            return false;
+        };
+        if resolved_wit_type(ty, module).is_err() {
+            return false;
+        }
+    }
+    if let Some(ret) = f.return_type.as_ref()
+        && resolved_wit_type(ret, module).is_err()
+    {
+        return false;
+    }
+    true
+}
+
+/// Crate-internal escape hatch so `module_lowering` can apply the same
+/// "skip when unrepresentable" filter to wasm exports as
+/// [`emit_wit`] applies to WIT exports — without exposing every
+/// helper publicly. Returns `Ok(())` iff `ty` maps to a WIT type.
+pub(crate) fn resolved_wit_type_check(
+    ty: &ResolvedType,
+    module: &IrModule,
+) -> Result<(), WitEmitError> {
+    resolved_wit_type(ty, module).map(|_| ())
+}
+
 fn variant_tag(ty: &ResolvedType, module: &IrModule) -> String {
     match Compound::of(ty, module) {
         Compound::Array(_) => return "Array<T>".to_owned(),
