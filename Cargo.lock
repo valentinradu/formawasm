@@ -636,9 +636,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "formalang"
-version = "0.0.4-beta"
+version = "0.0.5-beta"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "493a41e04b5536a9ccaea5ef0d96e853b641c2988821be5217682df883c571c0"
+checksum = "dce4c24824f4e20398ae4aac292f5b23c7c3be32858874937a38a4b369af134f"
 dependencies = [
  "ariadne",
  "chumsky",

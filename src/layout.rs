@@ -772,20 +772,18 @@ pub fn plan_optional(
 fn optional_payload_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
     match ty {
         ResolvedType::Primitive(p) => primitive_size_align(*p),
-        // Every aggregate payload — struct, enum, tuple, plus the
-        // four prelude compounds living under `Generic` — collapses
-        // to a 4-byte heap pointer.
+        // Every aggregate payload — struct, enum, tuple, the four
+        // prelude compounds living under `Generic`, and trait-typed
+        // payloads (4-byte pointer to the fat-pointer cell) —
+        // collapses to a 4-byte heap pointer.
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Generic { .. } => Ok((POINTER_SIZE, POINTER_ALIGN)),
+        | ResolvedType::Generic { .. }
+        | ResolvedType::Trait(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
-        // Trait-typed locals materialise as 8-byte fat-pointer
-        // cells in linear memory — the binding holds an `i32`
-        // pointer to that cell.
-        ResolvedType::Trait(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),
         }),
@@ -809,20 +807,18 @@ fn optional_payload_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutEr
 fn array_element_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
     match ty {
         ResolvedType::Primitive(p) => primitive_size_align(*p),
-        // Every aggregate element — struct, enum, tuple, plus the
-        // four prelude compounds living under `Generic` — collapses
-        // to a 4-byte heap pointer.
+        // Every aggregate element — struct, enum, tuple, the four
+        // prelude compounds living under `Generic`, and trait-typed
+        // elements (4-byte pointer to the fat-pointer cell) —
+        // collapses to a 4-byte heap pointer.
         ResolvedType::Struct(_)
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
-        | ResolvedType::Generic { .. } => Ok((POINTER_SIZE, POINTER_ALIGN)),
+        | ResolvedType::Generic { .. }
+        | ResolvedType::Trait(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
             kind: "Closure".to_owned(),
         }),
-        // Trait-typed locals materialise as 8-byte fat-pointer
-        // cells in linear memory — the binding holds an `i32`
-        // pointer to that cell.
-        ResolvedType::Trait(_) => Ok((POINTER_SIZE, POINTER_ALIGN)),
         ResolvedType::TypeParam(name) => Err(LayoutError::NotYetSupported {
             kind: format!("TypeParam({name})"),
         }),

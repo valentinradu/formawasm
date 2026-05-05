@@ -16,7 +16,7 @@
 //! pay an allocation per recognition.
 
 use formalang::ir::{
-    EnumId, GenericBase, IrEnum, IrField, IrGenericParam, IrModule, ResolvedType, StructId,
+    EnumId, GenericBase, IrEnum, IrGenericParam, IrModule, ResolvedType, StructId,
 };
 
 /// View of a `ResolvedType` that resolves the prelude compounds.
@@ -71,7 +71,7 @@ impl<'a> Compound<'a> {
                     Self::None
                 }
             }
-            _ => Self::None,
+            GenericBase::Enum(_) | GenericBase::Struct(_) | GenericBase::Trait(_) => Self::None,
         }
     }
 }
@@ -83,7 +83,9 @@ pub(crate) fn optional_inner<'a>(
 ) -> Option<&'a ResolvedType> {
     match Compound::of(ty, module) {
         Compound::Optional(t) => Some(t),
-        _ => None,
+        Compound::Array(_) | Compound::Range(_) | Compound::Dictionary { .. } | Compound::None => {
+            None
+        }
     }
 }
 
@@ -91,7 +93,10 @@ pub(crate) fn optional_inner<'a>(
 pub(crate) fn array_elem<'a>(ty: &'a ResolvedType, module: &IrModule) -> Option<&'a ResolvedType> {
     match Compound::of(ty, module) {
         Compound::Array(t) => Some(t),
-        _ => None,
+        Compound::Optional(_)
+        | Compound::Range(_)
+        | Compound::Dictionary { .. }
+        | Compound::None => None,
     }
 }
 
@@ -99,7 +104,10 @@ pub(crate) fn array_elem<'a>(ty: &'a ResolvedType, module: &IrModule) -> Option<
 pub(crate) fn range_bound<'a>(ty: &'a ResolvedType, module: &IrModule) -> Option<&'a ResolvedType> {
     match Compound::of(ty, module) {
         Compound::Range(t) => Some(t),
-        _ => None,
+        Compound::Optional(_)
+        | Compound::Array(_)
+        | Compound::Dictionary { .. }
+        | Compound::None => None,
     }
 }
 
@@ -107,14 +115,22 @@ pub(crate) fn range_bound<'a>(ty: &'a ResolvedType, module: &IrModule) -> Option
 /// through `Generic { base: Enum(_) }` (the post-0.0.4-beta shape
 /// for `Optional<T>` and any user enum monomorphisation produces).
 /// Returns `None` for non-enum types.
-pub(crate) fn enum_id_of(ty: &ResolvedType) -> Option<EnumId> {
+pub(crate) const fn enum_id_of(ty: &ResolvedType) -> Option<EnumId> {
     match ty {
-        ResolvedType::Enum(id) => Some(*id),
-        ResolvedType::Generic {
+        ResolvedType::Enum(id)
+        | ResolvedType::Generic {
             base: GenericBase::Enum(id),
             ..
         } => Some(*id),
-        _ => None,
+        ResolvedType::Primitive(_)
+        | ResolvedType::Struct(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => None,
     }
 }
 
@@ -143,7 +159,7 @@ pub(crate) fn substitute_type_params(
             ty.clone()
         }
         ResolvedType::Generic { base, args } => ResolvedType::Generic {
-            base: base.clone(),
+            base: *base,
             args: args
                 .iter()
                 .map(|a| substitute_type_params(a, generic_params, type_args))
@@ -160,7 +176,6 @@ pub(crate) fn substitute_type_params(
                 })
                 .collect(),
         ),
-        ResolvedType::External { .. } => ty.clone(),
         ResolvedType::Closure {
             param_tys,
             return_ty,
@@ -175,6 +190,7 @@ pub(crate) fn substitute_type_params(
         | ResolvedType::Struct(_)
         | ResolvedType::Trait(_)
         | ResolvedType::Enum(_)
+        | ResolvedType::External { .. }
         | ResolvedType::Error => ty.clone(),
     }
 }
@@ -209,10 +225,7 @@ pub(crate) fn substitute_enum(
 /// matches `expected_id` (as either `Enum` or `Struct`). Returns
 /// `&[]` for any other shape so callers can pass it straight to
 /// [`substitute_enum`] / similar without conditional branching.
-pub(crate) fn generic_args_for_enum<'a>(
-    ty: &'a ResolvedType,
-    expected_id: EnumId,
-) -> &'a [ResolvedType] {
+pub(crate) fn generic_args_for_enum(ty: &ResolvedType, expected_id: EnumId) -> &[ResolvedType] {
     if let ResolvedType::Generic {
         base: GenericBase::Enum(id),
         args,
@@ -225,32 +238,25 @@ pub(crate) fn generic_args_for_enum<'a>(
     }
 }
 
-/// Borrow shim so `substitute_enum_field_types` can plug into a
-/// match-arm payload-binding loop without re-allocating the field
-/// vector when no substitution applies.
-#[must_use]
-pub(crate) fn substitute_field_ty<'a>(
-    field: &'a IrField,
-    generic_params: &[IrGenericParam],
-    type_args: &[ResolvedType],
-) -> ResolvedType {
-    if generic_params.is_empty() || type_args.is_empty() {
-        return field.ty.clone();
-    }
-    substitute_type_params(&field.ty, generic_params, type_args)
-}
-
 /// Resolve a `ResolvedType` to its underlying [`StructId`], peeking
 /// through `Generic { base: Struct(_) }`. Returns `None` for non-
 /// struct types.
-pub(crate) fn struct_id_of(ty: &ResolvedType) -> Option<StructId> {
+pub(crate) const fn struct_id_of(ty: &ResolvedType) -> Option<StructId> {
     match ty {
-        ResolvedType::Struct(id) => Some(*id),
-        ResolvedType::Generic {
+        ResolvedType::Struct(id)
+        | ResolvedType::Generic {
             base: GenericBase::Struct(id),
             ..
         } => Some(*id),
-        _ => None,
+        ResolvedType::Primitive(_)
+        | ResolvedType::Enum(_)
+        | ResolvedType::Trait(_)
+        | ResolvedType::Tuple(_)
+        | ResolvedType::Generic { .. }
+        | ResolvedType::TypeParam(_)
+        | ResolvedType::External { .. }
+        | ResolvedType::Closure { .. }
+        | ResolvedType::Error => None,
     }
 }
 
@@ -262,6 +268,6 @@ pub(crate) fn dictionary_kv<'a>(
 ) -> Option<(&'a ResolvedType, &'a ResolvedType)> {
     match Compound::of(ty, module) {
         Compound::Dictionary { key, value } => Some((key, value)),
-        _ => None,
+        Compound::Optional(_) | Compound::Array(_) | Compound::Range(_) | Compound::None => None,
     }
 }

@@ -183,12 +183,12 @@ pub(super) fn lower_coerced(
     lower_expr(value_expr, sink, ctx)
 }
 
-/// Resolve a concrete `(Struct/Enum)` ImplTarget for a value's
+/// Resolve a concrete `(Struct/Enum)` `ImplTarget` for a value's
 /// type so the trait-erasure path can pick the matching vtable.
 /// Returns `None` for primitive / closure / trait-typed values
 /// (the latter is already a fat pointer; no re-materialisation
 /// needed).
-fn trait_dispatch_target(ty: &ResolvedType) -> Option<formalang::ir::ImplTarget> {
+const fn trait_dispatch_target(ty: &ResolvedType) -> Option<formalang::ir::ImplTarget> {
     use formalang::ir::ImplTarget;
     if let Some(sid) = crate::compound::struct_id_of(ty) {
         return Some(ImplTarget::Struct(sid));

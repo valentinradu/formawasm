@@ -764,7 +764,7 @@ impl<'a> LowerContext<'a> {
     /// back to a non-module-aware behaviour (e.g. recognising
     /// prelude Optional Some-wraps).
     #[must_use]
-    pub fn module_opt(&self) -> Option<&'a IrModule> {
+    pub const fn module_opt(&self) -> Option<&'a IrModule> {
         self.module
     }
 

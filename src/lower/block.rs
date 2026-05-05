@@ -147,7 +147,13 @@ fn lower_assign(
             let binding_id = match ref_target {
                 formalang::ir::ReferenceTarget::Param(b)
                 | formalang::ir::ReferenceTarget::Local(b) => Some(*b),
-                _ => None,
+                formalang::ir::ReferenceTarget::Function(_)
+                | formalang::ir::ReferenceTarget::Struct(_)
+                | formalang::ir::ReferenceTarget::Enum(_)
+                | formalang::ir::ReferenceTarget::Trait(_)
+                | formalang::ir::ReferenceTarget::ModuleLet(_)
+                | formalang::ir::ReferenceTarget::External { .. }
+                | formalang::ir::ReferenceTarget::Unresolved => None,
             };
             if let Some(binding_id) = binding_id {
                 let local_idx = ctx

@@ -184,18 +184,25 @@ fn lower_string_literal(
     let text: &str = match value {
         Literal::String(s) | Literal::Path(s) => s.as_str(),
         Literal::Regex { pattern, .. } => pattern.as_str(),
-        _ => {
+        Literal::Number(_) | Literal::Boolean(_) | Literal::Nil => {
             return Err(LowerError::LiteralTypeMismatch {
                 kind: literal_kind_tag(value),
+                ty: ty.clone(),
+            });
+        }
+        // `Literal` is `#[non_exhaustive]`; route any future variant
+        // through the same typed mismatch error rather than silently
+        // emitting a string-shaped header for a non-string variant.
+        other => {
+            return Err(LowerError::LiteralTypeMismatch {
+                kind: literal_kind_tag(other),
                 ty: ty.clone(),
             });
         }
     };
     if !matches!(
         ty,
-        ResolvedType::Primitive(PrimitiveType::String)
-            | ResolvedType::Primitive(PrimitiveType::Path)
-            | ResolvedType::Primitive(PrimitiveType::Regex)
+        ResolvedType::Primitive(PrimitiveType::String | PrimitiveType::Path | PrimitiveType::Regex,)
     ) {
         return Err(LowerError::LiteralTypeMismatch {
             kind: literal_kind_tag(value),

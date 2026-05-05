@@ -27,11 +27,34 @@
 //! let arr_i32 = array_ty(primitive(I32));
 //! ```
 
-use formalang::ast::{ParamConvention, Visibility};
+use formalang::ast::{ParamConvention, PrimitiveType, Visibility};
 use formalang::ir::{
     EnumId, GenericBase, IrEnum, IrEnumVariant, IrField, IrGenericParam, IrModule, IrSpan,
     IrStruct, ResolvedType, StructId,
 };
+
+/// Smoke test that every public helper in this module compiles
+/// and runs. Doubles as a dead-code suppressor: each test target
+/// invokes `mod common`, and without this single test referencing
+/// every helper, dead-code warnings would flicker across the
+/// per-target compile matrix (each test file uses a different
+/// subset of helpers).
+#[test]
+fn _force_use_helpers() {
+    let mut module = IrModule::new();
+    seed_prelude(&mut module);
+    let _ = optional_ty(ResolvedType::Primitive(PrimitiveType::I32));
+    let _ = array_ty(ResolvedType::Primitive(PrimitiveType::I32));
+    let _ = range_ty(ResolvedType::Primitive(PrimitiveType::I32));
+    let _ = dict_ty(
+        ResolvedType::Primitive(PrimitiveType::String),
+        ResolvedType::Primitive(PrimitiveType::I32),
+    );
+    let _ = PRELUDE_ARRAY_ID;
+    let _ = PRELUDE_DICTIONARY_ID;
+    let _ = PRELUDE_RANGE_ID;
+    let _ = PRELUDE_OPTIONAL_ID;
+}
 
 /// `StructId` the seeder assigns to `Array<T>` (0). Hand-built
 /// helpers below hard-code this assuming `seed_prelude` ran first.
@@ -53,7 +76,6 @@ pub(crate) const PRELUDE_OPTIONAL_ID: EnumId = EnumId(0);
 ///
 /// **Call this before pushing any user struct/enum** so the
 /// hard-coded ids in [`PRELUDE_ARRAY_ID`] / etc. line up.
-#[expect(dead_code, reason = "called by varying subsets of test files")]
 pub(crate) fn seed_prelude(module: &mut IrModule) {
     module.structs.push(empty_generic_struct("Array"));
     module.structs.push(empty_generic_struct("Dictionary"));
@@ -113,8 +135,7 @@ fn prelude_optional_enum() -> IrEnum {
 // the prelude IDs the seeder commits to.
 
 /// `Optional<inner>` — assumes [`seed_prelude`] has been called on
-/// the IrModule the resulting type will be paired with.
-#[expect(dead_code, reason = "consumed by varying subsets of test files")]
+/// the `IrModule` the resulting type will be paired with.
 #[must_use]
 pub(crate) fn optional_ty(inner: ResolvedType) -> ResolvedType {
     ResolvedType::Generic {
@@ -124,7 +145,6 @@ pub(crate) fn optional_ty(inner: ResolvedType) -> ResolvedType {
 }
 
 /// `Array<elem>` — assumes [`seed_prelude`] has been called.
-#[expect(dead_code, reason = "consumed by varying subsets of test files")]
 #[must_use]
 pub(crate) fn array_ty(elem: ResolvedType) -> ResolvedType {
     ResolvedType::Generic {
@@ -134,7 +154,6 @@ pub(crate) fn array_ty(elem: ResolvedType) -> ResolvedType {
 }
 
 /// `Range<bound>` — assumes [`seed_prelude`] has been called.
-#[expect(dead_code, reason = "consumed by varying subsets of test files")]
 #[must_use]
 pub(crate) fn range_ty(bound: ResolvedType) -> ResolvedType {
     ResolvedType::Generic {
@@ -145,7 +164,6 @@ pub(crate) fn range_ty(bound: ResolvedType) -> ResolvedType {
 
 /// `Dictionary<key, value>` — assumes [`seed_prelude`] has been
 /// called.
-#[expect(dead_code, reason = "consumed by varying subsets of test files")]
 #[must_use]
 pub(crate) fn dict_ty(key: ResolvedType, value: ResolvedType) -> ResolvedType {
     ResolvedType::Generic {

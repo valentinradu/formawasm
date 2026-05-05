@@ -4,8 +4,8 @@
 //!
 //! 1. Parses + type-checks via `formalang::compile_to_ir_with_resolver`
 //!    (filesystem-rooted at `examples/` so `use` statements resolve).
-//! 2. Runs the canonical codegen pipeline (Monomorphise, ResolveRefs,
-//!    ClosureConversion, DeadCodeElimination).
+//! 2. Runs the canonical codegen pipeline (`Monomorphise`,
+//!    `ResolveRefs`, `ClosureConversion`, `DeadCodeElimination`).
 //! 3. Lowers to a Component-Model artifact via `WasmBackend::generate`.
 //! 4. Instantiates the component under wasmtime's component runtime
 //!    with `assert` wired to a host that aborts on `condition == false`.
@@ -22,7 +22,7 @@
 //! feature trap surface as `Err(...)` — explicit failure, not silent
 //! skip — so the limitations stay visible.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use formalang::{
     FileSystemResolver, Pipeline, compile_to_ir_with_resolver,
@@ -94,7 +94,9 @@ fn run_checks(name: &str) -> TestResult {
     // actually declares.
     linker
         .root()
-        .func_wrap("host-double", |_store, (x,): (i32,)| Ok((x * 2,)))?;
+        .func_wrap("host-double", |_store, (x,): (i32,)| {
+            Ok((x.saturating_mul(2),))
+        })?;
     linker
         .root()
         .func_wrap("host-log", |_store, (_msg,): (String,)| Ok(()))?;
@@ -216,9 +218,4 @@ fn example_19_closure_fields_dispatch() -> TestResult {
 #[test]
 fn example_20_match_advanced() -> TestResult {
     run_checks("20_match_advanced.fv")
-}
-
-#[allow(dead_code)]
-fn _ensure_examples_dir_lives_next_to_test_root() {
-    let _: &Path = examples_dir().as_path();
 }

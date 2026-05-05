@@ -120,35 +120,7 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
     let mut out = String::new();
     writeln!(out, "package {PACKAGE};").map_err(invalid_format)?;
     writeln!(out).map_err(invalid_format)?;
-    let mut type_names: Vec<String> = Vec::new();
-    let any_types = !surface.exported_structs.is_empty() || !surface.exported_enums.is_empty();
-    if any_types {
-        writeln!(out, "interface types {{").map_err(invalid_format)?;
-        for &sid in &surface.exported_structs {
-            let s = module
-                .structs
-                .get(sid.0 as usize)
-                .ok_or(WitEmitError::ExportOutOfRange {
-                    index: sid.0,
-                    len: module.structs.len(),
-                })?;
-            write_record(&mut out, s, module)?;
-            type_names.push(kebab_case(&s.name));
-        }
-        for &eid in &surface.exported_enums {
-            let e = module
-                .enums
-                .get(eid.0 as usize)
-                .ok_or(WitEmitError::ExportOutOfRange {
-                    index: eid.0,
-                    len: module.enums.len(),
-                })?;
-            write_variant(&mut out, e, module)?;
-            type_names.push(kebab_case(&e.name));
-        }
-        writeln!(out, "}}").map_err(invalid_format)?;
-        writeln!(out).map_err(invalid_format)?;
-    }
+    let type_names = write_types_interface(&mut out, module, surface)?;
     writeln!(out, "world {WORLD_NAME} {{").map_err(invalid_format)?;
     if !type_names.is_empty() {
         write!(out, "  use types.{{").map_err(invalid_format)?;
@@ -172,48 +144,7 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
         write_import(&mut out, f, module)?;
     }
 
-    // `extern impl <UserStruct>` / `<UserEnum>` blocks: each method
-    // is a host-supplied function. Emit a WIT `import` per method
-    // using the `<struct>-<method>` kebab-case name the
-    // module_lowering import phase commits to. Skip primitive
-    // targets — the prelude's `extern impl <String>` block is
-    // satisfied by built-in runtime helpers, not host imports.
-    for imp in &module.impls {
-        if !imp.is_extern {
-            continue;
-        }
-        // Skip prelude built-ins; the backend's runtime helpers
-        // resolve those — they don't cross the component import
-        // boundary. Mirrors the filter in
-        // `module_lowering::lower_module`.
-        let is_prelude_target = match imp.target {
-            formalang::ir::ImplTarget::Struct(sid) => {
-                Some(sid) == module.prelude_array_id()
-                    || Some(sid) == module.prelude_dictionary_id()
-                    || Some(sid) == module.prelude_range_id()
-            }
-            formalang::ir::ImplTarget::Enum(eid) => Some(eid) == module.prelude_optional_id(),
-            formalang::ir::ImplTarget::Primitive(_) => true,
-        };
-        if is_prelude_target {
-            continue;
-        }
-        let target_name: Option<&str> = match &imp.target {
-            formalang::ir::ImplTarget::Struct(sid) => {
-                module.structs.get(sid.0 as usize).map(|s| s.name.as_str())
-            }
-            formalang::ir::ImplTarget::Enum(eid) => {
-                module.enums.get(eid.0 as usize).map(|e| e.name.as_str())
-            }
-            formalang::ir::ImplTarget::Primitive(_) => None,
-        };
-        let Some(target_name) = target_name else {
-            continue;
-        };
-        for m in &imp.functions {
-            write_extern_method_import(&mut out, target_name, m, module, &imp.target)?;
-        }
-    }
+    write_extern_impl_imports(&mut out, module)?;
 
     // WIT can't represent function overloading, so multiple
     // formalang functions sharing a source name (resolved by argument
@@ -255,6 +186,89 @@ pub fn emit_wit(module: &IrModule, surface: &PublicSurface) -> Result<String, Wi
 
     parse_round_trip(&out)?;
     Ok(out)
+}
+
+/// Emit the leading `interface types { ... }` block when the
+/// surface exports any structs / enums; return the collected type
+/// names so the caller can append a `use types.{...}` line. Returns
+/// an empty `Vec` when no types cross the boundary.
+fn write_types_interface(
+    out: &mut String,
+    module: &IrModule,
+    surface: &PublicSurface,
+) -> Result<Vec<String>, WitEmitError> {
+    let mut type_names: Vec<String> = Vec::new();
+    let any_types = !surface.exported_structs.is_empty() || !surface.exported_enums.is_empty();
+    if !any_types {
+        return Ok(type_names);
+    }
+    writeln!(out, "interface types {{").map_err(invalid_format)?;
+    for &sid in &surface.exported_structs {
+        let s = module
+            .structs
+            .get(sid.0 as usize)
+            .ok_or(WitEmitError::ExportOutOfRange {
+                index: sid.0,
+                len: module.structs.len(),
+            })?;
+        write_record(out, s, module)?;
+        type_names.push(kebab_case(&s.name));
+    }
+    for &eid in &surface.exported_enums {
+        let e = module
+            .enums
+            .get(eid.0 as usize)
+            .ok_or(WitEmitError::ExportOutOfRange {
+                index: eid.0,
+                len: module.enums.len(),
+            })?;
+        write_variant(out, e, module)?;
+        type_names.push(kebab_case(&e.name));
+    }
+    writeln!(out, "}}").map_err(invalid_format)?;
+    writeln!(out).map_err(invalid_format)?;
+    Ok(type_names)
+}
+
+/// Emit a `import <struct>-<method>: func(...)` line for every
+/// `extern impl <UserStruct>` / `<UserEnum>` method. Skips primitive
+/// targets (the prelude's `extern impl <String>` resolves to runtime
+/// helpers) and the prelude compounds (Array / Dictionary / Range /
+/// Optional resolve to backend-emitted helpers, not host imports).
+fn write_extern_impl_imports(out: &mut String, module: &IrModule) -> Result<(), WitEmitError> {
+    for imp in &module.impls {
+        if !imp.is_extern {
+            continue;
+        }
+        let is_prelude_target = match imp.target {
+            formalang::ir::ImplTarget::Struct(sid) => {
+                Some(sid) == module.prelude_array_id()
+                    || Some(sid) == module.prelude_dictionary_id()
+                    || Some(sid) == module.prelude_range_id()
+            }
+            formalang::ir::ImplTarget::Enum(eid) => Some(eid) == module.prelude_optional_id(),
+            formalang::ir::ImplTarget::Primitive(_) => true,
+        };
+        if is_prelude_target {
+            continue;
+        }
+        let target_name: Option<&str> = match &imp.target {
+            formalang::ir::ImplTarget::Struct(sid) => {
+                module.structs.get(sid.0 as usize).map(|s| s.name.as_str())
+            }
+            formalang::ir::ImplTarget::Enum(eid) => {
+                module.enums.get(eid.0 as usize).map(|e| e.name.as_str())
+            }
+            formalang::ir::ImplTarget::Primitive(_) => None,
+        };
+        let Some(target_name) = target_name else {
+            continue;
+        };
+        for m in &imp.functions {
+            write_extern_method_import(out, target_name, m, module, imp.target)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_record(out: &mut String, s: &IrStruct, module: &IrModule) -> Result<(), WitEmitError> {
@@ -344,7 +358,7 @@ fn write_extern_method_import(
     target_name: &str,
     m: &IrFunction,
     module: &IrModule,
-    target: &formalang::ir::ImplTarget,
+    target: formalang::ir::ImplTarget,
 ) -> Result<(), WitEmitError> {
     let import_name = format!("{}-{}", kebab_case(target_name), kebab_case(&m.name));
 
@@ -371,11 +385,12 @@ fn write_extern_method_import(
     };
 
     write!(out, "  import {import_name}: func(").map_err(invalid_format)?;
-    let mut wrote_param = false;
-    if let Some(ty_name) = &self_ty {
+    let mut wrote_param = if let Some(ty_name) = &self_ty {
         write!(out, "self: {ty_name}").map_err(invalid_format)?;
-        wrote_param = true;
-    }
+        true
+    } else {
+        false
+    };
     // Walk explicit params (skip leading `self`).
     for p in m.params.iter().skip(1) {
         if wrote_param {
@@ -453,47 +468,8 @@ fn write_world_func(
 /// rejected here because WIT has no `option<>`-with-no-payload form;
 /// values of that type stay strictly internal.
 fn resolved_wit_type(ty: &ResolvedType, module: &IrModule) -> Result<Option<String>, WitEmitError> {
-    // Recognise the four prelude compounds — they each desugar
-    // through `ResolvedType::Generic { base, args }` and need a
-    // structural mapping to a WIT shape (list / option / tuple-of-
-    // pairs). Range stays out of the WIT surface; ranges live
-    // strictly inside the component.
-    match Compound::of(ty, module) {
-        Compound::Array(elem) => {
-            let inner = resolved_wit_type(elem, module)?.ok_or_else(|| {
-                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: "Array<Never>".to_owned(),
-                })
-            })?;
-            return Ok(Some(format!("list<{inner}>")));
-        }
-        Compound::Optional(inner) => {
-            let inner_name = resolved_wit_type(inner, module)?.ok_or_else(|| {
-                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: "Optional<Never>".to_owned(),
-                })
-            })?;
-            return Ok(Some(format!("option<{inner_name}>")));
-        }
-        Compound::Dictionary { key, value } => {
-            // `Dictionary<K, V>` lifts to `list<tuple<K, V>>` at the
-            // boundary — the canonical-ABI shape for a sequence of
-            // pairs. Internally we keep the v1 `{ ptr, len, cap }`
-            // buffer-of-pair-pointers layout; the list lift reads the
-            // header, the per-pair lift reads each `(k, v)` tuple.
-            let key_name = resolved_wit_type(key, module)?.ok_or_else(|| {
-                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: "Dictionary<Never, _>".to_owned(),
-                })
-            })?;
-            let value_name = resolved_wit_type(value, module)?.ok_or_else(|| {
-                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: "Dictionary<_, Never>".to_owned(),
-                })
-            })?;
-            return Ok(Some(format!("list<tuple<{key_name}, {value_name}>>")));
-        }
-        Compound::Range(_) | Compound::None => {}
+    if let Some(name) = resolved_compound_wit_type(ty, module)? {
+        return Ok(Some(name));
     }
     match ty {
         ResolvedType::Primitive(p) => primitive_wit_type(*p),
@@ -501,65 +477,9 @@ fn resolved_wit_type(ty: &ResolvedType, module: &IrModule) -> Result<Option<Stri
         // declared in the same component's `interface types` block;
         // emitted here as the kebab-cased type name. The struct /
         // enum declaration itself rides the `surface.exported_*`
-        // walks above. Looking up via `module.get_struct(id)` keeps
-        // the kebab-case logic local.
-        ResolvedType::Struct(id) => module.get_struct(*id).map_or_else(
-            || {
-                Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: format!("Struct(out-of-range #{})", id.0),
-                }))
-            },
-            |s| {
-                // Empty pub structs are filtered out of the public
-                // surface (wit-component rejects empty records). A
-                // function signature that mentions one therefore
-                // can't cross the boundary either — surface that as
-                // a typed error so the higher-level filter
-                // (`function_signature_crosses_boundary`) treats
-                // the function as private.
-                if s.fields.is_empty() {
-                    return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                        kind: format!(
-                            "Struct({}) is empty; wit-component rejects empty records, so the surrounding function cannot cross the WIT boundary",
-                            s.name
-                        ),
-                    }));
-                }
-                // Private structs aren't declared in the WIT
-                // `interface types` block, so a function signature
-                // that mentions one can't cross the boundary either.
-                // Surfacing it as a typed error here makes the
-                // higher-level `function_signature_crosses_boundary`
-                // filter treat the surrounding function as private.
-                if !matches!(s.visibility, formalang::ast::Visibility::Public) {
-                    return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                        kind: format!(
-                            "Struct({}) is private; private types can't cross the WIT boundary",
-                            s.name
-                        ),
-                    }));
-                }
-                Ok(Some(kebab_case(&s.name)))
-            },
-        ),
-        ResolvedType::Enum(id) => module.get_enum(*id).map_or_else(
-            || {
-                Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                    kind: format!("Enum(out-of-range #{})", id.0),
-                }))
-            },
-            |e| {
-                if !matches!(e.visibility, formalang::ast::Visibility::Public) {
-                    return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                        kind: format!(
-                            "Enum({}) is private; private types can't cross the WIT boundary",
-                            e.name
-                        ),
-                    }));
-                }
-                Ok(Some(kebab_case(&e.name)))
-            },
-        ),
+        // walks above.
+        ResolvedType::Struct(id) => resolved_named_struct_wit(*id, module),
+        ResolvedType::Enum(id) => resolved_named_enum_wit(*id, module),
         ResolvedType::Tuple(fields) => {
             // formalang tuples carry per-position field names but
             // WIT's `tuple<T0, T1, ...>` is positional. Emit the
@@ -572,12 +492,11 @@ fn resolved_wit_type(ty: &ResolvedType, module: &IrModule) -> Result<Option<Stri
                 if i > 0 {
                     out.push_str(", ");
                 }
-                let inner_wit =
-                    resolved_wit_type(inner, module)?.ok_or_else(|| {
-                        WitEmitError::TypeMap(TypeMapError::NotYetSupported {
-                            kind: format!("Never inside tuple at position {i}"),
-                        })
-                    })?;
+                let inner_wit = resolved_wit_type(inner, module)?.ok_or_else(|| {
+                    WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                        kind: format!("Never inside tuple at position {i}"),
+                    })
+                })?;
                 out.push_str(&inner_wit);
             }
             out.push('>');
@@ -597,6 +516,111 @@ fn resolved_wit_type(ty: &ResolvedType, module: &IrModule) -> Result<Option<Stri
 /// Map a [`PrimitiveType`] to its WIT type name. `Never` returns
 /// `None` so callers can decide between rejecting it (parameters) or
 /// omitting the result clause (returns).
+/// Recognise the four prelude compounds — they each desugar through
+/// `ResolvedType::Generic { base, args }` and need a structural
+/// mapping to a WIT shape (`list` / `option` / `tuple`-of-pairs).
+/// Range stays out of the WIT surface; ranges live strictly inside
+/// the component. Returns `Ok(None)` when `ty` is not a prelude
+/// compound so the caller can fall through to its own type
+/// dispatch.
+fn resolved_compound_wit_type(
+    ty: &ResolvedType,
+    module: &IrModule,
+) -> Result<Option<String>, WitEmitError> {
+    match Compound::of(ty, module) {
+        Compound::Array(elem) => {
+            let inner = resolved_wit_type(elem, module)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Array<Never>".to_owned(),
+                })
+            })?;
+            Ok(Some(format!("list<{inner}>")))
+        }
+        Compound::Optional(inner) => {
+            let inner_name = resolved_wit_type(inner, module)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Optional<Never>".to_owned(),
+                })
+            })?;
+            Ok(Some(format!("option<{inner_name}>")))
+        }
+        Compound::Dictionary { key, value } => {
+            // `Dictionary<K, V>` lifts to `list<tuple<K, V>>` at the
+            // boundary — the canonical-ABI shape for a sequence of
+            // pairs. Internally we keep the v1 `{ ptr, len, cap }`
+            // buffer-of-pair-pointers layout.
+            let key_name = resolved_wit_type(key, module)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Dictionary<Never, _>".to_owned(),
+                })
+            })?;
+            let value_name = resolved_wit_type(value, module)?.ok_or_else(|| {
+                WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: "Dictionary<_, Never>".to_owned(),
+                })
+            })?;
+            Ok(Some(format!("list<tuple<{key_name}, {value_name}>>")))
+        }
+        Compound::Range(_) | Compound::None => Ok(None),
+    }
+}
+
+/// Resolve a [`StructId`] to its kebab-cased WIT type name, or to a
+/// typed `NotYetSupported` error when the struct is empty / private —
+/// both shapes can't cross the boundary, and surfacing the error here
+/// lets `function_signature_crosses_boundary` treat the surrounding
+/// function as private.
+fn resolved_named_struct_wit(
+    id: formalang::ir::StructId,
+    module: &IrModule,
+) -> Result<Option<String>, WitEmitError> {
+    let s = module.get_struct(id).ok_or_else(|| {
+        WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+            kind: format!("Struct(out-of-range #{})", id.0),
+        })
+    })?;
+    if s.fields.is_empty() {
+        return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+            kind: format!(
+                "Struct({}) is empty; wit-component rejects empty records, so the surrounding function cannot cross the WIT boundary",
+                s.name
+            ),
+        }));
+    }
+    if !matches!(s.visibility, formalang::ast::Visibility::Public) {
+        return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+            kind: format!(
+                "Struct({}) is private; private types can't cross the WIT boundary",
+                s.name
+            ),
+        }));
+    }
+    Ok(Some(kebab_case(&s.name)))
+}
+
+/// Resolve an [`EnumId`] to its kebab-cased WIT type name, or to a
+/// typed `NotYetSupported` error when the enum is private. Same role
+/// as [`resolved_named_struct_wit`] for enum variants.
+fn resolved_named_enum_wit(
+    id: formalang::ir::EnumId,
+    module: &IrModule,
+) -> Result<Option<String>, WitEmitError> {
+    let e = module.get_enum(id).ok_or_else(|| {
+        WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+            kind: format!("Enum(out-of-range #{})", id.0),
+        })
+    })?;
+    if !matches!(e.visibility, formalang::ast::Visibility::Public) {
+        return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+            kind: format!(
+                "Enum({}) is private; private types can't cross the WIT boundary",
+                e.name
+            ),
+        }));
+    }
+    Ok(Some(kebab_case(&e.name)))
+}
+
 fn primitive_wit_type(p: PrimitiveType) -> Result<Option<String>, WitEmitError> {
     match p {
         PrimitiveType::I32 => Ok(Some("s32".to_owned())),

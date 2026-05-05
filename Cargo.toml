@@ -34,7 +34,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-formalang = "0.0.4-beta"
+formalang = "0.0.5-beta"
 thiserror = "2"
 
 # Lightweight observability. `tracing` itself is a thin facade —

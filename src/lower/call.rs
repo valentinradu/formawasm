@@ -370,28 +370,18 @@ fn lower_virtual_method_call(
     if let ResolvedType::Trait(_) = receiver.ty() {
         return lower_trait_typed_dispatch(method_idx, receiver, args, sink, ctx, trait_id);
     }
-    let target = match receiver.ty() {
-        ResolvedType::Struct(id) => ImplTarget::Struct(*id),
-        ResolvedType::Enum(id) => ImplTarget::Enum(*id),
-        // Generic-form struct / enum: peek through to the
-        // underlying concrete id so a monomorphic instantiation
-        // dispatches through the same vtable as its declaration.
-        ty if crate::compound::struct_id_of(ty).is_some() => {
-            ImplTarget::Struct(crate::compound::struct_id_of(ty).unwrap())
-        }
-        ty if crate::compound::enum_id_of(ty).is_some() => {
-            ImplTarget::Enum(crate::compound::enum_id_of(ty).unwrap())
-        }
-        other @ (ResolvedType::Primitive(_)
-        | ResolvedType::Trait(_)
-        | ResolvedType::Tuple(_)
-        | ResolvedType::Generic { .. }
-        | ResolvedType::TypeParam(_)
-        | ResolvedType::External { .. }
-        | ResolvedType::Closure { .. }
-        | ResolvedType::Error) => {
-            return Err(LowerError::UnsupportedVirtualReceiver { ty: other.clone() });
-        }
+    let target = if let Some(sid) = crate::compound::struct_id_of(receiver.ty()) {
+        // Covers both `ResolvedType::Struct(sid)` and the
+        // `Generic { base: Struct(sid), .. }` form, so a monomorphic
+        // instantiation dispatches through the same vtable as its
+        // declaration.
+        ImplTarget::Struct(sid)
+    } else if let Some(eid) = crate::compound::enum_id_of(receiver.ty()) {
+        ImplTarget::Enum(eid)
+    } else {
+        return Err(LowerError::UnsupportedVirtualReceiver {
+            ty: receiver.ty().clone(),
+        });
     };
     let table_idx = ctx.method_table_index()?;
     let type_idx = ctx.virtual_call_type_index(trait_id, method_idx)?;
