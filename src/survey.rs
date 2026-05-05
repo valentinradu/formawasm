@@ -50,16 +50,38 @@ pub fn survey(module: &IrModule) -> PublicSurface {
         }
     }
 
+    // Prelude built-ins (Array / Dictionary / Range / Optional) are
+    // declared as ordinary `pub struct` / `pub enum` in formalang's
+    // src/prelude.fv so the resolver and monomorphiser can treat
+    // them uniformly. They cross the WIT boundary as their concrete
+    // canonical-ABI shapes (`list<T>` / `option<T>` / etc.) via the
+    // `Generic` arm of `wit::resolved_wit_type`, NOT as standalone
+    // types — emitting empty `record array {}` blocks would both
+    // pollute the type interface and trip wit-component's empty-
+    // record validation. Filter them out here.
     for (idx, s) in module.structs.iter().enumerate() {
-        if matches!(s.visibility, Visibility::Public) {
-            surface.exported_structs.push(StructId(u32_from_index(idx)));
+        if !matches!(s.visibility, Visibility::Public) {
+            continue;
         }
+        let id = StructId(u32_from_index(idx));
+        if Some(id) == module.prelude_array_id()
+            || Some(id) == module.prelude_dictionary_id()
+            || Some(id) == module.prelude_range_id()
+        {
+            continue;
+        }
+        surface.exported_structs.push(id);
     }
 
     for (idx, e) in module.enums.iter().enumerate() {
-        if matches!(e.visibility, Visibility::Public) {
-            surface.exported_enums.push(EnumId(u32_from_index(idx)));
+        if !matches!(e.visibility, Visibility::Public) {
+            continue;
         }
+        let id = EnumId(u32_from_index(idx));
+        if Some(id) == module.prelude_optional_id() {
+            continue;
+        }
+        surface.exported_enums.push(id);
     }
 
     surface

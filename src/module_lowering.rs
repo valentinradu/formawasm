@@ -278,6 +278,16 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
     // Walk `module.functions` again, this time assigning a wasm
     // index only to non-extern entries; their indices ladder up
     // from `user_offset` in source-declaration order.
+    //
+    // Public functions whose canonical-ABI signature differs from
+    // the internal one get a thin wrapper emitted alongside the
+    // inner function (see `emit_canonical_abi_wrapper`). The
+    // wrapper claims the next available wasm function slot, so this
+    // pre-assignment must reserve TWO contiguous slots for those
+    // functions: the inner gets the first, the wrapper gets the
+    // second. Without that reservation, every subsequent user-
+    // function index in `function_map` would point at the wrong
+    // function once a wrapper is interleaved.
     let mut local_counter: u32 = 0;
     for (i, f) in module.functions.iter().enumerate() {
         if f.is_extern() {
@@ -291,6 +301,11 @@ pub fn lower_module(module: &IrModule) -> Result<Vec<u8>, ModuleLowerError> {
         local_counter = local_counter
             .checked_add(1)
             .ok_or(ModuleLowerError::TooManyFunctions)?;
+        if needs_canonical_abi_wrapper(f, module) {
+            local_counter = local_counter
+                .checked_add(1)
+                .ok_or(ModuleLowerError::TooManyFunctions)?;
+        }
     }
 
     // Pre-assign wasm function indices for every method in every
@@ -459,8 +474,19 @@ fn walk_block_statement_for_strings(
 fn walk_for_strings(expr: &IrExpr, pool: &mut StringPool) -> Result<(), ModuleLowerError> {
     match expr {
         IrExpr::Literal { value, .. } => {
-            if let Literal::String(text) = value {
-                pool.intern(text)?;
+            // String / Path / Regex all share the {ptr, len} header
+            // layout, so they all get interned into the same pool.
+            // Regex flags ride in the type identity, not the runtime
+            // value, so only the pattern text is interned here.
+            match value {
+                Literal::String(text) | Literal::Path(text) => {
+                    pool.intern(text)?;
+                }
+                Literal::Regex { pattern, .. } => {
+                    pool.intern(pattern)?;
+                }
+                Literal::Number(_) | Literal::Boolean(_) | Literal::Nil => {}
+                _ => {}
             }
         }
         IrExpr::Block {

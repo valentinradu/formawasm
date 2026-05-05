@@ -12,7 +12,10 @@
 ///
 /// Splits on existing case transitions: `MyType` → `my-type`,
 /// `Pair` → `pair`, `XMLParser` → `x-m-l-parser`. Underscores collapse
-/// into a single hyphen so `my_helper` → `my-helper`.
+/// into a single hyphen so `my_helper` → `my-helper`. Module-qualified
+/// names (`colors::Rgb` produced by formalang's IR-lowering for
+/// `pub mod` items) flatten to a single hyphen — `colors-rgb` — so
+/// the result is a valid WIT identifier.
 #[must_use]
 pub(crate) fn kebab_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -22,8 +25,8 @@ pub(crate) fn kebab_case(name: &str) -> String {
                 out.push('-');
             }
             out.extend(ch.to_lowercase());
-        } else if ch == '_' {
-            if !out.ends_with('-') {
+        } else if ch == '_' || ch == ':' {
+            if !out.is_empty() && !out.ends_with('-') {
                 out.push('-');
             }
         } else {

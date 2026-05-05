@@ -38,11 +38,15 @@ pub fn lower_literal(
         return lower_nil(ty, sink, ctx);
     }
 
-    // String literals carry primitive `String` typing and resolve to
-    // a static-data pointer rather than a stack-pushed constant. Like
-    // `Nil`, intercept before the primitive-only `prim` extraction so
-    // the type-mismatch arm doesn't reject the heap-typed primitive.
-    if matches!(value, Literal::String(_)) {
+    // String / Path / Regex literals all carry a `{ ptr, len }`
+    // header into linear memory and resolve to a static-data pointer
+    // rather than a stack-pushed constant. Path values share String's
+    // layout (per the boundary policy) — the only difference is the
+    // declared primitive type; Regex stores `pattern` (flags ride in
+    // the type identity, not the runtime value). Like `Nil`, intercept
+    // before the primitive-only `prim` extraction so the type-mismatch
+    // arm doesn't reject the heap-typed primitive.
+    if matches!(value, Literal::String(_) | Literal::Path(_) | Literal::Regex { .. }) {
         return lower_string_literal(value, ty, sink, ctx);
     }
 
@@ -171,15 +175,27 @@ fn lower_string_literal(
     sink: &mut InstructionSink<'_>,
     ctx: &LowerContext<'_>,
 ) -> Result<(), LowerError> {
-    let Literal::String(text) = value else {
+    // String / Path / Regex all share the same {ptr, len} header
+    // layout. Pull out whichever owned text this literal carries; the
+    // primitive type-tag in `ty` selects which kind we're emitting.
+    let text: &str = match value {
+        Literal::String(s) | Literal::Path(s) => s.as_str(),
+        Literal::Regex { pattern, .. } => pattern.as_str(),
+        _ => {
+            return Err(LowerError::LiteralTypeMismatch {
+                kind: literal_kind_tag(value),
+                ty: ty.clone(),
+            });
+        }
+    };
+    if !matches!(
+        ty,
+        ResolvedType::Primitive(PrimitiveType::String)
+            | ResolvedType::Primitive(PrimitiveType::Path)
+            | ResolvedType::Primitive(PrimitiveType::Regex)
+    ) {
         return Err(LowerError::LiteralTypeMismatch {
             kind: literal_kind_tag(value),
-            ty: ty.clone(),
-        });
-    };
-    if !matches!(ty, ResolvedType::Primitive(PrimitiveType::String)) {
-        return Err(LowerError::LiteralTypeMismatch {
-            kind: "String".to_owned(),
             ty: ty.clone(),
         });
     }

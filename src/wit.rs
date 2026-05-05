@@ -375,9 +375,29 @@ fn resolved_wit_type(
     }
     match ty {
         ResolvedType::Primitive(p) => primitive_wit_type(*p),
-        ResolvedType::Struct(_)
-        | ResolvedType::Enum(_)
-        | ResolvedType::Trait(_)
+        // `Struct(id)` and `Enum(id)` reference a record / variant
+        // declared in the same component's `interface types` block;
+        // emitted here as the kebab-cased type name. The struct /
+        // enum declaration itself rides the `surface.exported_*`
+        // walks above. Looking up via `module.get_struct(id)` keeps
+        // the kebab-case logic local.
+        ResolvedType::Struct(id) => module.get_struct(*id).map_or_else(
+            || {
+                Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: format!("Struct(out-of-range #{})", id.0),
+                }))
+            },
+            |s| Ok(Some(kebab_case(&s.name))),
+        ),
+        ResolvedType::Enum(id) => module.get_enum(*id).map_or_else(
+            || {
+                Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                    kind: format!("Enum(out-of-range #{})", id.0),
+                }))
+            },
+            |e| Ok(Some(kebab_case(&e.name))),
+        ),
+        ResolvedType::Trait(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. }
         | ResolvedType::TypeParam(_)
