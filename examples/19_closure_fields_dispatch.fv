@@ -11,13 +11,17 @@ pub enum Event {
     submitted
 }
 
-pub struct Form {
+// `Form` and `build_form` are intentionally private: closure types are
+// internal-only per the language spec (formalang `docs/user/closures.md`),
+// so a public struct with closure fields could not cross the component
+// boundary. Crossing-WIT support is tracked upstream.
+struct Form {
     onPress:  () -> Event,
     onChange: (String) -> Event,
     onSubmit: () -> Event
 }
 
-pub fn build_form() -> Form {
+fn build_form() -> Form {
     Form(
         onPress:  () -> Event.pressed,
         onChange: (x) -> Event.typed(value: x),

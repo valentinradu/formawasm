@@ -194,9 +194,11 @@ fn type_size_align(ty: &ResolvedType) -> Result<(u32, u32), LayoutError> {
         | ResolvedType::Enum(_)
         | ResolvedType::Tuple(_)
         | ResolvedType::Generic { .. } => Ok((POINTER_SIZE, POINTER_ALIGN)),
-        ResolvedType::Closure { .. } => Err(LayoutError::NotYetSupported {
-            kind: "Closure".to_owned(),
-        }),
+        // Closure-typed fields hold a 4-byte pointer to an 8-byte
+        // `(funcref_idx, env_ptr)` cell (see `lower_closure_ref`).
+        // Closures crossing the WIT boundary are rejected upstream
+        // by `preflight::check`.
+        ResolvedType::Closure { .. } => Ok((POINTER_SIZE, POINTER_ALIGN)),
         // Trait-typed locals materialise as 8-byte fat-pointer
         // cells in linear memory — the binding holds an `i32`
         // pointer to that cell.

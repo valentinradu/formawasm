@@ -541,6 +541,20 @@ fn resolved_wit_type(
                         ),
                     }));
                 }
+                // Private structs aren't declared in the WIT
+                // `interface types` block, so a function signature
+                // that mentions one can't cross the boundary either.
+                // Surfacing it as a typed error here makes the
+                // higher-level `function_signature_crosses_boundary`
+                // filter treat the surrounding function as private.
+                if !matches!(s.visibility, formalang::ast::Visibility::Public) {
+                    return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                        kind: format!(
+                            "Struct({}) is private; private types can't cross the WIT boundary",
+                            s.name
+                        ),
+                    }));
+                }
                 Ok(Some(kebab_case(&s.name)))
             },
         ),
@@ -550,7 +564,17 @@ fn resolved_wit_type(
                     kind: format!("Enum(out-of-range #{})", id.0),
                 }))
             },
-            |e| Ok(Some(kebab_case(&e.name))),
+            |e| {
+                if !matches!(e.visibility, formalang::ast::Visibility::Public) {
+                    return Err(WitEmitError::TypeMap(TypeMapError::NotYetSupported {
+                        kind: format!(
+                            "Enum({}) is private; private types can't cross the WIT boundary",
+                            e.name
+                        ),
+                    }));
+                }
+                Ok(Some(kebab_case(&e.name)))
+            },
         ),
         ResolvedType::Tuple(fields) => {
             // formalang tuples carry per-position field names but
